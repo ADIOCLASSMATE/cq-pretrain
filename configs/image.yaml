@@ -1,0 +1,42 @@
+# Minimal T2I experiment; shares the same backbone, generator and data protocol.
+model:
+  image_mask_init: copy_text
+  model_path: /assets/Qwen3-0.6B-Base
+  tokenizer_path: /assets/Qwen3-0.6B-Base
+  gradient_checkpointing: false
+data:
+  schedule: [t2i]
+  sources:
+    t2i: {micro_batch_size: 16, dataloader_workers: 2}
+  image:
+    cache_path: /assets/imagenet/train-posterior.pt
+    manifest_jsonl: /assets/imagenet/train.jsonl
+    expected_split: train
+    conditioning_mode: caption
+    caption_jsonl: /assets/imagenet/train-captions.jsonl
+    synthetic_text_index_manifest: /assets/imagenet/indexed/train/manifest.json
+    caption_include_original: false
+    max_seq_length: 512
+    pad_to_length: 512
+    pad_to_multiple_of: 64
+    validation:
+      cache_path: /assets/imagenet/val-posterior.pt
+      manifest_jsonl: /assets/imagenet/val.jsonl
+      expected_split: val
+      caption_jsonl: /assets/imagenet/val-captions.jsonl
+      synthetic_text_index_manifest: /assets/imagenet/indexed/val/manifest.json
+training:
+  output_dir: output/image-z2
+  max_train_steps: 31800
+  gradient_accumulation_steps: 4
+  mixed_precision: bf16
+  batch_size: 16
+  val_every: 3180
+evaluation:
+  seed: 424242
+  loss_image_per_class: 2
+  image_classes: /assets/imagenet/classes.json # source imagenet1k_synthetic_v1/t2i/classes.json
+codec:
+  module_root: /assets/mar
+  checkpoint: /assets/mar/kl16.ckpt
+  scaling_factor: 0.2325

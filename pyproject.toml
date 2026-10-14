@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unified-mm-v3"
+version = "0.3.0"
+description = "CQ_IT multimodal backbone and whole-image rectified-flow DiT"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.6,<2.9",
+    "numpy>=1.26,<2",
+    "safetensors>=0.5",
+    "PyYAML>=6",
+    "accelerate>=1.0",
+    "transformers>=5.7,<6",
+    "Pillow>=10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.9"]
+evaluation = ["torch-fidelity>=0.4", "torchmetrics>=1.6", "scipy>=1.13", "torchvision>=0.21,<0.24"]
+distributed = ["deepspeed>=0.18"]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+py-modules = []
+
+[tool.setuptools.packages.find]
+include = ["models*", "data*", "training*", "evaluations*", "utils*", "configs*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+configs = ["*.yaml", "accelerate/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["F821", "F822", "F823", "F811", "F601", "F602", "F631", "F632", "F633", "F634"]

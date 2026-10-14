@@ -1,0 +1,89 @@
+# Paths are relative to the launch directory. Replace /assets with local assets.
+# Numerical reference: unified-mm@193ec90 unified_z2_33b_ascend64.yaml.
+model:
+  image_mask_init: copy_text
+  model_path: /assets/Qwen3-0.6B-Base
+  tokenizer_path: /assets/Qwen3-0.6B-Base
+  backbone_type: cq_it
+  generator_type: z2
+  image_tokens_per_img: 256
+  image_latent_dim: 16
+  image_flow_width: 864
+  image_flow_depth: 12
+  joint_dit_head_dim: 72
+  joint_dit_intermediate: 3456
+  gradient_checkpointing: false
+  image_flow_grad_checkpointing: true
+  image_input_noise_strength: 0.01
+  image_flow_batch_mul: 4
+  image_uncond_prob: 0.1
+  lambda_text: 0.05
+  lambda_image: 1.0
+data:
+  schedule: [text, t2i, text, i2t]
+  sources:
+    text: {micro_batch_size: 4, dataloader_workers: 1}
+    t2i: {micro_batch_size: 16, dataloader_workers: 2}
+    i2t: {micro_batch_size: 16, dataloader_workers: 2}
+  text:
+    shard_glob: /assets/ClimbMix/*.jsonl
+    sequence_length: 2048
+    tokenizer_batch_documents: 32
+    max_document_chars: 32768
+    # A separate held-out JSONL. For a reserved corpus subset use a validation
+    # manifest plus validation_exclusion_manifest, not this separate-file option.
+    validation: {jsonl: /assets/ClimbMix-validation/heldout.jsonl, batch_size: 4}
+  image:
+    cache_path: /assets/imagenet/train-posterior.pt
+    manifest_jsonl: /assets/imagenet/train.jsonl
+    expected_split: train
+    conditioning_mode: caption
+    caption_jsonl: /assets/imagenet/train-captions.jsonl
+    synthetic_text_index_manifest: /assets/imagenet/indexed/train/manifest.json
+    caption_include_original: false
+    caption_sequence_modes: [t2i, i2t]
+    caption_t2i_prefix: 'Generate an image matching this description:'
+    caption_i2t_prefix: 'Describe this image in one detailed caption:'
+    max_seq_length: 512
+    pad_to_length: 512
+    pad_to_multiple_of: 64
+    packing: {enabled: false, nominal_capacity: 2048}
+    validation:
+      cache_path: /assets/imagenet/val-posterior.pt
+      manifest_jsonl: /assets/imagenet/val.jsonl
+      expected_split: val
+      caption_jsonl: /assets/imagenet/val-captions.jsonl
+      synthetic_text_index_manifest: /assets/imagenet/indexed/val/manifest.json
+training:
+  output_dir: output/unified-z2
+  max_train_steps: 31800
+  gradient_accumulation_steps: 4
+  mixed_precision: bf16
+  batch_size: 16
+  seed: 42
+  dataloader_shuffle_seed: 42
+  save_every: 2000
+  val_every: 3180
+  log_every: 10
+  use_ema: true
+  ema_decay: 0.9997
+optimizer:
+  backbone_lr: 0.0003
+  embedding_lr: 0.0003
+  generator_lr: 0.0005
+  projector_lr: 0.0005
+  warmup_steps: 199
+  decay_steps: 7950
+  min_lr_ratio: 0.1
+sampling: {steps: 10, solver: heun, cfg: 3.5, cfg_schedule: constant, seed: 42}
+evaluation:
+  seed: 424242
+  loss_image_per_class: 2
+  image_classes: /assets/imagenet/classes.json # source imagenet1k_synthetic_v1/t2i/classes.json
+  inception_splits: 10
+  inception_weights: /assets/inception/weights-inception-2015-12-05-6726825d.pth
+  reference_statistics: /assets/imagenet/fid-mean-covariance.pt
+codec:
+  module_root: /assets/mar
+  checkpoint: /assets/mar/kl16.ckpt
+  scaling_factor: 0.2325
