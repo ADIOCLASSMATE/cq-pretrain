@@ -1,0 +1,263 @@
+{
+  "schema": "cq_qualitative_v1",
+  "purpose": "Fixed qualitative regression: four GenEval T2I prompts, four image-only I2T prefixes and four explicit caption instructions. Four original reference-loss pairs stay unchanged.",
+  "training_overlap": "Not audited; these examples are not claimed to be decontaminated.",
+  "cases": [
+    {
+      "id": "geneval_062",
+      "task": "T2I",
+      "prompt": "a photo of a cat",
+      "height": 512,
+      "width": 512,
+      "steps": 30,
+      "guidance": 3.0,
+      "shift": 5.0,
+      "seed": 4200,
+      "source": {
+        "dataset": "GenEval",
+        "url": "https://github.com/djghosh13/geneval",
+        "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+        "metadata_line": 63,
+        "tag": "single_object"
+      }
+    },
+    {
+      "id": "geneval_027",
+      "task": "T2I",
+      "prompt": "a photo of a dog",
+      "height": 384,
+      "width": 640,
+      "steps": 30,
+      "guidance": 3.0,
+      "shift": 5.0,
+      "seed": 4201,
+      "source": {
+        "dataset": "GenEval",
+        "url": "https://github.com/djghosh13/geneval",
+        "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+        "metadata_line": 28,
+        "tag": "single_object"
+      }
+    },
+    {
+      "id": "geneval_342",
+      "task": "T2I",
+      "prompt": "a photo of a red car",
+      "height": 640,
+      "width": 384,
+      "steps": 30,
+      "guidance": 3.0,
+      "shift": 5.0,
+      "seed": 4202,
+      "source": {
+        "dataset": "GenEval",
+        "url": "https://github.com/djghosh13/geneval",
+        "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+        "metadata_line": 343,
+        "tag": "colors"
+      }
+    },
+    {
+      "id": "geneval_179",
+      "task": "T2I",
+      "prompt": "a photo of two clocks",
+      "height": 512,
+      "width": 512,
+      "steps": 30,
+      "guidance": 3.0,
+      "shift": 5.0,
+      "seed": 4203,
+      "source": {
+        "dataset": "GenEval",
+        "url": "https://github.com/djghosh13/geneval",
+        "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+        "metadata_line": 180,
+        "tag": "counting"
+      }
+    },
+    {
+      "id": "coco_391895",
+      "task": "I2T",
+      "image": "validation_assets/COCO_val2014_000000391895.jpg",
+      "image_sha256": "d0d62a2eed6433c8d65bae1c8dca849eb678d35a8f415e4a11e5daada24eb93a",
+      "references": [
+        "A man with a red helmet on a small moped on a dirt road.",
+        "Man riding a motor bike on a dirt road on the countryside.",
+        "A man riding on the back of a motorcycle.",
+        "A dirt path with a young person on a motor bike rests to the foreground of a verdant area with a bridge and a background of cloud-wreathed mountains.",
+        "A man in a red shirt and a red hat is on a motorcycle on a hill side."
+      ],
+      "prompt": "",
+      "max_new_tokens": 48,
+      "seed": 4300,
+      "source": {
+        "dataset": "COCO",
+        "split": "Karpathy test",
+        "url": "https://cocodataset.org/",
+        "source_image_id": "391895"
+      }
+    },
+    {
+      "id": "coco_60623",
+      "task": "I2T",
+      "image": "validation_assets/COCO_val2014_000000060623.jpg",
+      "image_sha256": "2fcf19f0230097a736040aaa73807e9b2d44fc77c33d540737cd149b572bcfaa",
+      "references": [
+        "A young girl inhales with the intent of blowing out a candle.",
+        "A young girl is preparing to blow out her candle.",
+        "A kid is to blow out the single candle in a bowl of birthday goodness.",
+        "Girl blowing out the candle on an ice-cream",
+        "A little girl is getting ready to blow out a candle on a small dessert."
+      ],
+      "prompt": "",
+      "max_new_tokens": 48,
+      "seed": 4301,
+      "source": {
+        "dataset": "COCO",
+        "split": "Karpathy test",
+        "url": "https://cocodataset.org/",
+        "source_image_id": "60623"
+      }
+    },
+    {
+      "id": "coco_483108",
+      "task": "I2T",
+      "image": "validation_assets/COCO_val2014_000000483108.jpg",
+      "image_sha256": "5c71251326fb9ece01b5ce6334869861b3fce82eeb5cae45977e78e6332f4170",
+      "references": [
+        "A man on a bicycle riding next to a train",
+        "A person is riding a bicycle but there is a train in the background.",
+        "a red and white train and a man riding a bicycle",
+        "a guy that is riding his bike next to a train",
+        "A man riding a bike past a train traveling along tracks."
+      ],
+      "prompt": "",
+      "max_new_tokens": 48,
+      "seed": 4302,
+      "source": {
+        "dataset": "COCO",
+        "split": "Karpathy test",
+        "url": "https://cocodataset.org/",
+        "source_image_id": "483108"
+      }
+    },
+    {
+      "id": "coco_384213",
+      "task": "I2T",
+      "image": "validation_assets/COCO_val2014_000000384213.jpg",
+      "image_sha256": "c766951710193774b71200025b27bb8a4cdfe5cd8f740f730f0579c1a6327196",
+      "references": [
+        "A kitchen is shown with a variety of items on the counters.",
+        "A kitchen has the windows open and plaid curtains.",
+        "A kitchen with two windows and two metal sinks.",
+        "An older kitchen with cluttered counter tops but empty sink.",
+        "Glasses and bottles are placed near a kitchen sink."
+      ],
+      "prompt": "",
+      "max_new_tokens": 48,
+      "seed": 4303,
+      "source": {
+        "dataset": "COCO",
+        "split": "Karpathy test",
+        "url": "https://cocodataset.org/",
+        "source_image_id": "384213"
+      }
+    },
+    {
+      "id": "coco_391895_prompted",
+      "task": "I2T",
+      "image": "validation_assets/COCO_val2014_000000391895.jpg",
+      "image_sha256": "d0d62a2eed6433c8d65bae1c8dca849eb678d35a8f415e4a11e5daada24eb93a",
+      "references": [
+        "A man with a red helmet on a small moped on a dirt road.",
+        "Man riding a motor bike on a dirt road on the countryside.",
+        "A man riding on the back of a motorcycle.",
+        "A dirt path with a young person on a motor bike rests to the foreground of a verdant area with a bridge and a background of cloud-wreathed mountains.",
+        "A man in a red shirt and a red hat is on a motorcycle on a hill side."
+      ],
+      "prompt": "\nDescribe this image in one sentence.\n",
+      "max_new_tokens": 48,
+      "seed": 4300,
+      "source": {
+        "dataset": "COCO",
+        "split": "Karpathy test",
+        "url": "https://cocodataset.org/",
+        "source_image_id": "391895",
+        "prompt_kind": "explicit caption instruction authored for qualitative testing, using the original COCO image"
+      },
+      "score_reference": false
+    },
+    {
+      "id": "coco_60623_prompted",
+      "task": "I2T",
+      "image": "validation_assets/COCO_val2014_000000060623.jpg",
+      "image_sha256": "2fcf19f0230097a736040aaa73807e9b2d44fc77c33d540737cd149b572bcfaa",
+      "references": [
+        "A young girl inhales with the intent of blowing out a candle.",
+        "A young girl is preparing to blow out her candle.",
+        "A kid is to blow out the single candle in a bowl of birthday goodness.",
+        "Girl blowing out the candle on an ice-cream",
+        "A little girl is getting ready to blow out a candle on a small dessert."
+      ],
+      "prompt": "\nDescribe this image in one sentence.\n",
+      "max_new_tokens": 48,
+      "seed": 4301,
+      "source": {
+        "dataset": "COCO",
+        "split": "Karpathy test",
+        "url": "https://cocodataset.org/",
+        "source_image_id": "60623",
+        "prompt_kind": "explicit caption instruction authored for qualitative testing, using the original COCO image"
+      },
+      "score_reference": false
+    },
+    {
+      "id": "coco_483108_prompted",
+      "task": "I2T",
+      "image": "validation_assets/COCO_val2014_000000483108.jpg",
+      "image_sha256": "5c71251326fb9ece01b5ce6334869861b3fce82eeb5cae45977e78e6332f4170",
+      "references": [
+        "A man on a bicycle riding next to a train",
+        "A person is riding a bicycle but there is a train in the background.",
+        "a red and white train and a man riding a bicycle",
+        "a guy that is riding his bike next to a train",
+        "A man riding a bike past a train traveling along tracks."
+      ],
+      "prompt": "\nDescribe this image in one sentence.\n",
+      "max_new_tokens": 48,
+      "seed": 4302,
+      "source": {
+        "dataset": "COCO",
+        "split": "Karpathy test",
+        "url": "https://cocodataset.org/",
+        "source_image_id": "483108",
+        "prompt_kind": "explicit caption instruction authored for qualitative testing, using the original COCO image"
+      },
+      "score_reference": false
+    },
+    {
+      "id": "coco_384213_prompted",
+      "task": "I2T",
+      "image": "validation_assets/COCO_val2014_000000384213.jpg",
+      "image_sha256": "c766951710193774b71200025b27bb8a4cdfe5cd8f740f730f0579c1a6327196",
+      "references": [
+        "A kitchen is shown with a variety of items on the counters.",
+        "A kitchen has the windows open and plaid curtains.",
+        "A kitchen with two windows and two metal sinks.",
+        "An older kitchen with cluttered counter tops but empty sink.",
+        "Glasses and bottles are placed near a kitchen sink."
+      ],
+      "prompt": "\nDescribe this image in one sentence.\n",
+      "max_new_tokens": 48,
+      "seed": 4303,
+      "source": {
+        "dataset": "COCO",
+        "split": "Karpathy test",
+        "url": "https://cocodataset.org/",
+        "source_image_id": "384213",
+        "prompt_kind": "explicit caption instruction authored for qualitative testing, using the original COCO image"
+      },
+      "score_reference": false
+    }
+  ]
+}

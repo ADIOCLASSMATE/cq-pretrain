@@ -1,0 +1,53 @@
+{
+  "runtime": {
+    "cann": "9.0.0",
+    "torch": "2.7.1+cpu",
+    "torch_npu": "2.7.1.post4",
+    "python": "3.12.13"
+  },
+  "sources": {
+    "MindSpeed": {
+      "commit": "ff884722a3ce7079fbafe3cb97a3287311f58a5b",
+      "url": "https://github.com/Ascend/MindSpeed.git",
+      "commit_date": "2026-08-05T16:37:35+08:00"
+    },
+    "MegatronAdaptor": {
+      "commit": "0ede2cef2fa2e889284f248b5606803ae20c1942",
+      "url": "https://gitcode.com/Ascend/MegatronAdaptor.git",
+      "commit_date": "2026-08-12T17:43:20+08:00"
+    },
+    "TransformerEngineNPU": {
+      "commit": "3d3ae0a1181c0c36c4d43571ad72a1a417600885",
+      "url": "https://gitcode.com/Ascend/TransformerEngineNPU.git",
+      "commit_date": "2026-09-02T09:21:32+08:00"
+    },
+    "Megatron-LM": {
+      "commit": "266f1c97dca477ca8b92c16087506da2000b0b84",
+      "url": "https://github.com/NVIDIA/Megatron-LM.git",
+      "commit_date": "2026-05-25T12:28:21+00:00"
+    }
+  },
+  "cann_packages": [
+    {
+      "kind": "toolkit",
+      "file": "Ascend-cann-toolkit_9.0.0_linux-x86_64.run",
+      "url": "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-toolkit_9.0.0_linux-x86_64.run",
+      "bytes": 1246654473,
+      "sha256": "56f0ea2cc3c193921bcd35b814ef635b668d1bce349fdb6a04cb0ec4b6f1bc06"
+    },
+    {
+      "kind": "910b-ops",
+      "file": "Ascend-cann-910b-ops_9.0.0_linux-x86_64.run",
+      "url": "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-910b-ops_9.0.0_linux-x86_64.run",
+      "bytes": 2302320572,
+      "sha256": "512ad3b2918f90b5bc7a958b171b9e300902281e23315b017b2b59b724a447da"
+    },
+    {
+      "kind": "nnal",
+      "file": "Ascend-cann-nnal_9.0.0_linux-x86_64.run",
+      "url": "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-nnal_9.0.0_linux-x86_64.run",
+      "bytes": 571204575,
+      "sha256": "d02ff36b63a7809abde3aae0dbeb24c7f07105150ace15801e2df155d8a04499"
+    }
+  ]
+}

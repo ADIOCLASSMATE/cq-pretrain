@@ -1,0 +1,27 @@
+{
+  "repository": "https://github.com/LTH14/mar",
+  "commit": "c6d53f7fa6427634b5850ebed771b7c2d19ea21f",
+  "upstream_sha256": {
+    "main_cache.py": "f07f25ac5752fc3ddde922dbb6bb9c74ee9e5485cc9c8b1b2068bd0d2569e495",
+    "main_mar.py": "e1a227e6d7025916ecf1c832051410711d8df3fa7676f723568177dabbb3091b",
+    "engine_mar.py": "bc444a28ff3c2cfefc5b43419b2b31668c7a6f84c13139d5fef418362f1d8e81",
+    "util/loader.py": "5315899fb20cd0f63abb64a4c890e939cbfd64c4827cbd11d207375adaa3e29a",
+    "util/lr_sched.py": "47765fbc75affedb8c8c062d8b784fd00a6ee4527c8a82edb8cf514235d7e048",
+    "util/download.py": "b8c90b7ce414f4ceb75467e2ed505cb5c16256905e5b3bd59f156a9640e08ccf",
+    "util/misc.py": "f704683cd8ad43d457c9c73aebfaab623187bbeb2a77b26076f4210ed6a0e093",
+    "util/crop.py": "08da8c1300202e66773806085fcaf2415acf1e38ac8923d5cdf79cafd770ccb6",
+    "demo/gradio_app.py": "6d9c9670ae004481ed5801aac5fc3da1a1252f81d01484c94fc841a44ea96dd8",
+    "models/vae.py": "95e9d47d017817cd86858d78587786c931a9ba9596fe3eb6d6dce4136580112b",
+    "models/mar.py": "92bfe30018ce453f8f505c44c5fa8c44ddee15dbdf2e4fa5b834d811d80adbee",
+    "models/diffloss.py": "7c737d3f395feedf2cc8ee71c85dac11b9b7686934e3e1b27a95bc1bdfd2827b",
+    "diffusion/__init__.py": "b8f817cd71cc661700d29db07e3d0b8ea6e949e102976143e926cde379f9f8ca",
+    "diffusion/respace.py": "9dde1492dd9d03e47caa12c7a7293dd7a5af1a79f3ddb0629f1692d97c856903",
+    "diffusion/diffusion_utils.py": "25a51feb2e20658a365dd0557a8e4d30495ef6e2ec7a9de54e4ae5a4efe92916",
+    "diffusion/gaussian_diffusion.py": "d7caef1dffab1525170f6886eefe49a0935ccc210220900eefc6bfe71d7ce8c8"
+  },
+  "adaptations": [
+    "device-aware tensor allocation",
+    "explicit non-reentrant checkpointing for modern PyTorch/DDP",
+    "models package marker to avoid unified-mm namespace collision"
+  ]
+}

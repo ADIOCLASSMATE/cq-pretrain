@@ -1,0 +1,5 @@
+pyarrow==21.0.0
+pillow==12.3.0
+numpy==1.26.0
+tokenizers==0.22.2
+psutil==7.2.2
