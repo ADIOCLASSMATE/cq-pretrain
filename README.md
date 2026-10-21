@@ -41,6 +41,30 @@ python -m ascend_pretrain.train --help
 python -m ascend_pretrain.setup_deps --help
 ```
 
+## 评测权重快照
+
+训练默认每 **1000 个全局更新 step** 单独保存推理权重，不启动 benchmark。
+`--eval-snapshot-every` 可调整间隔，设为 `0` 可关闭；恢复训练后仍按绝对 step 计数。
+现有恢复 checkpoint 的保存频率、`--keep-checkpoints` 和清理策略不变。
+
+通过 `--eval-snapshot-dir` 指定持久目录。未指定时，若使用
+`--checkpoint-dir /path/to/run/checkpoints`，快照写到
+`/path/to/run/eval_snapshots/step_0001000/`；否则写到
+`<output>/eval_snapshots/step_0001000/`。后续 step 各自保留，不自动轮转删除。
+
+每份快照包含完整模型的 `model_tp_*.pt` 分片，以及最后提交的 `manifest.json`。
+启用 renderer EMA 时保存 **online backbone + EMA renderer**，与定性验证一致；
+未启用 EMA 时保存 online 模型。保留推理所需参数和 buffers，不包含优化器、
+FP32 master、RNG 或数据游标。冻结 VAE 和 tokenizer 等外部资产不重复复制，
+在 manifest 中记录其版本/校验清单、模型配置、源码摘要及权重来源。
+
+后续评测只读取存在完整 `manifest.json` 的快照，模型装载可复用
+`checkpoint.initialize_model()`（支持 TP 重分片），不能用 `--resume` 将其作为
+完整训练恢复点。如果在 checkpoint 提交后、对应快照完成前中断，恢复到该
+1000-step 边界时会补存；已完整提交的快照验证后跳过，不覆盖。
+
+采用固定源码快照的运行中作业不会自动获得此功能，需要在后续启动/恢复时使用新版代码。
+
 ## 检查
 
 数据管线测试需要与其测试词表匹配的 tokenizer 目录，可通过 `DCVLM_TOKENIZER` 指定，

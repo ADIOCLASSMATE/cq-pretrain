@@ -54,6 +54,10 @@ def parse_args():
     parser.add_argument('--save-every', type=int, default=0)
     parser.add_argument('--checkpoint-dir', type=Path, help='Shared checkpoint root, independent of attempt logs')
     parser.add_argument('--keep-checkpoints', type=int, default=3)
+    parser.add_argument('--eval-snapshot-every', type=int, default=1000,
+                        help='Save inference-only weights every N absolute updates; zero disables')
+    parser.add_argument('--eval-snapshot-dir', type=Path,
+                        help='Retained evaluation weights; defaults beside checkpoint-dir, or under output')
     parser.add_argument('--save-first', action='store_true', help='Save after the first successful update')
     parser.add_argument('--save-final', action='store_true', help='Save the last update on normal completion')
     resume = parser.add_mutually_exclusive_group()
@@ -104,6 +108,8 @@ def parse_args():
         parser.error('Require finite lr > 0 and 0 <= min-lr <= lr')
     if not math.isfinite(args.moss_ema_decay) or not 0<=args.moss_ema_decay<1:
         parser.error('Require finite 0 <= moss-ema-decay < 1')
+    if args.eval_snapshot_every < 0:
+        parser.error('Require eval-snapshot-every >= 0')
     return args
 
 
@@ -209,6 +215,14 @@ def main():
         output.mkdir(parents=True, exist_ok=True)
     dist.barrier()
     checkpoint_root = args.checkpoint_dir or output
+    eval_snapshot_root = args.eval_snapshot_dir or (
+        args.checkpoint_dir.parent/'eval_snapshots' if args.checkpoint_dir else output/'eval_snapshots')
+    if args.eval_snapshot_every:
+        checkpoint_path, snapshot_path = checkpoint_root.resolve(), eval_snapshot_root.resolve()
+        if (snapshot_path == checkpoint_path or
+                (snapshot_path.is_relative_to(checkpoint_path) and
+                 snapshot_path.relative_to(checkpoint_path).parts[0].startswith('step_'))):
+            raise ValueError('Evaluation snapshots must be outside checkpoint step directories and their retention root')
     if args.auto_resume:
         from .checkpoint_catalog import latest, remove_incomplete, prune
         selection = [None]
@@ -325,16 +339,15 @@ def main():
         if args.resume and ema is not None:restored.append('MOSS FP32 EMA and update counter')
         print(json.dumps(dict(resume=dict(path=args.resume, step=start_step,
             restored=restored))), flush=True)
+    budget_already_complete=False
     if args.total_steps is not None:
         if args.total_steps<1: raise ValueError('total_steps must be positive')
         args.steps=max(0,args.total_steps-start_step)
-        if not args.steps:
-            if rank==0: print(json.dumps(dict(status='budget_already_complete',step=start_step)),flush=True)
-            dist.barrier();dist.destroy_process_group();return
-        args.warmup=min(args.warmup,args.steps-1)
+        budget_already_complete=not args.steps
+        if not budget_already_complete:args.warmup=min(args.warmup,args.steps-1)
     # Different DP replicas see different data. TP ranks must see identical data.
     loader = preparer = ordered_buckets = None
-    if args.data_snapshot:
+    if args.data_snapshot and not budget_already_complete:
         from .input_pipeline.stream import DocumentStream
         from .input_pipeline.packing import Packer, ConsumedLoader
         from .input_pipeline.vae import DevicePreparer
@@ -363,7 +376,7 @@ def main():
         ordered_gathers = OrderedParameterGathers(wrapped)
         from .input_pipeline.runtime import empty_batch
         padding_batch = empty_batch(cfg, data_tokens).to('npu')
-    else:
+    elif not budget_already_complete:
         batch = fake_batch(cfg, args.sequence_length, args.micro_batch, args.images,
                            seed=args.seed + P.dp_rank(), device='npu', dtype=torch.bfloat16)
     environment = dict(torch=torch.__version__, torch_npu=torch_npu.__version__,
@@ -426,7 +439,7 @@ def main():
         (output / 'run.json').write_text(json.dumps(environment, indent=2))
         print(json.dumps(environment), flush=True)
     profile = nullcontext()
-    profile_this_rank = args.profile and rank in profile_ranks
+    profile_this_rank = args.profile and rank in profile_ranks and not budget_already_complete
     if profile_this_rank:
         profile = torch_npu.profiler.profile(
             activities=[torch_npu.profiler.ProfilerActivity.CPU, torch_npu.profiler.ProfilerActivity.NPU],
@@ -458,6 +471,23 @@ def main():
             print(json.dumps(dict(checkpoint_committed=event)), flush=True)
         dist.barrier()
     measurements = []
+    eval_snapshot_events=[]
+    def save_eval_snapshot(step):
+        from .eval_snapshot import save
+        provenance=dict(source_sha256=environment['source_sha256'],
+            dependencies=environment['dependencies'],
+            runtime={key:environment[key] for key in ('torch','torch_npu','stack','cann')},
+            assets={key:training_state[key] for key in ('qwen35_assets','vision_assets','moss_assets')
+                    if key in training_state},
+            inference_inputs={key:training_state.get('data',{}).get(key) for key in
+                              ('tokenizer','latent_encoder','latent_options','vae_path','vae_dtype','vae_sha256')},
+            resumed_from=args.resume,initial_weights=loaded_weights)
+        event=save(eval_snapshot_root/f'step_{step:07d}',model,wrapped,step,cfg,topology,
+                   ema=ema,provenance=provenance)
+        eval_snapshot_events.append(event)
+        if rank==0:
+            with (output/'eval_snapshots.jsonl').open('a') as handle:handle.write(json.dumps(event)+'\n')
+            print(json.dumps(dict(eval_snapshot=event)),flush=True)
     validation_events=[]
     def validate(step):
         if not args.validation_suite:return
@@ -486,6 +516,13 @@ def main():
             atomic_json(result_path,result)
             with (output/'validation.jsonl').open('a') as handle:handle.write(json.dumps(event)+'\n')
             print(json.dumps(dict(validation=event)),flush=True)
+    # A restart checkpoint can commit just before its evaluation export is
+    # interrupted. Revisit that boundary before consuming the next batch.
+    if args.eval_snapshot_every and start_step>0 and start_step%args.eval_snapshot_every==0:
+        save_eval_snapshot(start_step)
+    if budget_already_complete:
+        if rank==0:print(json.dumps(dict(status='budget_already_complete',step=start_step)),flush=True)
+        dist.barrier();dist.destroy_process_group();return
     if args.validate_first:validate(start_step)
     measured_begin = None
     begin = time.perf_counter()
@@ -664,6 +701,8 @@ def main():
             if (args.save_every and row['step'] % args.save_every == 0) or (args.save_first and row['step'] == 1):
                 save_checkpoint(row['step'])
                 last_saved_step = row['step']
+            if args.eval_snapshot_every and completed_step%args.eval_snapshot_every==0:
+                save_eval_snapshot(completed_step)
             if profile_this_rank:
                 profiler.step()
             if args.validate_every and completed_step%args.validate_every==0:validate(completed_step)
@@ -707,6 +746,9 @@ def main():
         summary['validation_probes']=args.validation_probes
         summary['validation_seconds']=sum(e['seconds'] for e in validation_events if e['step']>start_step)
         summary['qualitative_validation']=bool(args.validation_suite)
+        summary['eval_snapshot_dir']=str(eval_snapshot_root)
+        summary['eval_snapshot_steps']=[event['step'] for event in eval_snapshot_events if not event['skipped']]
+        summary['eval_snapshot_seconds']=sum(event['seconds'] for event in eval_snapshot_events)
         if ema is not None:summary['moss_ema']=dict(**ema.metadata(),local_storage_bytes=ema.local_bytes)
         if args.phase_timing:
             summary.update({key: statistics.mean(x[key] for x in measurements)

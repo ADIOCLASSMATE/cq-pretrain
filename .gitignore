@@ -22,6 +22,7 @@
 !/ascend_pretrain/data.py
 !/ascend_pretrain/delta_ascendc.py
 !/ascend_pretrain/ema.py
+!/ascend_pretrain/eval_snapshot.py
 !/ascend_pretrain/generation.py
 !/ascend_pretrain/kernels.py
 !/ascend_pretrain/loss.py
@@ -48,6 +49,7 @@
 !/ascend_pretrain/test_cross_attention.py
 !/ascend_pretrain/test_document_packing.py
 !/ascend_pretrain/test_ema.py
+!/ascend_pretrain/test_eval_snapshot.py
 !/ascend_pretrain/test_input_pipeline.py
 !/ascend_pretrain/test_loss_accumulation.py
 !/ascend_pretrain/test_mc2.py
