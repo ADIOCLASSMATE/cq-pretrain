@@ -1,103 +1,65 @@
-"""Shared sequence-order utilities for ImageNet flow batches."""
+"""Native Qwen chat/video serialization for same-position CQ supervision."""
 
 from __future__ import annotations
-
-from typing import Any, Mapping
-
+from copy import deepcopy
 import torch
+from transformers.video_utils import VideoMetadata
 
 
-def scalar_int(item: Mapping[str, Any], key: str) -> int:
-    """Read scalar sample metadata without coupling callers to its container."""
-
-    value = item[key]
-    if isinstance(value, torch.Tensor):
-        if value.numel() != 1:
-            raise ValueError(
-                f"sample field {key!r} must be scalar, got shape={tuple(value.shape)}"
-            )
-        value = value.item()
-    return int(value)
+def native_video_metadata(timestamps):
+    # The processor pairs frames then averages their timestamps. Express exact
+    # PTS in seconds so nonuniform sampling does not become a fictitious CFR.
+    return VideoMetadata(
+        total_num_frames=len(timestamps), fps=1.0, frames_indices=list(timestamps)
+    )
 
 
-def build_selfless_sigma(
-    item: Mapping[str, Any],
-    *,
-    image_tokens: int,
-) -> torch.Tensor:
-    """Build one sample's strict generation order.
-
-    The physical sequence is ``prefix, BOI, image, EOI, suffix, EOS`` while
-    sigma deliberately orders EOI before every image token. Consequently EOI
-    cannot see image content. Image queries can see prefix/BOI/EOI but no
-    target-image content. All image tokens have the same sigma for joint
-    whole-image denoising; suffix text can read the complete image content.
-    """
-
-    length = int(item["input_ids"].shape[0])
-    prompt_len = scalar_int(item, "prompt_len")
-    suffix_len = scalar_int(item, "suffix_len")
-    image_start = scalar_int(item, "image_start")
-    eoi_pos = image_start + int(image_tokens)
-    suffix_start = eoi_pos + 1
-    eos_pos = length - 1
-    if image_start != prompt_len + 1:
+def make_video_sequence(
+    messages, processor, grid_thw, timestamps, *, max_seq_length=None, prompt_only=False
+):
+    messages = deepcopy(messages)
+    if prompt_only:
+        # Accept both supervised manifests and unlabeled inference requests.
+        # Never put a reference assistant answer into the generated prefix.
+        if messages and messages[-1]["role"] == "assistant":
+            messages = messages[:-1]
+        if not messages or messages[-1]["role"] != "user":
+            raise ValueError("V2T generation requires a final user instruction")
+    text = processor.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=prompt_only,
+        enable_thinking=False,
+    )
+    if text.count(processor.video_token) != 1:
         raise ValueError(
-            "image_start must immediately follow prefix and BOI: "
-            f"image_start={image_start}, prompt_len={prompt_len}"
+            "Stage one requires exactly one video placeholder in each sample"
         )
-    if eoi_pos >= length or eos_pos < eoi_pos:
+    replacement = processor.replace_video_token(
+        {
+            "video_grid_thw": grid_thw[None],
+            "video_metadata": [native_video_metadata(timestamps)],
+        },
+        0,
+    )
+    text, _ = processor.get_text_with_replacements(
+        [text], videos_replacements=[replacement]
+    )
+    encoded = processor.tokenizer(text, add_special_tokens=False, return_tensors="pt")
+    ids = encoded["input_ids"][0]
+    expected = int(grid_thw.prod()) // processor.video_processor.merge_size**2
+    if int(ids.eq(processor.video_token_id).sum()) != expected:
+        raise ValueError("Serialized video slots do not match native ViT features")
+    if max_seq_length is not None and ids.numel() > max_seq_length:
         raise ValueError(
-            f"invalid image span for segment length={length}: "
-            f"start={image_start}, image_tokens={image_tokens}"
+            f"Sequence has {ids.numel()} tokens, exceeding max_seq_length={max_seq_length}; no partial-video truncation"
         )
-    expected_length = prompt_len + int(image_tokens) + suffix_len + 3
-    if length != expected_length:
-        raise ValueError(
-            "serialized sample metadata does not match sequence length: "
-            f"length={length}, expected={expected_length}"
-        )
-
-    sigma = torch.empty(length, dtype=torch.long)
-    if prompt_len:
-        sigma[:prompt_len] = torch.arange(prompt_len, dtype=torch.long)
-    sigma[prompt_len] = prompt_len
-    sigma[eoi_pos] = prompt_len + 1
-
-    image_sigma_order = str(item.get("image_sigma_order", "joint")).strip().lower()
-    if image_sigma_order != "joint":
-        raise ValueError("UMM v3 uses joint image sigma; autoregressive image orders are not supported")
-    reveal_order = torch.zeros(int(image_tokens), dtype=torch.long)
-    sigma[image_start:eoi_pos] = prompt_len + 2 + reveal_order
-
-    suffix_sigma_start = prompt_len + int(image_tokens) + 2
-    if suffix_len:
-        sigma[suffix_start:eos_pos] = suffix_sigma_start + torch.arange(
-            suffix_len, dtype=torch.long
-        )
-    sigma[eos_pos] = suffix_sigma_start + suffix_len
-    return sigma
-
-
-def make_image_sequence(prefix_ids, suffix_ids, *, image_tokens, boi_id, eoi_id, mask_id, eos_id, max_seq_length=None, label_suffix=False):
-    """Serialize prefix, BOI, image slots, EOI, suffix, EOS without shifting labels."""
-    prefix_len, suffix_len = int(prefix_ids.numel()), int(suffix_ids.numel())
-    length = prefix_len + image_tokens + suffix_len + 3
-    if max_seq_length is not None and length > max_seq_length:
-        raise ValueError("Serialized text exceeds max_seq_length; caption truncation is not supported")
-    image_block = torch.full((image_tokens + 2,), mask_id, dtype=torch.long)
-    image_block[0], image_block[-1] = boi_id, eoi_id
-    image_types = torch.ones(image_tokens + 2, dtype=torch.uint8)
-    image_types[[0, -1]] = 2
-    input_ids = torch.cat([prefix_ids, image_block, suffix_ids, torch.tensor([eos_id])])
-    token_types = torch.cat([torch.zeros(prefix_len, dtype=torch.uint8), image_types, torch.zeros(suffix_len, dtype=torch.uint8), torch.tensor([2], dtype=torch.uint8)])
-    labels = torch.full_like(input_ids, -100)
-    if label_suffix:
-        if suffix_len == 0:
-            raise ValueError("I2T caption supervision requires a non-empty suffix")
-        suffix_start = prefix_len + image_tokens + 2
-        labels[suffix_start:suffix_start + suffix_len] = suffix_ids
-        labels[-1] = eos_id
-    return dict(input_ids=input_ids, token_types=token_types, labels=labels,
-                prompt_len=torch.tensor(prefix_len), suffix_len=torch.tensor(suffix_len),
-                image_start=torch.tensor(prefix_len + 1))
+    labels = ids.clone()
+    labels[ids.eq(processor.video_token_id)] = -100
+    if prompt_only:
+        labels.fill_(-100)
+    return dict(
+        input_ids=ids,
+        labels=labels,
+        mm_token_type_ids=ids.eq(processor.video_token_id).long() * 2,
+    )

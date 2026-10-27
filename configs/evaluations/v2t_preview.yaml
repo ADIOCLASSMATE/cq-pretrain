@@ -1,0 +1,14 @@
+# Set data.sources; if omitted, use matching data.validation_sources.
+name: v2t_preview
+benchmark: v2t
+actions: [sample]
+data: {}
+sample:
+  max_samples: 8
+  samples_per_input: 1
+  generation: {}
+  outputs: [text]
+  collect:
+    token_ids: true
+    text_logits: false
+score: {}

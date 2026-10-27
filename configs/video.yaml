@@ -1,0 +1,20 @@
+# Production defaults are defined in configs/config.py; see docs/video_training.md.
+# Supply your own manifests. A simple caption manifest needs source-level task.
+distributed:
+  backend: mindspeed
+  overlap_grad_reduce: true
+  overlap_param_gather: true
+model:
+  qwen_gdn_backend: mindspeed
+  wan_attention_backend: npu
+  freeze_vision: true
+  train_language: true
+  train_wan: true
+  train_condition_proj: true
+training:
+  exp_id: umm_video
+data:
+  sources: []
+  mixing: balanced
+  task_weights: {t2v: 1, v2t: 1}
+  representations: {qwen: prefer_cache, wan: prefer_cache}

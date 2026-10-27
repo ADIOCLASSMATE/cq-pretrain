@@ -2,9 +2,9 @@
 set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-if [[ -n "${ACCELERATE_CONFIG:-}" ]]; then
-  exec "$PYTHON_BIN" -m accelerate.commands.launch --config_file "$ACCELERATE_CONFIG" \
-    -m training.train "$@"
+PYTHON_BIN="${PYTHON_BIN:-$ROOT/.venv-npu/bin/python}"
+UMM_SELECTED_BACKEND="$("$PYTHON_BIN" -m utils.run_logging --print-backend "$@")"
+if [[ "$UMM_SELECTED_BACKEND" == mindspeed ]]; then
+  source "$ROOT/scripts/env_mindspeed.sh"
 fi
-exec "$PYTHON_BIN" -m training.train "$@"
+exec "$PYTHON_BIN" -m utils.run_logging "$@"

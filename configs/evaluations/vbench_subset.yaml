@@ -1,0 +1,21 @@
+# Protocol interface. Official scoring still requires a separately configured
+# CUDA/VBench checkout; it is not implemented on the UMM Ascend runtime.
+name: vbench_subset
+benchmark: vbench
+actions: [sample, score]
+data:
+  split: subset
+sample:
+  samples_per_prompt: 5
+  flicker_candidates: 25
+  generation: {}
+  video: {}
+  outputs: [mp4]
+  collect: {}
+score:
+  input: sampled
+  environment: vbench_cuda
+  python: null
+  vbench_root: null
+  dimensions: all
+  static_filter: true

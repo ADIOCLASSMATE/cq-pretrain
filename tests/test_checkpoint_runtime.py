@@ -77,21 +77,20 @@ def test_complete_resume_matches_uninterrupted_optimizer_step(tmp_path):
     assert torch.load(ema_path, weights_only=True)["weights"] == "ema"
 
 
-@pytest.mark.parametrize("saved_mode", [None, "copy_text", "random"])
-def test_resume_restores_weights_despite_a_different_initialization_policy(tmp_path, saved_mode):
+
+
+def test_legacy_single_draw_checkpoint_accepts_default_repeats(tmp_path):
     model, optimizer, scheduler, _ = make_training()
-    config = {"model": {}, "lr": .01}
-    if saved_mode is not None:
-        config["model"]["image_mask_init"] = saved_mode
-    path = tmp_path / "checkpoint"
-    save_checkpoint(path, model=model, optimizer=optimizer, scheduler=scheduler, global_step=0, data_state={}, config=config)
-    expected = {"model": {"image_mask_init": "random" if saved_mode != "random" else "copy_text"}, "lr": .01}
-    restored, opt, sched, _ = make_training()
-    load_checkpoint(path, model=restored, optimizer=opt, scheduler=sched, expected_config=expected)
-    for key, value in model.state_dict().items():
-        torch.testing.assert_close(restored.state_dict()[key], value, rtol=0, atol=0)
-    with pytest.raises(ValueError, match="configuration contract"):
-        validate_checkpoint(path, expected_config={**expected, "lr": .02})
+    path = tmp_path / "legacy-video"
+    old_config = {"flow": {"time_sampling": "logit_normal"}}
+    save_checkpoint(path, model=model, optimizer=optimizer, scheduler=scheduler,
+                    global_step=0, data_state={}, config=old_config)
+    config = {"flow": {"time_sampling": "logit_normal", "repeats": 1}}
+    validate_checkpoint(path, expected_config=config)
+    assert "repeats" not in old_config["flow"]
+    config["flow"]["repeats"] = 2
+    with pytest.raises(ValueError, match="configuration contract differs"):
+        validate_checkpoint(path, expected_config=config)
 
 
 def test_transaction_rejects_incomplete_overwrite_and_different_contract(tmp_path):

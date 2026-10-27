@@ -1,0 +1,13 @@
+# Uses data.validation_sources from the run config unless data.sources is supplied.
+name: validation
+benchmark: loss
+actions: [score]
+data: {}
+sample: null
+score:
+  input: dataset
+  objective: training
+  metrics: [text_ce, video_flow, text_ppl]
+  # null inherits evaluation.seed / evaluation.max_batches from the run config.
+  seed: null
+  max_batches: null

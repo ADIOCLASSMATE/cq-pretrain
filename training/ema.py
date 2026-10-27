@@ -1,7 +1,7 @@
 """Rank-sharded FP32 exponential moving averages.
 
-The training model is replicated under DeepSpeed ZeRO-2, so every rank can read
-the parameters it owns in the EMA layout without communication.  Large tensors
+MCore keeps a replicated model after parameter gathering, so every rank can read
+the parameters it owns in the EMA layout without further communication. Large tensors
 are split into deterministic flat chunks before assignment; this avoids placing
 the whole tied token embedding on a single rank.
 """
@@ -397,7 +397,7 @@ class RankShardedEMA:
     @contextmanager
     @torch.no_grad()
     def applied_to(self, model: torch.nn.Module):
-        """Temporarily install the distributed EMA in a replicated ZeRO-2 model.
+        """Temporarily install the distributed EMA in a replicated model.
 
         CPU backups preserve live parameters, buffers and tied storage exactly.
         Broadcast buffers never alias the FP32 EMA. Optimizer/master parameters

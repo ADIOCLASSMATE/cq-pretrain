@@ -1,9 +1,17 @@
 .venv/
+.venv-npu*/
+.python/
+.deps/
+.mcore-migration-record
 __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.cache/
+kernel_meta*/
+fusion_result.json
 *.egg-info/
 output/
+outputs/
 build/
 dist/

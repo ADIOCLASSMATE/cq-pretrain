@@ -1,134 +1,173 @@
-"""Same-position CE and whole-image rectified-flow targets.
+"""Same-position text CE and whole-video Wan rectified flow, no token shift."""
 
-Task weights are applied once per microbatch. The trainer/Accelerate divides
-by accumulation steps; target counts are used only for reporting raw losses.
-"""
 from __future__ import annotations
-
 import torch
 from torch.nn import functional as F
+from data.packing import validate_representation_batch
 
-from models.modeling_umm import visual_indices
+
+def to_device(value, device):
+    if isinstance(value, torch.Tensor):
+        return value.to(device, non_blocking=True)
+    if isinstance(value, list):
+        return [to_device(x, device) for x in value]
+    if isinstance(value, tuple):
+        return tuple(to_device(x, device) for x in value)
+    if isinstance(value, dict):
+        return {k: to_device(v, device) for k, v in value.items()}
+    return value
 
 
-def sample_times(count, device, model_config, generator=None):
-    mode = model_config.get("image_flow_time_sampling", "logit_normal")
+class LazyVideoCodec:
+    """VAE exists outside trainable UMM and loads only for online Wan targets."""
+
+    def __init__(self, config, device):
+        self.config, self.device, self.codec = config, device, None
+
+    def get(self):
+        if self.codec is None:
+            from data.codec import WanVideoCodec
+
+            settings = self.config["codec"]
+            self.codec = WanVideoCodec.from_pretrained(
+                settings.get("path") or self.config["model"]["wan_path"],
+                device=self.device,
+                dtype=getattr(torch, settings["dtype"]),
+            )
+        return self.codec
+
+    def encode(self, rgb):
+        return self.get().encode(rgb)
+
+
+def sample_times(count, device, settings, generator=None):
     def uniform():
-        return torch.rand((count,), device=device, generator=generator)
-    if mode == "uniform":
+        return torch.rand(count, device=device, generator=generator)
+
+    if settings["time_sampling"] == "uniform":
         times = uniform()
-    elif mode == "logit_normal":
-        times = torch.sigmoid(torch.randn((count,), device=device, generator=generator) *
-                              float(model_config.get("image_flow_logit_std", 1.0)) +
-                              float(model_config.get("image_flow_logit_mean", 0.0)))
-        mixture = float(model_config.get("image_flow_time_uniform_mix", 0.1))
+    else:
+        times = (
+            torch.randn(count, device=device, generator=generator)
+            * float(settings["logit_std"])
+            + float(settings["logit_mean"])
+        ).sigmoid()
+        mixture = float(settings["uniform_mix"])
         if mixture:
-            use_uniform = uniform() < mixture
-            times = torch.where(use_uniform, uniform(), times)
-    else:
-        raise ValueError(f"Unknown time sampling: {mode}")
-    epsilon = float(model_config.get("image_flow_time_eps", 1e-5))
-    return times.clamp(epsilon, 1.0 - epsilon)
+            times = torch.where(uniform() < mixture, uniform(), times)
+    epsilon = float(settings["time_eps"])
+    return times.clamp(epsilon, 1 - epsilon)
 
 
-def prepare_flow(batch, model_config, generator=None, *, allow_empty=False):
-    rows, indices = visual_indices(batch, int(model_config["image_tokens_per_img"]))
-    target = batch["image_latents"][rows[:, None], indices].float()
-    repeats = int(model_config.get("image_flow_batch_mul", 4))
-    target = target.repeat(repeats, 1, 1)
-    times = sample_times(target.shape[0], target.device, model_config, generator)
-    noise = torch.randn(target.shape, device=target.device, dtype=torch.float32, generator=generator)
-    noisy = (1 - times[:, None, None]) * noise + times[:, None, None] * target
-    mask = batch.get("image_loss_mask")
-    if mask is None:
-        weights = torch.ones(target.shape[:2], device=target.device, dtype=torch.bool)
-    else:
-        weights = mask[rows[:, None], indices].repeat(repeats, 1).bool()
-    if not allow_empty and not bool(weights.any()):
-        raise ValueError("T2I batch has no supervised visual tokens")
-    return noisy, times, target - noise, weights
-
-
-def prepare_batch(batch, device, config, generator=None, *, image_input_dtype=torch.float32):
-    """Prepare CFG and content jitter in the image input projector's dtype.
-
-    Training/evaluation callers pass the prepared model's actual parameter
-    dtype; it can differ from both posterior-cache dtype and autocast dtype.
-    Clean posterior targets retain their original values and dtype.
-    """
-    result = {key: value.to(device, non_blocking=True) if isinstance(value, torch.Tensor) else value
-              for key, value in batch.items()}
-    if "image_uncond_mask" not in result and "image_uncond_rows" not in result:
-        probability = float(config["model"].get("image_uncond_prob", 0.1))
-        if probability:
-            token_types = result["token_types"]
-            result["image_uncond_rows"] = (
-                torch.rand(token_types.shape[0], device=device, generator=generator) < probability
-            ) & token_types.eq(1).any(1)
-    # The source draws input jitter before RF time/noise. Store content
-    # augmentation separately so loss targets remain the clean posterior draw.
-    strength = float(config["model"].get("image_input_noise_strength", 0.01))
-    latents = result.get("image_latents")
-    if strength > 0 and latents is not None and "content_image_latents" not in result:
-        if bool(result["token_types"].eq(1).any()):
-            latents = latents.to(dtype=image_input_dtype)
-            result["content_image_latents"] = latents + torch.randn(
-                latents.shape, device=latents.device, dtype=latents.dtype, generator=generator,
-            ) * strength
-        else:
-            # Text-only batches carry placeholder latents in the unified schema.
-            # The source has no visual input here and draws no augmentation noise.
-            result["content_image_latents"] = latents
-    return result
-
-
-def forward_loss(model, batch, config, generator=None):
-    """Independent same-position CE and image RF supervision in one model call.
-
-    ``joint`` keeps the source caption dataset's mixed T2I/I2T masks. Either
-    modality can be empty in an individual batch. Explicit compute_*_loss
-    switches also support both targets within a single serialized sample.
-    """
-    task = batch.get("task", "t2i")
-    if task == "climbmix":
-        task = "text"
-    model_config = config["model"]
-    if task not in {"text", "t2i", "i2t", "joint"}:
-        raise ValueError(f"Unknown training task: {task}")
-    compute_text = bool(batch.get("compute_text_loss", task in {"text", "i2t", "joint"}))
-    compute_image = bool(batch.get("compute_image_loss", task in {"t2i", "joint"}))
-    noisy = times = None
-    if compute_image:
-        noisy, times, target_velocity, weights = prepare_flow(
-            batch, model_config, generator, allow_empty=task == "joint",
+def prepare_batch(batch, device, config, generator=None, *, codec=None):
+    result = to_device({k: v for k, v in batch.items() if k != "_data_state"}, device)
+    latents = result.get("wan_latents", [])
+    pixels = result.pop("wan_rgb", [None] * len(latents))
+    if len(latents) != len(result["target_video_ids"]) or len(pixels) != len(latents):
+        raise ValueError("Wan target inputs must follow target_video_ids order")
+    validate_representation_batch(latents, pixels, branch="Wan")
+    clean = []
+    for z, rgb in zip(latents, pixels):
+        if z is None:
+            if codec is None or rgb is None:
+                raise ValueError("Online Wan target requires RGB and a frozen VAE")
+            z = codec.encode(rgb)
+        if z.ndim != 4 or not bool(torch.isfinite(z).all()):
+            raise ValueError("Wan target must be finite [C,T,H,W]")
+        clean.append(z.float())
+    result["wan_latents"] = clean
+    if "video_uncond_mask" not in result:
+        drop = torch.zeros(
+            len(result["video_grid_thw"]), device=device, dtype=torch.bool
         )
-    if not compute_text and not compute_image:
-        raise ValueError("At least one training objective must be enabled")
-    output = model(batch, noisy_latents=noisy, timesteps=times, compute_text=compute_text)
-    zero = next(iter(output.values())).sum() * 0.0
-    image_loss = text_loss = zero
-    image_count = text_count = 0
-    if compute_image:
-        errors = (output["velocity"].float() - target_velocity).square().mean(-1)
-        count = weights.sum()
-        image_loss = (errors * weights).sum() / count.clamp_min(1)
-        image_count = int(count)
-    if compute_text:
-        logits, labels = output["text_logits"], output["text_labels"]
-        if labels is None:
-            raise ValueError("Text training requires same-position labels")
-        text_count = labels.numel()
-        if text_count == 0 and task != "joint":
-            raise ValueError(f"{task} batch has no supervised text tokens")
-        text_loss = F.cross_entropy(logits.float(), labels, reduction="sum") / max(text_count, 1)
-    if text_count + image_count == 0:
-        raise ValueError(f"{task} batch has no supervised targets")
-    loss = (text_loss * float(model_config.get("lambda_text", 0.05))
-            + image_loss * float(model_config.get("lambda_image", 1.0)))
-    result = dict(loss=loss, task=task, text_loss=text_loss, image_loss=image_loss,
-                  text_target_count=text_count, image_target_count=image_count)
-    # Joint losses have two independent denominators, never a combined token mean.
-    if task != "joint":
-        result.update(raw_loss=image_loss if task == "t2i" else text_loss,
-                      target_count=image_count if task == "t2i" else text_count)
+        drop[result["target_video_ids"]] = (
+            torch.rand(len(clean), device=device, generator=generator)
+            < config["model"]["video_uncond_prob"]
+        )
+        result["video_uncond_mask"] = drop
     return result
+
+
+def supervision_counts(batch):
+    labels = batch["labels"]
+    valid = labels.ne(-100)
+    # CPU collator carries native multimodal types; CQ types are built later by
+    # prepare_inputs. Native video placeholders (2) must never be text targets.
+    if "mm_token_type_ids" in batch:
+        valid &= batch["mm_token_type_ids"].eq(0)
+    elif "token_types" in batch:
+        valid &= batch["token_types"].ne(1) & batch["token_types"].ne(3)
+    if "attention_mask" in batch:
+        valid &= batch["attention_mask"].bool()
+    return int(valid.sum()), len(batch["target_video_ids"])
+
+
+def global_loss_weights(batches, runtime):
+    """Each text token / target video has equal weight across DP and GA.
+
+    DDP averages gradients across DP ranks; multiply local mean losses by D*n/N
+    and D*m/M. There is no additional division by the number of microbatches.
+    Flow repeats average independent draws per video and do not change M.
+    """
+    counts = [supervision_counts(batch) for batch in batches]
+    totals = torch.tensor(counts, device=runtime.device, dtype=torch.int64).sum(0)
+    totals = runtime.reduce(totals, reduction="sum").cpu().tolist()
+    return [tuple(runtime.num_processes * count / total if total else 0.0
+                  for count, total in zip(row, totals)) for row in counts]
+
+
+def forward_loss(model, batch, config, generator=None, *, loss_weights=(1.0, 1.0)):
+    clean = batch.get("wan_latents", [])
+    repeats = config["flow"].get("repeats", 1)
+    if type(repeats) is not int or repeats < 1:
+        raise ValueError("flow.repeats must be a positive integer")
+    # Draw-major order matches UMM's repeated conditions. Reuse the original
+    # batch/CFG decision; each copy receives independent flow time and noise.
+    draws = clean * repeats
+    times = sample_times(
+        len(draws), batch["input_ids"].device, config["flow"], generator
+    )
+    noisy, target = [], []
+    for z, s in zip(draws, times):
+        noise = torch.randn(
+            z.shape, device=z.device, dtype=torch.float32, generator=generator
+        )
+        # Wan: s=0 is clean, s=1 is noise; sampling integrates from 1 to 0.
+        noisy.append((1 - s) * z + s * noise)
+        target.append(noise - z)
+    output = model(
+        batch,
+        noisy_latents=noisy or None,
+        timesteps=times * config["flow"]["timestep_scale"] if noisy else None,
+        compute_text=True,
+        flow_repeats=repeats,
+    )
+    if target and len(output["velocity"]) != len(target):
+        raise ValueError("Wan predictions must match every repeated flow target")
+    logits, labels = output["text_logits"], output["text_labels"]
+    text_loss = (
+        F.cross_entropy(logits.float(), labels) if labels.numel() else logits.sum() * 0
+    )
+    video_loss = (
+        torch.stack(
+            [
+                F.mse_loss(pred.float(), truth)
+                for pred, truth in zip(output["velocity"], target)
+            ]
+        ).mean()
+        if target
+        else text_loss.new_zeros(())
+    )
+    loss = (
+        config["model"]["lambda_text"] * loss_weights[0] * text_loss
+        + config["model"]["lambda_video"] * loss_weights[1] * video_loss
+    )
+    return dict(
+        loss=loss,
+        metric_loss=config["model"]["lambda_text"] * text_loss.detach()
+                    + config["model"]["lambda_video"] * video_loss.detach(),
+        text_loss=text_loss.detach(),
+        video_loss=video_loss.detach(),
+        text_target_count=labels.numel(),
+        video_target_count=len(clean),
+    )

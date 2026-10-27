@@ -1,291 +1,69 @@
-# UMM v3
+# UMM v3：Qwen3.5 + Wan2.1
 
-围绕 **CQ_IT backbone + 固定 condition + 全图 Z2 DiT flow** 的独立重构。
-运行时不导入旧仓库，不需要安装 `unified_mm_v2`。来源仅为 `unified-mm` 的
-`origin/npu`，固定提交 `193ec90300af5fee4bc4b7e8a426492a908a0447`。
+当前主链路支持单视频样本的 T2V/V2T 持续预训练和无缓存推理。Content/query 等长，文本 query 预测同位置 token，整段视频 query 只读取第一个 visual token 之前的前缀。Qwen 原生 ViT 提供 content；Wan 对整段视频 latent 联合建模。
 
-**当前代码是 Z2 的迁移实现，最佳实验版本尚待确认。**
-重构方案、源码指纹和基线复核证据见 [迁移记录](docs/migration.md)。
+模型代码收敛为三个模块：
 
-本版保留选定路线的纯文本、T2I、I2T 训练，整图 flow 采样、文本 KV-cache
-生成、图像 packing、checkpoint/EMA、生成和理解评分。历史架构消融没有搬入。
-视频时空位置编码、视频 codec 和视频数据协议尚未实现；当前输入为完整方形图像网格。
+| 模块 | 职责 |
+| --- | --- |
+| `models/backbone_qwen35.py` | 原生 Qwen3.5、ViT、原生 M-RoPE、标注的 CQ 分支和视频输入适配 |
+| `models/generator_wan21.py` | 原生 Wan2.1 权重布局、条件投影、视频 flow 前向和采样 |
+| `models/modeling_umm.py` | 组装两者，将文本 query 接 LM head、视频 query 接 Wan，提供无缓存生成 |
 
-## 架构审核后的调整
+原生参考文件保留在 `models/references/`，运行时不导入。已移除当前主链路不再使用的旧 Qwen3/Z2 图像路线备份。
 
-| 原实现/原方案 | v3 落点与职责 |
-|---|---|
-| `modeling_selfless_flow.py` 中的主干、目标与采样相互依赖 | `models/backbone.py` 只产生 content/query 状态；loss 和采样移到各自模块 |
-| JointDiT 通过父模型继承保留多个历史 head 分支 | `models/generator.py` 只保留 Z2；`modeling_umm.py` 显式组装 backbone、condition projector、generator、lm_head |
-| 大训练脚本同时处理构造、数据和更新 | `training/train.py` 构造对象；`trainer.py` 管累积、更新、验证、保存；`loss.py` 定义目标 |
-| 数据读取和序列/packing 混在一起 | `data/dataset.py` 读取，`sequence.py` 序列化，`packing.py` 批处理，`dataloader.py` 调度和消费游标 |
-| 各评估脚本分别调用模型 | `evaluations/eval.py` 统一入口，复用同一 loss、sampler 和 codec |
-| 方案中两个 `checkpoint.py` | 只保留 `utils/checkpoint.py`；训练 EMA 放在 `training/ema.py` |
-| 全局配置解析与实验参数 | `configs/config.py` 负责默认值、合并与校验；实验参数放在同目录 YAML |
+训练调度、参数分组、EMA 和 checkpoint 位于 `training/`、`utils/`；数据读取、原生序列化、缓存和 padding 位于 `data/`。没有跨样本 packing，不自动划分训练/验证集或分配任务视图。
 
-组件没有通用插件注册系统。组装处提供 `build_backbone`、`build_generator` 和构造器注入；
-以后增加实现时只扩展明确的组件接口。本版配置只接受已迁移并验证的 `cq_it/z2`，
-不会把未经实现的架构名称静默回退到默认模型。
+`scripts/` 只保留训练、评估、推理、离线特征/latent 准备和环境准备入口。开发用的四卡冒烟、连续/恢复对照、CQ/Wan 验证与 checkpoint 比较统一放在 `tests/validation/`，用法见 [测试说明](tests/README.md)。Triton 启动完整性检查位于 `utils/triton_integrity.py`，由环境和安装入口调用。
 
-```text
-UMM_v3/
-  models/
-    modeling_umm.py        UMMConfig、组件组装、预测接口
-    backbone.py            CQ_IT / Qwen、content KV cache
-    generator.py           Z2 DiT、时间嵌入、基础 block
-    codec.py               KL16 编解码、posterior 缓存协议
-    sampling.py            全图 Euler/Heun、CFG
-    position.py            文本/图像二维位置
-    initialization.py      参数初始化
-    text_generation.py     同位置 query 文本生成
-  data/
-    dataset.py             posterior、class/caption 样本
-    manifest.py            图像/caption 身份匹配
-    cache.py               mmap shard 与文本索引读取
-    sequence.py            序列布局和 sigma
-    packing.py             collate、padding、segment packing
-    text_dataset.py        在线文本流与恢复状态
-    text_validation.py     固定文本验证集与排除清单
-    dataloader.py          混合任务调度、已消费游标
-  training/
-    train.py               配置/模型/数据/优化器初始化
-    trainer.py             更新循环与训练状态
-    loss.py                RF / 同位置文本 CE
-    optimizer.py           参数分组、AdamW、WSD
-    ema.py                 分片 FP32 EMA
-  evaluations/
-    eval.py                CLI
-    validation.py          训练目标验证与状态隔离
-    generation.py          joint 采样、FID/IS 汇总
-    understanding.py       PPL、选择题、分类、检索评分
-    metrics.py             来源实现的 Inception/FID/IS 数学
-  utils/
-    attention_mask.py      CQ 可见性、CFG、segment 隔离
-    checkpoint.py          完整恢复、原子保存、权重导出
-    weights.py             旧权重映射及兼容性校验
-    distributed.py         跨 rank I/O 错误同步
-  configs/
-    config.py              默认参数、YAML 合并、参数约束
-    image.yaml             纯 T2I 配置
-    unified.yaml           文本、T2I、I2T 混合配置
-    accelerate/            单进程与 ZeRO-2 模板
-  scripts/                 训练/评估入口、生成、cache/权重转换
-  docs/
-    migration.md           重构方案、源码来源与基线复核
-    validation.md          历史验证环境、结果与验收边界
-  tests/                   数值、数据、恢复、分布式、CLI 验证
-```
-
-功能模块按职责归入 `models/`、`data/`、`training/`、`evaluations/`、`utils/` 和 `configs/`；
-跨目录导入使用 `from models...`、`from configs.config...` 等路径。
-更新旧 checkout 后需重新执行 `python -m pip install -e '.[dev]'`，刷新可编辑安装的模块路径。
-
-## 核心数据流
-
-```mermaid
-flowchart LR
-  A[Dataset] --> B[Sequence / Packing]
-  B --> C[CQ_IT Backbone]
-  C --> D[图像 query condition]
-  C --> E[文本 query / LM head]
-  D --> F[Z2 DiT]
-  N[整张图的 noisy latents 与 t] --> F
-  F --> G[全部 visual tokens 的 velocity]
-  G --> H[RF loss 或 Euler/Heun]
-  E --> I[同位置文本 CE 或文本生成]
-```
-
-1. **CQ 分离**：content 和 query 是两套 hidden states，共享 Qwen 参数。
-   K/V 只由 content 构造；query 不写入 K/V，也不互相读取。
-   content 可读 `sigma_key <= sigma_query`，query 可读严格的 `<`。
-   图像内部 sigma 相同，因此图像 query 不能读取目标图像的真实 content。
-   BOI/EOI 的顺序、padding、segment、CFG 由统一 mask 实现。
-2. **backbone → generator**：`encode_condition(batch)` 输出 `[M,N,H]`，
-   `generator(x_t, t, condition)` 输出 `[M,N,D]`。M 是目标图像数，
-   N 是一张图的 latent token 数。一个 ODE 步更新所有 N 个 token；
-   “同时生成”不等于只有一个 ODE 步。CFG 将有条件/无条件分支合批，backbone 只调用一次。
-3. **Z2 的条件注入**：该固定源码版本的 Z2 使用 noisy-token 双向 self-attention，
-   通过每个位置的 condition 和时间嵌入调制 AdaLN。
-   它不是旧版逐 token、读取 clean-content K/V 的 cross-attention flow head。
-   因此本文按实际 Z2 代码命名，不能将前期讨论中的“x-attn DiT”直接当作该实现的等价描述。
-   Joint 描述整张图像共享时间、跨 token attention 的联合生成方式；Z2 是实现这种方式的具体网络。
-   当前只有一个 generator，二者不是两个并列的模型选项。
-4. **训练目标**：`x_t=(1-t)*noise+t*clean`，预测 `clean-noise`；
-   同一图像共享 t，文本采用 query 所在位置的 CE，不进行普通 causal LM 的标签平移。
-   默认 schedule 为 `text,t2i,text,i2t`，每 4 个 microbatch 更新一次。
-   每个 microbatch 的加权 mean loss 按 GA 缩放；日志里的 token mean 单独计算。
-   `joint` 任务则在一次 backbone 前向后同时输出文本 logits 和图像 velocity，计算
-   `lambda_text * CE + lambda_image * Flow`，两项分别按有效文本标签和图像监督 mask 归一化。
-   `data.image.caption_sequence_modes: [t2i, i2t]` 沿用原数据集的按样本/epoch 选任务规则，
-   允许同一 batch 混合两类样本；某个 batch 只有一种有效监督时，另一项为零。
-   自定义 batch 也可在同一序列提供两类监督，或通过 `compute_text_loss/compute_image_loss` 分别启停。
-5. **Qwen 权重与 mask 初始化**：`CQITBackbone` 对应 Qwen 的 model 部分；外层唯一的
-   `lm_head` 加载 Qwen 原有输出权重，启用 `tie_word_embeddings` 时与输入 embedding 绑权。
-   `model.image_mask_init` 默认 `copy_text`：新增 image mask token 时复制 text mask embedding，
-   与原版一致；`random` 使用独立随机初始化，供对照实验。两种方式的 token ID 和参数行都独立。
-   完整 UMM 权重加载或训练恢复保留已学习的 embedding，不重新应用初始化策略。
-
-`batch` 的公共字段为 `input_ids/token_types/sigma/segment_ids/labels` `[B,L]`、
-`position_ids` `[2,B,L]`、`image_latents` `[B,L,D]`、`image_latent_mask/image_loss_mask` `[B,L]`、
-`image_span_table` `[M,5]`（row、segment、start、end、image id）及 `task`。
-token type 依次为 text=0、image=1、special=2、padding=3。训练阶段的
-`content_image_latents` 是独立输入扰动，不能覆盖 RF 的 clean target，也不能带入推理。
-
-## 安装与配置
-
-先安装设备对应的 PyTorch；Ascend 另需相匹配的 `torch_npu` 和 DeepSpeed。
-以下命令在本目录执行：
+Ascend 主链路采用 MindSpeed + Megatron Core 的 DP 与分布式优化器，TP=PP=CP=1；默认开启梯度归约和参数收集重叠。低层环境按 `cq-pretrain` 固定：Python 3.12.13、PyTorch 2.7.1+cpu、torch_npu 2.7.1.post4、CANN 9.0.0，源码提交见 `configs/deps.core17.lock.json`。Qwen3.5 仍使用 Transformers 5.19.0 / Diffusers 0.41.0。
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-# 需要 FID/IS 时：python -m pip install -e '.[evaluation]'
-# 使用 ZeRO-2 时：python -m pip install -e '.[distributed]'
+# 安装到 .venv-npu 和 .deps/Ascend90；首次安装备份旧 venv，不覆盖系统 CANN。
+python3 scripts/setup_mindspeed.py --sources --python --cann
+# 若主机尚无 g++/make，可由 root 单独执行 --host-tools 安装 build-essential。
+
+# 正式配置需要填写 data.sources。
+.venv-npu/bin/python -m training.train --config configs/video.yaml --dry-run
+
+# 910B 四卡短程验证：9 帧、4 fps、768×432，T2V/V2T 各一次微批。
+bash tests/validation/test_train.sh
+
+# 正式启动；学习率、loss 权重、冻结和采样预算均可通过 YAML/--set 覆盖。
+bash scripts/train.sh --config /path/to/run.yaml
 ```
 
-`configs/unified.yaml` 对应文本+T2I+I2T；`configs/image.yaml` 对应纯 T2I。
-参数默认值集中在 `configs/config.py`，无需在每份 YAML 重复。把 `/assets/...` 替换为本地路径。
-路径相对启动工作目录解析；不会自动下载模型、语料、VAE 或 Inception 权重。
-本次 CPU 测试版本见 `requirements-cpu-tested.txt`，它是复现记录，不能替代 NPU 平台依赖。
+910B 测试脚本默认使用仓库的 `.venv-npu/bin/python`、项目级 CANN、`HCCL_INTRA_ROCE_ENABLE=1` 和 `wan_attention_backend=npu`，由 torchrun 启动四个进程。全局默认训练后端为 MindSpeed。安装与测试依赖统一见 [requirements-mindspeed.txt](requirements-mindspeed.txt)，不再维护单独的 CPU 环境、旧 DeepSpeed 环境或 ZeRO-2 启动配置；启动器不再读取 `ACCELERATE_CONFIG`。
+
+CPU 回归也使用 `.venv-npu`，通过环境变量禁用 torch_npu 自动加载，无需加载 CANN：
 
 ```bash
-python -m training.train --config configs/unified.yaml --dry-run
-bash scripts/train.sh --config configs/unified.yaml
-# 同一 backbone 前向内联合监督；data.sources.joint 可单独设置 batch size/workers：
-bash scripts/train.sh --config configs/unified.yaml \
-  --set 'data.schedule=[joint]' --set training.gradient_accumulation_steps=1 \
-  --set training.output_dir=output/joint
-# mask 初始化对照实验（仅影响新增的 image mask）：
-# --set model.image_mask_init=random
-# 按实际设备拓扑编辑 zero2.yaml 后使用：
-ACCELERATE_CONFIG=configs/accelerate/zero2.yaml bash scripts/train.sh --config configs/unified.yaml
-# 同一运行配置、数据与 world size 下恢复：
-bash scripts/train.sh --config output/unified-z2/config.yaml --resume output/unified-z2/checkpoint-2000
+TORCH_DEVICE_BACKEND_AUTOLOAD=0 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 \
+  .venv-npu/bin/python -m pytest tests -q
 ```
 
-`--set section.key=value` 可覆盖配置。`--dry-run` 只做静态配置校验。
-恢复要求完整 optimizer 边界，保存模型、optimizer、scheduler、随机状态、EMA、
-每 rank 数据游标与任务位置。loader 预取不推进保存游标；仅已成功消费的 batch 提交状态。
-配置/world size 不一致会拒绝精确恢复；仅 `image_mask_init` 作为已失效的初始化选项不参与恢复比较，
-兼容尚未记录这个字段的 v3 checkpoint。旧仓库 optimizer 状态不迁移，旧模型可转换后重新建立优化器。
-训练日志为 `output_dir/metrics.jsonl`；不依赖在线实验追踪服务。
-联合任务的 `train/loss_joint`、`val/loss_joint` 表示加权 microbatch 均值；`loss_joint_text`、`loss_joint_image`
-分别表示有效文本/图像 token 的原始损失均值，并报告各自 target 数量。二者不会合并成一个 token 分母。
-当各 batch 的监督数量不同，token 均值的加权和不必等于 microbatch 目标均值。
+CPU 小模型测试显式选择 `distributed.backend=accelerate`、`training.device=cpu` 和原生计算后端；这条训练接口仅用于 CPU 回归。`accelerate` 包仍用于 MCore 的数据分片和 CPU 测试，不是 DeepSpeed 回退入口。需要真实设备的测试由各自的显式环境变量启用。
 
-## 数据与权重迁移
+视频配置还显式选择 `model.qwen_gdn_backend=mindspeed`，在 CQ 分支调用固定提交的官方 Triton GDN；通用配置的 `native` 保留原生 Torch 参考计算。两者没有静默回退。环境新增 Triton 3.2.0 / Triton-Ascend 3.2.1，安装脚本保证 Ascend wheel 最后覆盖共享文件。上游 NumPy 约束存在冲突：保留 CQ 的 1.26.0，并在锁文件记录 Triton-Ascend 要求 1.26.4 的元数据例外，`pip check` 并非全绿。
 
-图像支持来源的 merged posterior `.pt` 和 lazy shard index `.json`；
-缓存必须保存缩放后的 mean/std，不能用一次抽样后冻结的 latent 替代。
-manifest 每行含 `img_id/synset/source_path/split`，训练与验证身份必须独立。
-caption JSONL 按 image id/路径严格匹配；两个示例配置均显式设置训练和验证各自的
-`synthetic_text_index_manifest`，对应原二进制 seek 索引：T2I 读取独立生成 prompt，I2T 读取 caption。
-这些 manifest 及其引用的 caption/prompt JSONL、offset、mapping 文件需一起迁移并修改路径。
-自定义配置省略该索引时，数据集仍支持用 caption 同时提供 T2I 文本；这不等同于原索引配方。
-纯 class conditioning 需要 `synset_mapping_path`；I2T 需要 caption conditioning。
-文本采用 ClimbMix JSONL 的 `text` 字段。验证使用独立 JSONL，或固定 manifest
-配合 `validation_exclusion_manifest` 排除训练中的预留记录。
+`scripts/env_mindspeed.sh` 支持在 Bash 和 zsh 中直接 source。安装后及每次环境加载都会运行 `utils/triton_integrity.py`，按 Ascend 的 RECORD 校验共享文件及 NPU 自有文件的大小、SHA-256 和导入路径，发现覆盖或删除就报错返回。可用 `.venv-npu/bin/python utils/triton_integrity.py` 单独检查，无需初始化 NPU。
+
+Ascend 算子编译的工作文件默认通过 `ASCEND_WORK_PATH` 放入 `.cache/ascend-work/<主机名>/`；环境入口和 pytest 都保留用户显式指定的路径。它包含 CANN 的编译调试/运行文件，与训练日志和 checkpoint 分开。根目录偶发的 `kernel_meta*` 是可再生成的编译工作目录，已加入 Git 忽略；绕过项目环境和测试入口直接启动 NPU 程序时，CANN 仍可能在当前目录创建它。
+
+训练日志默认放在 `outputs/<exp_id>/logs/train/<attempt_id>/`，checkpoint 放在 `outputs/<exp_id>/checkpoints/`。`--set training.exp_id=实验名` 选择实验，`--auto-resume` 自动恢复该实验最近完整 checkpoint；默认保留最近 3 个。`output_dir` 可覆盖完整实验目录，`log_dir` / `checkpoint_dir` 可独立覆盖。推理权重导出位于 `checkpoints/exports/`。每次启动都有独立日志目录；恢复允许调整管理参数，训练参数仍严格校验。processor 随导出保存到 `checkpoints/exports/processor/`。
+
+[训练与数据说明](docs/video_training.md) 包含 JSONL、缓存生成、混合数据、参数来源、推理和恢复命令；[CQ 模型接口](docs/video_cq.md) 说明双流可见性；[验证记录](docs/validation.md) 区分 CPU、NPU 验证及尚未覆盖的检查。
+
+统一采样与评估通过 `scripts/evaluate.sh` 调度 `sample` / `score` 两个动作。任务 YAML 位于 `configs/evaluations/`：loss 调用与训练内 validation 相同的监督前向，T2V/V2T 负责生成，VBench 通过协议适配器接入。每个任务分别定义数据、采样参数、采集产物和评分参数；一次启动可选择多份任务配置。`evaluations/benchmarks/__init__.py` 的 `Benchmark` 注册项声明采样规划函数、scorer 和评分是否需要 UMM；新增协议与 YAML 不需要修改公共调度器或模型。`scripts/generate.py` 保留为旧命令的兼容转发，不再维护独立推理实现。
 
 ```bash
-python scripts/convert_checkpoint.py --input /assets/source-z2-hf --output output/z2-weights.pt
-python scripts/prepare_latents.py --manifest /assets/imagenet/train.jsonl \
-  --output /assets/imagenet/train-cache --module-root /assets/mar \
-  --checkpoint /assets/mar/kl16.ckpt --device cpu
+# 同一 checkpoint 计算 loss、生成 T2V/V2T 预览；数据在 run/task YAML 中设置。
+bash scripts/evaluate.sh --config /path/to/run.yaml --checkpoint /path/to/weights.pt \
+  --task-config configs/evaluations/loss.yaml \
+  --task-config configs/evaluations/t2v_preview.yaml \
+  --task-config configs/evaluations/v2t_preview.yaml --eval-id step2000
 ```
 
-新生成 cache 的 `index.json` 可直接作为 `data.image.cache_path`。
-工具逐批编码、逐 shard 保存，按原版短边 Bicubic Resize → CenterCrop → ToTensor →
-Normalize(0.5, 0.5) 处理，尺寸截断和中心裁剪取整也与原规则一致，不使用额外 BOX 下采样。
-脚本输出 [0,1] 像素，Normalize 在 codec 中执行一次；metadata 标为 `bicubic_resize_center_crop_v1`。
-迁移对照应优先复用来源的现有缓存，避免把重新预处理的数据差异混入架构验证。
-权重映射为 `model.* → backbone.*`、`image_flow_condition_proj.* → condition_projector.*`、
-`image_flow_head.net.* → generator.*`；缺失参数、冲突绑权和不兼容 head 会报错。
-导出的 `weights.pt/weights-ema.pt` 用于推理；`checkpoint-N/` 用于恢复训练。
+评估结果放在 `outputs/<exp_id>/evaluations/<eval_id>/`，日志放在 `logs/eval/<eval_id>/<attempt_id>/`；续跑复用结果但新建日志 attempt。评估进程数默认继承 `distributed.num_processes`，可由 `evaluation.num_processes` 覆盖。详细参数、输入视图和续跑规则见 [统一评估说明](docs/video_training.md#统一采样与评估)。[VBench 运行说明](evaluations/benchmarks/vbench/README.md) 保留原协议参考；本阶段明确接口，官方评分仍需单独配置 CUDA/VBench 环境，不声明已完成端到端评分适配。
 
-`training.trainable_scope=generator` 与原版 `flow_head_only` 一致：只训练
-`generator` 和 `condition_projector`，冻结整个 backbone，包括图像输入投影。
-学习率仍将两种投影分在 `projector` 组；学习率分组不决定解冻范围。
-训练按 `seed + rank` 初始化随机数，checkpoint 保存各 rank 的随机状态。
-图像输入先转为实际 input projector 参数的 dtype，再添加扰动；flow 监督目标保留干净 posterior。
-EMA 在 `accelerator.prepare()` 完成后建立参数元数据，使用最终参数类型校验并以 FP32 保存影子权重。
-
-## 生成与评估
-
-```bash
-python scripts/generate.py --config output/unified-z2/config.yaml \
-  --checkpoint output/unified-z2/weights-ema.pt --prompt 'a red bird on a branch' \
-  --output output/sample --device cpu
-# 不加载 VAE，只生成 visual tokens：在上面的命令追加 --latents-only
-bash scripts/evaluate.sh --config output/unified-z2/config.yaml \
-  --checkpoint output/unified-z2/weights-ema.pt --task loss --output output/loss.json
-bash scripts/evaluate.sh --config output/unified-z2/config.yaml \
-  --checkpoint output/unified-z2/weights-ema.pt --task perplexity --source text --output output/ppl.json
-```
-
-`loss` 验证沿用来源的 `train()+no_grad()` 协议，包含 CFG dropout 和图像输入扰动，
-验证前后恢复随机状态和各子模块 mode。纯 PPL/理解评分与生成使用 eval mode。
-训练内验证和独立 `--task loss` 共用 `evaluation.seed`（默认 424242）、
-验证集和每任务 batch 划分。默认 `evaluation.loss_image_per_class=2`，
-ImageNet-val 从每类固定抽取两张，共 2,000 张，选取和排列顺序与原版一致。
-`evaluation.image_classes` 指向原项目的 `imagenet1k_synthetic_v1/t2i/classes.json`；
-示例配置将其映射为 `/assets/imagenet/classes.json`，可直接改为原文件的实际路径。
-`text/t2i/i2t` 的 batch 种子为 `evaluation.seed + 0/1000003/2000006 + 本任务batch序号`；
-可选 joint 流使用独立偏移 3000009。分布式按每个任务的全局 batch 序号分配，
-启用 packing 时 loss 验证复用训练 collator。生成评估和独立 PPL 保留完整验证集。
-需要显式评估全量 loss 时可设置 `evaluation.loss_image_per_class=null`，该协议不同于默认原版小验证集。
-诊断上限使用 `evaluation.max_batches`，未设置时沿用 `training.validation_max_batches`；默认不截断。
-`--task generation` 额外需要 `codec`、Inception 权重和真实图像 FID 统计配置。
-选择题、分类与检索使用 `--batches` 提供冻结候选的 torch bundle，评分约定见
-`evaluations/understanding.py`；此版本未附带外部 benchmark 的下载和全套数据转换器。
-
-FID 统计通过 `evaluation.real_stats_path` 或 `evaluation.reference_statistics` 指定。
-可直接读取原仓库的 `imagenet_inception_feature_moments_v1` / 
-`imagenet_val_inception_feature_moments_v2` 文件：保留 `stats.count/sum/outer_sum`，
-校验 ImageNet-val 50,000 张、1000 类、Inception extractor、缩放/裁剪和累加 dtype。
-也支持 `.pt` 中的 `mean/covariance` 及 `.npz` 中的 `mu/sigma`；这些通用统计不会被标记为
-已验证的正式 ImageNet 参考集。Inception 权重使用 `evaluation.inception_weights` 或原名
-`evaluation.inception_weights_path`。报告记录 checkpoint 路径；已加载模型的权重标记为
-`provided_model`，只有在评估中显式安装 EMA 时才标记为 `ema`，避免把 EMA 导出误标为 raw。
-
-候选 bundle 用 `torch.save({...}, path)` 保存。`batches` 是 batch 字典列表；公共模型字段
-遵循上文 `batch` 协议，`task` 为 `text` 或 `i2t`，`labels` 与被预测 token 位于同一位置，
-上下文标为 `-100`。每行至少包含一个目标 token；不同候选各占一行，不能只提供正确选项。
-
-| `--task` | 每个 batch 的额外字段（每行一个值） | bundle 顶层额外字段 |
-|---|---|---|
-| `choices` | `question_ids`、从 0 连续编号的 `choice_ids`、正整数 `normalization_chars` | `answers`：question id 到正确 choice id 的映射 |
-| `classification` | `image_indices`、`text_indices` | `image_count`、`text_count`、`labels`（每幅图对应的类别索引） |
-| `retrieval` | `image_indices`、`text_indices` | `image_count`、`text_count`、`image_ids`、`text_image_ids`（后者允许同一图像对应多段文本） |
-
-选择题同时报告总 log-likelihood 和按**原选项字符数**归一化的 accuracy；`normalization_chars`
-不能替换为 tokenizer 的 token 数。分类和检索使用平均 token log-likelihood，并减去每个文本在
-完整候选图像集合上的 `logmeanexp` 语言先验（固定 alpha=1）。image/text 索引必须完整覆盖
-`image_count × text_count`，重复或缺失组合会报错。需要 MMLU subject 宏平均、WinoGrande
-专用 continuation 或其他官方 benchmark prompt 时，应在资产适配层实现相应 recipe；
-当前通用评分入口不等同于迁移了这些 benchmark 的完整评估协议。
-
-## 验证与交付边界
-
-```bash
-OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m pytest tests -q
-python -m ruff check .
-# 可选：与固定来源快照直接对照数据字段，运行时不需要这个快照。
-UMM_SOURCE_SNAPSHOT=/path/to/193ec90-snapshot python -m pytest tests/test_data_source_parity.py -q
-```
-
-测试覆盖原数值算式、backbone/DiT 梯度、CQ 泄漏隔离、CFG/solver、文本缓存、
-数据预取与恢复、混合梯度累积、真实小模型训练/评估/转换 CLI、分片 EMA 与事务 checkpoint。
-新增回归覆盖同一序列的联合 CE/flow 及梯度、joint 数据加载/恢复/评估、独立 prompt 来源、
-原生 Qwen 分片权重与两种 mask 初始化、奇数尺寸裁剪和 posterior 编码。
-训练对齐回归还覆盖 FP16 cache 在 FP32/BF16 投影下的原版加噪与后续 RF 随机序列、
-原版冻结范围、类别索引含两位数时的验证集顺序、训练内/独立验证指标一致性，
-以及 CPU 模拟后端 BF16 转换后的真实训练入口和 EMA 恢复。
-双 rank Gloo 检查使用 rank 独立全局随机数，并核对分布式验证与单进程结果。
-直接调用原版 torchvision 变换的对照测试需要安装 evaluation 可选依赖中的 torchvision；
-未安装时仅跳过该项，固定像素场景和 posterior 编码测试仍会执行。
-参考模型类体固定在 `tests/reference/pinned_model.py`；数据对照快照由环境变量显式提供。
-历史验证快照记录于 [验证记录](docs/validation.md)。CPU 小模型验证不证明完整模型的 FID/IS、
-吞吐或显存等价。GPU/NPU、真实 KL16/Inception 资产和正式训练质量仍需设备环境验收。
-
-实施顺序、验收项、源码文件指纹和基线选择证据见 [迁移记录](docs/migration.md)。
+官方 MindSpeed GDN 与标准行索引接入后，四卡真实权重连续训练 4 步和中断后自动恢复至第 4 步已逐位一致：模型、FP32 master weights、Adam、RNG 和数据游标共 5,480 个张量全部相同。最近 N 个 checkpoint 清理、日志隔离及 CQ 无泄漏检查通过。完整设置、数值判据和依赖例外见验证记录；这属于短程链路验证，不代表长期收敛或生成质量评估。

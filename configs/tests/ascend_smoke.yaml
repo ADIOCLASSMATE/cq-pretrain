@@ -1,0 +1,33 @@
+# Real pretrained models; short-run settings only. Run from repository root.
+distributed:
+  backend: mindspeed
+  num_processes: 4
+  overlap_grad_reduce: true
+  overlap_param_gather: true
+model:
+  qwen_gdn_backend: mindspeed
+  freeze_vision: true
+  gradient_checkpointing: true
+  wan_attention_backend: npu
+data:
+  sources:
+    - {name: slider_t2v, path: ../temp_data/slider_stop.jsonl, task: t2v}
+    - {name: slider_v2t, path: ../temp_data/slider_stop.jsonl, task: v2t}
+  mixing: balanced
+  task_weights: {t2v: 1, v2t: 1}
+  representations: {qwen: prefer_cache, wan: prefer_cache}
+  video: {num_frames: 9, fps: 4.0, height: 432, width: 768, qwen_num_frames: null}
+training:
+  exp_id: ascend_smoke
+  device: npu
+  mixed_precision: bf16
+  max_train_steps: 2
+  batch_size: 1
+  gradient_accumulation_steps: 2
+  use_ema: false
+  dataloader_workers: 0
+  save_every: 0
+  log_every: 1
+optimizer:
+  warmup_steps: 0
+  decay_steps: 0

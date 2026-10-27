@@ -1,114 +1,136 @@
-"""Encode a manifest into bounded KL16 posterior shards and a lazy row index.
+#!/usr/bin/env python3
+"""Cache native Qwen ViT features and/or normalized Wan latents from one shared clip."""
 
-Each JSONL row has img_id, source_path, synset and split (train or val). Relative
-image paths are resolved against the manifest directory. The original manifest
-remains the dataset's manifest_jsonl; index.json becomes its cache_path.
-"""
+from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-
-import numpy as np
-from PIL import Image
 import torch
-
-from models.codec import KL16Codec, POSTERIOR_FORMAT, POSTERIOR_LAYOUT, kl16_layout
-from data.cache import POSTERIOR_INDEX_SCHEMA
-
-
-def image_tensor(path, size):
-    """Source PIL Resize(size, BICUBIC) + CenterCrop(size), in [0,1].
-
-    Match torchvision's integer short-edge resize and round-to-even crop
-    coordinates. KL16Codec performs the source Normalize(0.5, 0.5) once.
-    """
-    with Image.open(path) as source:
-        image = source.convert("RGB")
-    if size < 1:
-        raise ValueError("image size must be positive")
-    width, height = image.size
-    resized = (size, int(size * height / width)) if width <= height else (int(size * width / height), size)
-    if resized != image.size:
-        image = image.resize(resized, Image.Resampling.BICUBIC)
-    left, top = int(round((image.width - size) / 2)), int(round((image.height - size) / 2))
-    array = np.array(image.crop((left, top, left + size, top + size)), copy=True)
-    return torch.from_numpy(array).permute(2, 0, 1).float().div(255)
+from configs.config import load_config
+from data.cache import (
+    QWEN_FORMAT,
+    WAN_FORMAT,
+    checkpoint_id,
+    digest,
+    load_cache,
+    save_cache,
+)
+from data.dataset import read_records, prepare_raw_video, qwen_video_inputs
+from training.train import load_processor, register_device
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", required=True)
-    parser.add_argument("--output", required=True, help="New cache directory")
-    parser.add_argument("--module-root", required=True)
-    parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--device", default="cpu")
-    parser.add_argument("--image-size", type=int, default=256)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--shard-size", type=int, default=1024)
-    parser.add_argument("--scaling-factor", type=float, default=.2325)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--manifest", help="Override sources with this manifest")
+    parser.add_argument("--task", choices=["t2v", "v2t"])
+    parser.add_argument("--kind", choices=["both", "qwen", "wan"], default="both")
+    parser.add_argument("--cache-dir", required=True)
+    parser.add_argument(
+        "--output", required=True, help="Canonical JSONL containing cache references"
+    )
+    parser.add_argument("--set", action="append", default=[])
     args = parser.parse_args(argv)
-    _, tokens = kl16_layout(args.image_size)
-    if args.batch_size < 1 or args.shard_size < 1:
-        parser.error("batch-size and shard-size must be positive")
-    manifest, output = Path(args.manifest), Path(args.output)
-    codec = KL16Codec.from_pretrained(args.module_root, args.checkpoint, device=args.device,
-                                     scaling_factor=args.scaling_factor)
-    metadata = dict(format=POSTERIOR_FORMAT, stats_layout=POSTERIOR_LAYOUT,
-                    scaling_factor=args.scaling_factor, image_size=args.image_size,
-                    preprocessing="bicubic_resize_center_crop_v1")
-    output.mkdir(parents=True, exist_ok=False)
-    ids, shard_rows, shard_paths, seen = [], [], [], set()
-    pending_images, pending_ids, shard_stats, shard_ids = [], [], [], []
+    config = load_config(args.config, args.set)
+    if config["model"].get("checkpoint") and args.kind != "wan":
+        raise ValueError(
+            "Qwen cache preparation uses the native qwen_path weights; use online inputs for a trained ViT"
+        )
+    device = config["training"]["device"]
+    register_device(device)
+    sources = config["data"]["sources"]
+    if args.manifest:
+        sources = [
+            {"path": args.manifest, **({"task": args.task} if args.task else {})}
+        ]
+    if not sources:
+        raise ValueError("Provide --manifest or data.sources")
+    output = Path(args.output).resolve()
+    if output.exists():
+        raise FileExistsError(f"Refusing to overwrite manifest: {output}")
+    processor = load_processor(config)
+    qwen = codec = None
+    kinds = ("qwen", "wan") if args.kind == "both" else (args.kind,)
+    ids = {
+        "qwen": checkpoint_id(config["model"]["qwen_path"]),
+        "wan": checkpoint_id(
+            config["codec"].get("path") or config["model"]["wan_path"]
+        ),
+    }
+    settings = config["data"]["video"]
+    records = []
+    for source in sources:
+        for row in read_records(source):
+            video = row["videos"][0]
+            rgb, clip = prepare_raw_video(video, settings)
+            for kind in kinds:
+                metadata = dict(clip=clip, preprocessing=settings, checkpoint=ids[kind])
+                key = digest(metadata)
+                path = Path(args.cache_dir).resolve() / kind / f"{key}.pt"
+                if path.exists():
+                    load_cache(path, kind, checkpoint=ids[kind], preprocessing=settings)
+                elif kind == "qwen":
+                    pixels, grid, times = qwen_video_inputs(
+                        rgb, clip, processor, settings
+                    )
+                    if qwen is None:
+                        from models.backbone_qwen35 import Qwen35VideoEncoder
 
-    def save_shard():
-        if not shard_ids:
-            return
-        index = len(shard_paths)
-        name = f"posterior-{index:05d}.pt"
-        torch.save(dict(posterior_stats=torch.stack(shard_stats), img_ids=torch.tensor(shard_ids),
-                        metadata=metadata), output / name)
-        ids.extend(shard_ids)
-        shard_rows.extend((index, row) for row in range(len(shard_ids)))
-        shard_paths.append(name)
-        shard_stats.clear()
-        shard_ids.clear()
+                        qwen = (
+                            Qwen35VideoEncoder.from_pretrained(
+                                config["model"]["qwen_path"],
+                                dtype=torch.bfloat16
+                                if config["training"]["mixed_precision"] == "bf16"
+                                else torch.float32,
+                                attn_implementation=config["model"][
+                                    "attn_implementation"
+                                ],
+                            )
+                            .to(device)
+                            .eval()
+                            .requires_grad_(False)
+                        )
+                    with torch.no_grad():
+                        features = (
+                            qwen(pixels.to(device), grid[None].to(device))[0]
+                            .float()
+                            .cpu()
+                        )
+                    metadata["qwen_timestamps"] = times
+                    save_cache(
+                        path,
+                        dict(
+                            format=QWEN_FORMAT,
+                            features=features,
+                            grid_thw=grid,
+                            metadata=metadata,
+                        ),
+                    )
+                else:
+                    if codec is None:
+                        from data.codec import WanVideoCodec
 
-    def encode_pending():
-        if not pending_ids:
-            return
-        stats = codec.encode_posterior(torch.stack(pending_images)).cpu().half()
-        KL16Codec.validate_posterior(stats)
-        for identifier, row in zip(pending_ids, stats):
-            shard_stats.append(row.clone())
-            shard_ids.append(identifier)
-            if len(shard_ids) == args.shard_size:
-                save_shard()
-        pending_images.clear()
-        pending_ids.clear()
-
-    with manifest.open(encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            identifier = int(row["img_id"])
-            if identifier in seen or row.get("split") not in {"train", "val"} or not row.get("synset"):
-                raise ValueError("Manifest needs unique img_id, synset and train/val split")
-            seen.add(identifier)
-            path = Path(row["source_path"])
-            if not path.is_absolute():
-                path = manifest.parent / path
-            pending_images.append(image_tensor(path, args.image_size))
-            pending_ids.append(identifier)
-            if len(pending_ids) == args.batch_size:
-                encode_pending()
-    encode_pending()
-    save_shard()
-    if not ids:
-        raise ValueError("Manifest is empty")
-    torch.save(dict(img_ids=torch.tensor(ids), shard_rows=torch.tensor(shard_rows)), output / "rows.pt")
-    (output / "index.json").write_text(json.dumps(dict(schema=POSTERIOR_INDEX_SCHEMA,
-        row_index="rows.pt", shards=shard_paths, token_shape=[tokens, 32], metadata=metadata), indent=2) + "\n")
+                        codec = WanVideoCodec.from_pretrained(
+                            config["codec"].get("path") or config["model"]["wan_path"],
+                            device=device,
+                            dtype=getattr(torch, config["codec"]["dtype"]),
+                        )
+                    latent = codec.encode(
+                        rgb.permute(1, 0, 2, 3).float().div(127.5).sub(1)
+                    ).cpu()
+                    save_cache(
+                        path, dict(format=WAN_FORMAT, latent=latent, metadata=metadata)
+                    )
+                video[f"{kind}_cache"] = str(path)
+            records.append(
+                {k: row[k] for k in ("sample_id", "task", "messages", "videos")}
+            )
+            print(f"cached {row['task']} {row['sample_id']}", flush=True)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in records)
+    )
+    print(output)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+# Set data.prompts or data.sources; source paths are relative to this file.
+name: t2v_preview
+benchmark: t2v
+actions: [sample]
+data: {}
+sample:
+  max_samples: 8
+  samples_per_input: 1
+  # Empty mappings inherit sampling.* and data.video from the run config.
+  generation: {}
+  video: {}
+  outputs: [mp4, latent]
+  collect: {}
+score: {}

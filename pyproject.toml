@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "unified-mm-v3"
 version = "0.3.0"
-description = "CQ_IT multimodal backbone and whole-image rectified-flow DiT"
+description = "Qwen3.5 content-query video model with Wan2.1 rectified flow"
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.6,<2.9",
@@ -13,25 +13,27 @@ dependencies = [
     "safetensors>=0.5",
     "PyYAML>=6",
     "accelerate>=1.0",
-    "transformers>=5.7,<6",
+    "transformers==5.19.0",
+    "diffusers==0.41.0",
+    "torchvision>=0.21,<0.24",
+    "av>=14,<20",
     "Pillow>=10",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.9"]
-evaluation = ["torch-fidelity>=0.4", "torchmetrics>=1.6", "scipy>=1.13", "torchvision>=0.21,<0.24"]
-distributed = ["deepspeed>=0.18"]
 
 [tool.setuptools]
 package-dir = {"" = "."}
 py-modules = []
 
 [tool.setuptools.packages.find]
-include = ["models*", "data*", "training*", "evaluations*", "utils*", "configs*"]
+include = ["models*", "data*", "training*", "evaluations*", "utils*", "configs*", "scripts"]
 namespaces = false
 
 [tool.setuptools.package-data]
-configs = ["*.yaml", "accelerate/*.yaml"]
+configs = ["*.yaml", "*.json", "tests/*.yaml", "evaluations/*.yaml"]
+evaluations = ["scripts/*.sh", "benchmarks/vbench/*.json", "benchmarks/vbench/*.md", "benchmarks/vbench/LICENSE.vbench"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -39,7 +41,7 @@ pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py311"
-extend-exclude = [".venv"]
+extend-exclude = [".venv-npu", ".deps", ".python", ".cache", "outputs", "models/references"]
 
 [tool.ruff.lint]
 select = ["F821", "F822", "F823", "F811", "F601", "F602", "F631", "F632", "F633", "F634"]
