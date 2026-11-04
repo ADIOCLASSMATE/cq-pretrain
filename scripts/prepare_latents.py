@@ -15,7 +15,8 @@ from data.cache import (
     load_cache,
     save_cache,
 )
-from data.dataset import read_records, prepare_raw_video, qwen_video_inputs
+from data.dataset import decode_video, read_records, prepare_raw_video, qwen_video_inputs
+from data.video import prepare_native_video, native_qwen_video_inputs
 from training.train import load_processor, register_device
 
 
@@ -25,12 +26,18 @@ def main(argv=None):
     parser.add_argument("--manifest", help="Override sources with this manifest")
     parser.add_argument("--task", choices=["t2v", "v2t"])
     parser.add_argument("--kind", choices=["both", "qwen", "wan"], default="both")
-    parser.add_argument("--cache-dir", required=True)
+    parser.add_argument("--cache-dir")
     parser.add_argument(
-        "--output", required=True, help="Canonical JSONL containing cache references"
+        "--output", help="Canonical JSONL containing cache references"
     )
     parser.add_argument("--set", action="append", default=[])
+    from data.extraction import add_arguments, extract_in_place
+    add_arguments(parser)
     args = parser.parse_args(argv)
+    if args.in_place:
+        return extract_in_place(args)
+    if not args.output or not args.cache_dir:
+        parser.error("Legacy extraction requires --output and --cache-dir; or use --in-place")
     config = load_config(args.config, args.set)
     if config["model"].get("checkpoint") and args.kind != "wan":
         raise ValueError(
@@ -58,11 +65,14 @@ def main(argv=None):
         ),
     }
     settings = config["data"]["video"]
+    native = settings.get("mode", "fixed") == "native"
     records = []
     for source in sources:
         for row in read_records(source):
             video = row["videos"][0]
-            rgb, clip = prepare_raw_video(video, settings)
+            rgb, clip = (
+                prepare_native_video(video) if native else prepare_raw_video(video, settings)
+            )
             for kind in kinds:
                 metadata = dict(clip=clip, preprocessing=settings, checkpoint=ids[kind])
                 key = digest(metadata)
@@ -70,7 +80,8 @@ def main(argv=None):
                 if path.exists():
                     load_cache(path, kind, checkpoint=ids[kind], preprocessing=settings)
                 elif kind == "qwen":
-                    pixels, grid, times = qwen_video_inputs(
+                    prepare_qwen = native_qwen_video_inputs if native else qwen_video_inputs
+                    pixels, grid, times = prepare_qwen(
                         rgb, clip, processor, settings
                     )
                     if qwen is None:
@@ -93,7 +104,7 @@ def main(argv=None):
                     with torch.no_grad():
                         features = (
                             qwen(pixels.to(device), grid[None].to(device))[0]
-                            .float()
+                            .detach()
                             .cpu()
                         )
                     metadata["qwen_timestamps"] = times

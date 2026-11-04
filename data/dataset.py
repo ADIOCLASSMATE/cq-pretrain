@@ -2,30 +2,18 @@
 
 from __future__ import annotations
 from copy import deepcopy
-import hashlib
-import json
 from pathlib import Path
-import numpy as np
 import torch
-from torch.nn import functional as F
 from torch.utils.data import Dataset
-from .cache import cache_identities, load_cache
-from .sequence import make_video_sequence, native_video_metadata
+from .cache import cache_identities, load_cache, encoder_contracts
+from .manifest import read_manifest, resolve_video, source_profiles
+from .sequence import make_video_sequence
+from .video import decode_video, prepare_raw_video, qwen_video_inputs, prepare_video, prepare_qwen_inputs
 
 
 def read_records(source, *, prompt_only=False):
     path = Path(source["path"]).expanduser().resolve()
-    if path.suffix == ".jsonl":
-        records = [
-            json.loads(line) for line in path.read_text().splitlines() if line.strip()
-        ]
-    elif path.suffix == ".json":
-        value = json.loads(path.read_text())
-        records = value if isinstance(value, list) else [value]
-    else:
-        raise ValueError("Dataset paths must identify a JSONL or JSON manifest")
-    if not records:
-        raise ValueError(f"Empty dataset: {path}")
+    records = read_manifest(path)
     result = []
     for index, row in enumerate(records):
         row = deepcopy(row)
@@ -36,25 +24,10 @@ def read_records(source, *, prompt_only=False):
             )
         if source.get("task") and row.get("task", source["task"]) != source["task"]:
             raise ValueError("Record task conflicts with source task")
-        videos = row.get("videos")
-        if videos is None:
-            videos = [
-                {
-                    "id": "v0",
-                    "path": row.get("video_path"),
-                    "frames_path": row.get("frames_path"),
-                    "fps": row.get("fps"),
-                    "qwen_cache": row.get("qwen_cache"),
-                    "wan_cache": row.get("wan_cache"),
-                }
-            ]
-        if len(videos) != 1:
-            raise ValueError("Stage one supports exactly one video per sample")
-        video = videos[0]
-        video.setdefault("id", "v0")
-        for key in ("path", "frames_path", "qwen_cache", "wan_cache"):
-            if video.get(key):
-                video[key] = str((path.parent / video[key]).resolve())
+        video = resolve_video(row, path)
+        videos = [video]
+        if row.get("latent_profile"):
+            row["latent_profile"] = str((path.parent / row["latent_profile"]).resolve())
         if "messages" not in row:
             caption = row.get(source.get("caption_field", "caption"))
             has_caption = isinstance(caption, str) and bool(caption.strip())
@@ -107,103 +80,14 @@ def read_records(source, *, prompt_only=False):
     return result
 
 
-def decode_video(video):
-    path = Path(video.get("frames_path") or video.get("path") or "")
-    if not path.is_file():
-        raise FileNotFoundError(f"Raw video required but unavailable: {path}")
-    if path.suffix == ".npy":
-        frames = np.load(path, allow_pickle=False)
-        fps = video.get("fps")
-        if fps is None or float(fps) <= 0:
-            raise ValueError("NPY frames require explicit positive source fps")
-        times = np.arange(len(frames), dtype=np.float64) / float(fps)
-    else:
-        try:
-            import av
-        except ImportError as exc:
-            raise ImportError(
-                "Raw video decoding requires PyAV: install the video extra"
-            ) from exc
-        with av.open(str(path)) as container:
-            stream = container.streams.video[0]
-            decoded = [
-                (frame.to_ndarray(format="rgb24"), float(frame.time))
-                for frame in container.decode(stream)
-            ]
-        if not decoded:
-            raise ValueError(f"Empty video: {path}")
-        frames = np.stack([x[0] for x in decoded])
-        times = np.array([x[1] for x in decoded])
-        times -= times[0]
-    if frames.ndim != 4 or frames.shape[-1] != 3 or frames.dtype != np.uint8:
-        raise ValueError("Decoded frames must be uint8 [T,H,W,3]")
-    if (
-        len(times) < 2
-        or not np.isfinite(times).all()
-        or not bool((np.diff(times) > 0).all())
-    ):
-        raise ValueError("A video needs at least two frames with increasing PTS")
-    return frames, times, hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def prepare_raw_video(video, settings):
-    frames, times, source_hash = decode_video(video)
-    n, fps = int(settings["num_frames"]), float(settings["fps"])
-    start = float(video.get("start_seconds", 0))
-    wanted = start + np.arange(n) / fps
-    if wanted[0] < times[0] - 1e-6 or wanted[-1] > times[-1] + 1e-5:
-        raise ValueError(
-            "Requested clip exceeds source timestamps; choose an explicit shorter clip/frame configuration"
-        )
-    indices = np.abs(times[:, None] - wanted[None]).argmin(0)
-    rgb = torch.from_numpy(frames[indices].copy()).permute(0, 3, 1, 2).float()
-    h, w = int(settings["height"]), int(settings["width"])
-    scale = max(h / rgb.shape[2], w / rgb.shape[3])
-    size = (max(h, round(rgb.shape[2] * scale)), max(w, round(rgb.shape[3] * scale)))
-    rgb = F.interpolate(
-        rgb, size=size, mode="bicubic", align_corners=False, antialias=True
-    ).clamp(0, 255)
-    y, x = (size[0] - h) // 2, (size[1] - w) // 2
-    rgb = rgb[:, :, y : y + h, x : x + w].round().to(torch.uint8)
-    clip = dict(
-        source_sha256=source_hash,
-        frame_indices=indices.tolist(),
-        timestamps=times[indices].tolist(),
-        num_frames=n,
-        fps=fps,
-        height=h,
-        width=w,
-        spatial_transform="bicubic_resize_center_crop",
-    )
-    return rgb, clip
-
-
-def qwen_video_inputs(rgb, clip, processor, settings):
-    count = settings.get("qwen_num_frames") or len(rgb)
-    indices = np.linspace(0, len(rgb) - 1, int(count)).round().astype(int)
-    timestamps = [clip["timestamps"][i] for i in indices]
-    kwargs = dict(settings.get("qwen_processor", {}))
-    if set(kwargs) & {"do_sample_frames", "fps", "num_frames", "video_metadata"}:
-        raise ValueError(
-            "Qwen sampling is owned by qwen_num_frames; do not resample inside Processor"
-        )
-    result = processor.video_processor(
-        videos=[rgb[indices]],
-        do_sample_frames=False,
-        video_metadata=[native_video_metadata(timestamps)],
-        return_metadata=True,
-        return_tensors="pt",
-        **kwargs,
-    )
-    return result["pixel_values_videos"], result["video_grid_thw"][0].long(), timestamps
-
-
 class VideoDataset(Dataset):
     def __init__(self, source, processor, config, *, records=None, prompt_only=False):
         self.records = read_records(source, prompt_only=prompt_only) if records is None else records
         self.processor, self.config, self.prompt_only = processor, config, prompt_only
         self.settings = deepcopy(config["data"]["video"])
         self.cache_settings = config["data"]["representations"]
+        self.profiles = source_profiles(source, self.records)
+        self.contracts = encoder_contracts(config) if self.profiles else {}
         self.identities = cache_identities(config)
         if (
             not config["model"]["freeze_vision"]
@@ -226,22 +110,30 @@ class VideoDataset(Dataset):
             if mode == "cache" and not path:
                 raise ValueError(f"{row['sample_id']}: {kind} cache required")
             if mode != "online" and path:
+                profile = self.profiles.get(row.get("latent_profile"))
                 caches[kind] = load_cache(
                     path,
                     kind,
-                    checkpoint=self.identities.get(kind),
+                    checkpoint=None if profile else self.identities.get(kind),
+                    contract=self.contracts.get(kind) if profile else None,
+                    sample_id=row["sample_id"] if profile else None,
+                    info=row.get("latent_info", {}).get(kind) if profile else None,
                     preprocessing=self.settings,
                 )
         raw = clip = None
         need_wan = row["task"] == "t2v" and not self.prompt_only
         if "qwen" not in caches or (need_wan and "wan" not in caches):
-            raw, clip = prepare_raw_video(video, self.settings)
+            raw, clip = prepare_video(video, self.settings)
         for cached in caches.values():
             if clip is not None and cached["metadata"]["clip"] != clip:
                 raise ValueError(
                     f"{row['sample_id']}: Qwen/Wan inputs describe different clips"
                 )
             clip = cached["metadata"]["clip"]
+        if self.settings.get("mode") == "native":
+            for key in ("num_frames", "height", "width"):
+                if video.get(key) is not None and clip[key] != video[key]:
+                    raise ValueError(f"{row['sample_id']}: cached clip {key} differs from manifest")
         if "qwen" in caches:
             entry = caches["qwen"]
             pixels, grid, times, features = (
@@ -251,7 +143,7 @@ class VideoDataset(Dataset):
                 entry["features"],
             )
         else:
-            pixels, grid, times = qwen_video_inputs(
+            pixels, grid, times = prepare_qwen_inputs(
                 raw, clip, self.processor, self.settings
             )
             features = None

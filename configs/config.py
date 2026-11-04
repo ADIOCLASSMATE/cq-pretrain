@@ -136,7 +136,7 @@ def merge_config(base, updates):
     return result
 
 
-def load_config(path, overrides=None, *, purpose="train"):
+def load_config(path, overrides=None, *, purpose="train", sources_override=None):
     values = yaml.safe_load(Path(path).read_text())
     if not isinstance(values, dict) or set(values) - set(DEFAULTS):
         raise ValueError("Configuration must be a mapping of supported sections")
@@ -166,6 +166,27 @@ def load_config(path, overrides=None, *, purpose="train"):
             if isinstance(item, str) else item
             for item in tasks
         ]
+    if sources_override is not None:
+        config["data"]["sources"] = sources_override
+    from data.manifest import source_profiles
+    profiles = []
+    for source in config["data"]["sources"]:
+        if Path(source["path"]).is_file():
+            profiles.extend(source_profiles(source).values())
+    if profiles:
+        video = profiles[0]["video"]
+        if any(profile["video"] != video for profile in profiles):
+            raise ValueError("Sources use incompatible latent preprocessing profiles")
+        explicit = deepcopy(values.get("data", {}).get("video", {}))
+        for override in overrides or ():
+            key, raw = override.split("=", 1)
+            if key.startswith("data.video."):
+                target = explicit
+                parts = key.split(".")[2:]
+                for part in parts[:-1]:
+                    target = target.setdefault(part, {})
+                target[parts[-1]] = yaml.safe_load(raw)
+        config["data"]["video"] = merge_config(video, explicit)
     validate_config(config, purpose=purpose)
     return config
 
@@ -271,16 +292,44 @@ def validate_config(config, *, purpose="train"):
     if not model["freeze_vision"] and data["representations"]["qwen"] != "online":
         raise ValueError("Unfrozen ViT requires data.representations.qwen=online")
     video = data["video"]
-    if int(video["num_frames"]) < 5 or (int(video["num_frames"]) - 1) % 4:
-        raise ValueError("Wan video frame count must be 4k+1, k >= 1")
-    if float(video["fps"]) <= 0 or any(
-        int(video[k]) < 16 or int(video[k]) % 16 for k in ("height", "width")
-    ):
-        raise ValueError("Use positive fps and H/W divisible by 16")
-    if video["qwen_num_frames"] is not None and not 2 <= int(
-        video["qwen_num_frames"]
-    ) <= int(video["num_frames"]):
-        raise ValueError("Qwen frame count must be within [2, num_frames]")
+    mode = video.get("mode", "fixed")
+    if mode == "native":
+        if any(video[k] is not None for k in ("num_frames", "fps", "height", "width")):
+            raise ValueError("Native video requires num_frames/fps/height/width=null; read them from each source")
+        expected = video.get("expected_num_frames")
+        if expected is not None and (type(expected) is not int or expected < 5 or (expected - 1) % 4):
+            raise ValueError("expected_num_frames must be 4k+1, k >= 1")
+        count = video["qwen_num_frames"]
+        if count is not None and (type(count) is not int or count < 2):
+            raise ValueError("qwen_num_frames must be an integer >= 2 or null")
+        processor = video["qwen_processor"]
+        if set(processor) & {"num_frames", "do_sample_frames", "video_metadata", "return_metadata", "return_tensors"}:
+            raise ValueError("Use qwen_num_frames or qwen_processor.fps; preparation owns sampling and metadata")
+        if processor.get("do_resize", False) is not False:
+            raise ValueError("Native Qwen preparation requires do_resize=false")
+        fps = processor.get("fps", 2.0 if count is None else None)
+        if count is not None and fps is not None:
+            raise ValueError("qwen_num_frames and qwen_processor.fps are mutually exclusive")
+        if count is None and (
+            type(fps) not in (int, float) or not math.isfinite(fps) or fps <= 0
+        ):
+            raise ValueError("qwen_processor.fps must be positive and finite when qwen_num_frames is null")
+        minimum, maximum = processor.get("min_frames", 4), processor.get("max_frames", 768)
+        if type(minimum) is not int or type(maximum) is not int or not 2 <= minimum <= maximum:
+            raise ValueError("Qwen sampling requires 2 <= min_frames <= max_frames")
+    elif mode == "fixed":
+        if int(video["num_frames"]) < 5 or (int(video["num_frames"]) - 1) % 4:
+            raise ValueError("Wan video frame count must be 4k+1, k >= 1")
+        if float(video["fps"]) <= 0 or any(
+            int(video[k]) < 16 or int(video[k]) % 16 for k in ("height", "width")
+        ):
+            raise ValueError("Use positive fps and H/W divisible by 16")
+        if video["qwen_num_frames"] is not None and not 2 <= int(
+            video["qwen_num_frames"]
+        ) <= int(video["num_frames"]):
+            raise ValueError("Qwen frame count must be within [2, num_frames]")
+    else:
+        raise ValueError("data.video.mode must be fixed or native")
     if int(data["max_seq_length"]) < 1 or int(data["pad_to_multiple_of"]) < 1:
         raise ValueError("Sequence and padding sizes must be positive")
     for key in ("lambda_text", "lambda_video"):

@@ -209,6 +209,10 @@ def _sources(config, processor, sources, *, training):
                 assets=digest(assets),
             )
         )
+        from .manifest import source_profiles
+        profiles = source_profiles(source, records)
+        if profiles:
+            contract[-1]["latent_profiles"] = digest(profiles)
         for task in active:
             selected = (
                 records

@@ -1,0 +1,17 @@
+# Use the same data.video settings when training from the output cached manifest.
+# No dataset is selected here; supply --manifest and --task when preparing caches.
+data:
+  representations: {qwen: cache, wan: cache}
+  video:
+    mode: native
+    num_frames: null
+    fps: null
+    height: null
+    width: null
+    qwen_num_frames: null
+    qwen_processor:
+      do_resize: false
+      fps: 2.0
+      min_frames: 4
+      max_frames: 16
+      # For a fixed count, set qwen_num_frames above and set fps here to null.

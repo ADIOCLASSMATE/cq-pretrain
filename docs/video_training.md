@@ -65,7 +65,7 @@ model:
 
 每套表示独立选择 `cache`（必须有缓存）、`online`（从原视频即时编码）、`prefer_cache`（记录有缓存引用则使用，否则在线）。支持整批两者都缓存、都在线，或 Qwen/Wan 只有一条分支使用缓存。**同一分支的一个 batch 内必须统一表示来源，不能混用缓存和在线视频**；Wan 只检查该 batch 中的 T2V 目标，V2T 不读取 Wan latent。`prefer_cache` 若使同一 batch 出现两种来源，会明确报错；应补齐缓存或将该分支统一设为 `online`，不自动重排样本或切换模式。坏缓存或不匹配的缓存直接报错，不静默回退。这里的“在线”指运行时编码，与网络、视频流式生成和 KV/GDN cache 无关。
 
-缓存生成入口复用训练时完全相同的片段预处理和原生 Processor：
+缓存生成入口默认复用训练时相同的固定片段预处理和原生 Processor：
 
 ```bash
 python -m scripts.prepare_latents --config configs/tests/ascend_smoke.yaml \
@@ -75,11 +75,49 @@ python -m scripts.prepare_latents --config configs/tests/ascend_smoke.yaml \
 
 `--kind qwen` / `wan` 可单独生成。省略 manifest 时处理配置中的全部 sources，输出一个带显式 task 的规范清单。已有缓存经校验后复用；不覆盖已有输出清单。
 
+已经完成隔帧、缩放和裁剪的视频，使用 `configs/prepare_latents_native.yaml` 的 `data.video.mode: native`。此模式读取文件现有分辨率、容器帧率和真实 PTS，仅删除末尾 0～3 帧以满足 Wan 的 `4k+1`，不限制为固定长度；至少需要 5 帧，Wan 的 H/W 必须整除 16。`num_frames/fps/height/width` 设为 `null`，实际值记录在每条缓存的 `clip` 中。
+
+Qwen 在上述对齐片段上独立调用原生 `sample_frames()`。示例按 `qwen_processor.fps: 2.0` 计算抽帧数，再限制在 `min_frames: 4`、`max_frames: 16` 和实际帧数以内，均匀选帧；这不会改变 Wan 的帧率或输入。固定帧数时设置 `qwen_num_frames`，并将 `qwen_processor.fps` 设为 `null`；原生固定帧数路径不使用 min/max 限制，超过片段帧数则报错。Qwen 保留实际采样 PTS，关闭二次抽帧和 resize，H/W 必须整除 patch_size × merge_size（原生 Qwen3.5 为 32）；奇数帧的最后一帧仍由原生 temporal patchify 补齐。
+
+原生模式的离线提取和在线读取共用 `data/video.py`，支持两条分支独立选择 cache/online/prefer_cache。已有 v1 缓存仍要求相同的完整 `data.video` 配置；v2 索引可自动读取 profile。`cache` 模式缺缓存时报错。生成评估仍需在 `sample.video` 显式指定生成参数。示例的 Qwen 抽帧上限为可调预算，并不保证任意源分辨率都能满足 `max_seq_length`。
+
 Qwen 缓存为 post-merger `[N,D]` 特征和 `grid_thw`；Wan 缓存为 posterior **mean** 经原生均值/标准差归一化的 `[16,T,H,W]` latent。VAE 使用 Diffusers 的官方 Wan 权重转换，严格加载本地 `Wan2.1_VAE.pth`，始终冻结，在 `data/codec.py` 管理，不属于训练模型参数。
 
-两个缓存都记录采样帧、实际时间戳、空间变换、源文件 SHA-256、预处理配置和编码器标识。编码器标识由本地资产路径、大小和修改时间计算，不是权重内容的完整 SHA-256。不同缓存或在线片段的元数据必须一致。缓存和在线编码使用不同精度时可能有舍入差异；部署时应统一编码精度。
+两个缓存都记录采样帧、实际时间戳、空间变换、源文件 SHA-256、预处理配置和编码器标识。旧 v1 编码器标识由本地资产路径、大小和修改时间计算。新 v2 使用模型内容 SHA-256，并记录计算精度、实现版本和保存策略；Wan 只依赖 VAE 资产，不因 Qwen 抽帧设置变化而失效。不同缓存或在线片段的元数据必须一致。缓存和在线编码使用不同精度时可能有舍入差异；部署时应统一编码精度。
 
 `freeze_vision: false` 必须搭配 `qwen: online`，梯度才可回到 ViT。曾训练 ViT 的 UMM 导出也必须使用在线 Qwen 输入；当前缓存脚本只从原生 qwen_path 编码，不生成已微调 ViT 的缓存。
+
+## 原位扩充 OpenVid 81 帧索引
+
+两个分辨率各自保留唯一的 `samples.jsonl`，原字段和行顺序保留，不新增第二份样本索引。每行新增 `qwen_cache`、`wan_cache`（相对该索引目录）、`latent_profile`（共享配置 JSON 路径）和 `latent_info`。info 按分支记录 format、shape、dtype、file_bytes、文件 SHA-256；Qwen 另含 grid_thw、实际抽帧数及 T2V/V2T 序列长度。真实 PTS、源视频 SHA-256、帧索引、完整编码契约放在 `.pt` metadata 中。缓存 tensor 只保存一份。
+
+```bash
+source scripts/env_mindspeed.sh
+.venv-npu/bin/python -m scripts.prepare_latents \
+  --config configs/prepare_openvid81.yaml \
+  --manifest /inspire/sj-ssd3/project/high-dimensionaldata/public/datasets/openvidhd_selected_81frame/832x480/samples.jsonl \
+  --in-place --device-index 0
+```
+
+对 `960x544/samples.jsonl` 使用相同命令。小试通过后可运行 `python -m scripts.prepare_openvid81 --root /inspire/sj-ssd3/project/high-dimensionaldata/public/datasets/openvidhd_selected_81frame --devices 0,1,2,3`：它检查两种分辨率的小试/续跑报告，启动独立 worker，并在提取后执行全量只读复核。总状态保存在根目录 `metadata/latent_validation/full_status.json`。该配置要求真实解码恰好 81 帧，保留原尺寸、容器帧率和 PTS，不裁帧或缩放。Qwen 使用原生 2 fps、4～16 帧抽样。模型以 BF16 计算时保存其实际 BF16 输出；切换计算精度时仍直接保存实际输出，不强制降精度。Wan 使用 FP32 posterior mean 和官方归一化。
+
+latent 默认位于索引旁 `latents/{qwen,wan}/<分支契约摘要>/<前缀>/<样本及源内容摘要>.pt`。配置在 `metadata/latent_profiles/`；进度、原始字段摘要在 `metadata/latent_runs/`。摘要用于检查，不能替代数据备份。原视频不变，旧子集验证报告中的原索引哈希作为历史记录保留；当前索引哈希在每次 latent 运行报告中更新。
+
+每个文件先写临时文件并 fsync，再原子提交；索引使用文件锁和原子替换。不同 worker 的已完成项会合并，默认每 16 个样本写回一次，退出时也写回已完成项。只有两条请求分支都成功且序列检查通过才添加该行引用。断电可能留下无引用的完整文件或 `.tmp`；续跑会校验并复用完整文件，临时文件不会被当作 latent。已有损坏文件明确报错，不静默覆盖。每次续跑仍校验源文件 SHA-256，但可跳过视频解码和编码器加载。
+
+小试可以加 `--sample-ids /path/pilot_ids.json`（样本 ID 数组）或 `--limit 4`；`--verify-online` 比较实际模型重新编码及 T2V/V2T Dataset 读取；`--stop-after-files 1` 用于模拟文件保存后中断。`--verify-only` 要求所有文件已存在，执行内容/配置/序列校验。正常重跑同一命令即可续跑。并行时每个进程显式设置 `--num-shards N --shard-index 0..N-1 --device-index 0..N-1`；按原索引行号取模划分，两个分辨率的同一 ID 分给同一 worker。不同运行用 `--run-id` 区分报告。
+
+训练时只需要索引路径、任务以及所需表示，不必重复视频尺寸和抽帧配置：
+
+```yaml
+data:
+  representations: {qwen: cache, wan: cache}
+  sources:
+    - {path: /inspire/sj-ssd3/project/high-dimensionaldata/public/datasets/openvidhd_selected_81frame/832x480/samples.jsonl, task: t2v}
+    - {path: /inspire/sj-ssd3/project/high-dimensionaldata/public/datasets/openvidhd_selected_81frame/832x480/samples.jsonl, task: v2t}
+```
+
+`load_config()` 从索引引用的 profile 推导 `data.video`，显式配置仍可覆盖，但实际使用缓存的分支会校验契约。Qwen 在线且 Wan 缓存时可以改变 Qwen 抽帧；改变 Wan 输入尺寸/帧数则不能复用旧 Wan latent。训练恢复契约同时包含索引、媒体文件状态和 profile 内容。原始文件读取可使用 `read_manifest()` / `resolve_video()`，无需附加任务标签；训练视图仍通过 source.task 构造。
 
 ## 目标、优化与默认参数
 
