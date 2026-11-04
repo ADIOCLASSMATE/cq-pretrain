@@ -1,0 +1,5 @@
+# Runtime used by UMM_v3/.venv-npu (CPU only for this pipeline).
+# Install the CPU torch wheel from the PyTorch CPU wheel index if recreating.
+torch==2.7.1+cpu
+numpy==1.26.0
+av==19.0.1
