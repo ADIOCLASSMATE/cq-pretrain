@@ -1,0 +1,88 @@
+[
+  {
+    "rank": 0,
+    "tp": 2,
+    "forward_rms": 0.002895237412303686,
+    "input_gradient_rms": 0.0037448767106980085,
+    "condition_gradient_rms": 0.00795543473213911,
+    "max_parameter_gradient_rms": 0.009970057755708694,
+    "worst_parameters": [
+      [
+        "blocks.1.self_attn.q.impl.bias",
+        0.009970057755708694
+      ],
+      [
+        "blocks.0.self_attn.q.impl.bias",
+        0.009033259004354477
+      ],
+      [
+        "blocks.0.self_attn.q.impl.weight",
+        0.009003138169646263
+      ],
+      [
+        "blocks.0.cross_attn.q.impl.bias",
+        0.008371167816221714
+      ],
+      [
+        "blocks.0.self_attn.norm_q.weight",
+        0.008210498839616776
+      ],
+      [
+        "blocks.0.cross_attn.norm_q.weight",
+        0.00816308706998825
+      ],
+      [
+        "blocks.1.cross_attn.q.impl.bias",
+        0.007967495359480381
+      ],
+      [
+        "blocks.1.self_attn.norm_q.weight",
+        0.00792400911450386
+      ]
+    ],
+    "passed": true
+  },
+  {
+    "rank": 1,
+    "tp": 2,
+    "forward_rms": 0.002895237412303686,
+    "input_gradient_rms": 0.0037448767106980085,
+    "condition_gradient_rms": 0.00795543473213911,
+    "max_parameter_gradient_rms": 0.010672757402062416,
+    "worst_parameters": [
+      [
+        "blocks.0.cross_attn.norm_q.weight",
+        0.010672757402062416
+      ],
+      [
+        "blocks.0.self_attn.norm_q.weight",
+        0.009929588995873928
+      ],
+      [
+        "blocks.0.cross_attn.norm_k.weight",
+        0.009428349323570728
+      ],
+      [
+        "blocks.0.self_attn.q.impl.weight",
+        0.009017336182296276
+      ],
+      [
+        "blocks.0.self_attn.norm_k.weight",
+        0.008750001899898052
+      ],
+      [
+        "blocks.1.self_attn.q.impl.weight",
+        0.008439134806394577
+      ],
+      [
+        "blocks.1.self_attn.norm_q.weight",
+        0.007910963147878647
+      ],
+      [
+        "blocks.0.norm3.weight",
+        0.007905428297817707
+      ]
+    ],
+    "passed": true
+  }
+]

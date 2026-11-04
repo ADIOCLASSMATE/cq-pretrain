@@ -1,14 +1,13 @@
 """Fixed-size TP x DP launcher using the 64-card sweep's rendezvous protocol."""
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import socket
 import sys
 
-from ascend_pretrain.network import rendezvous_interface
-from ascend_pretrain.coordination import atomic_json, wait_files
+from utils.network import rendezvous_interface
+from utils.distributed import atomic_json, wait_files
 
 ROOT = Path(__file__).resolve().parent
 
@@ -31,7 +30,7 @@ def main():
     ephemeral = list(map(int, Path('/proc/sys/net/ipv4/ip_local_port_range').read_text().split()))
     if args.hccl_base_port <= ephemeral[1] and args.hccl_base_port+31 >= ephemeral[0]:
         raise ValueError('Choose an HCCL range outside the host ephemeral TCP range')
-    command = ['bash', str(ROOT/'ascend_pretrain/launch.sh'), *train_args]
+    command = ['bash', str(ROOT/'scripts/launch.sh'), *train_args]
     if args.dry_run:
         print(json.dumps(dict(world=args.nodes*args.nproc_per_node, nodes=args.nodes,
             node_rank=args.node_rank, hccl_base_port=args.hccl_base_port,
@@ -43,12 +42,8 @@ def main():
     receipt = args.rendezvous/f'node{args.node_rank}.json'
     if receipt.exists():
         raise FileExistsError('Use a new rendezvous directory for every launch/resume')
-    sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
-               for p in [*sorted((ROOT/'ascend_pretrain').glob('*.py')),
-                         *sorted((ROOT/'ascend_pretrain/input_pipeline').glob('*.py')),
-                         *sorted((ROOT/'ascend_pretrain/vendor').rglob('*.py')),
-                         *sorted((ROOT/'ascend_pretrain/configs').glob('*.json')),
-                         ROOT/'ascend_pretrain/launch.sh', Path(__file__)]}
+    from utils.experiment import source_hashes
+    sources=source_hashes()
     atomic_json(receipt, dict(hostname=socket.gethostname(), ip=addresses[interface],
                 interface=interface, source_sha256=sources, nproc=args.nproc_per_node))
     files = [args.rendezvous/f'node{n}.json' for n in range(args.nodes)]
@@ -61,7 +56,7 @@ def main():
         GLOO_SOCKET_IFNAME=interface, HCCL_SOCKET_IFNAME='='+interface,
         HCCL_IF_IP=addresses[interface], HCCL_IF_BASE_PORT=str(args.hccl_base_port),
         PRETRAIN_PYTHON=sys.executable, OMP_NUM_THREADS=os.environ.get('OMP_NUM_THREADS', '4'),
-        TORCH_EXTENSIONS_DIR=str(ROOT/'ascend_pretrain/.deps/extensions-core17'))
+        TORCH_EXTENSIONS_DIR=str(ROOT/'.deps/extensions-core17'))
     for key in ('RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'LOCAL_WORLD_SIZE', 'GROUP_RANK',
                 'GROUP_WORLD_SIZE', 'ROLE_RANK', 'ROLE_WORLD_SIZE'):
         env.pop(key, None)

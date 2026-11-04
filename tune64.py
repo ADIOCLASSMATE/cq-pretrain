@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 
-from ascend_pretrain.coordination import atomic_json,wait_files
+from utils.distributed import atomic_json, wait_files
 
 ROOT=Path(__file__).resolve().parent
 
@@ -33,7 +33,7 @@ def run():
     if int(os.environ['PET_NNODES'])!=4:raise ValueError('This matrix requires 4 x 16 Ascend NPUs')
     root=Path(plan['output']);root.mkdir(parents=True,exist_ok=True)
     environment=dict(os.environ,OMP_NUM_THREADS='1',MKL_NUM_THREADS='1',TOKENIZERS_PARALLELISM='false',
-        RAYON_NUM_THREADS='1',PRETRAIN_STACK='core17',PRETRAIN_MODULE='ascend_pretrain.train',
+        RAYON_NUM_THREADS='1',PRETRAIN_STACK='core17',PRETRAIN_MODULE='training.train',
         PRETRAIN_ATTENTION_TILE='2048',PRETRAIN_ATTENTION_LAYOUT='SBH',PRETRAIN_FUSED_CE='1',
         PRETRAIN_COMPILE_MODULATION='0',PRETRAIN_MOSS_FUSED_POINTWISE='situ',PRETRAIN_MC2_ROW='1',
         PYTHONDONTWRITEBYTECODE='1')
@@ -69,7 +69,7 @@ def run():
             stage_environment=dict(stage.get('environment',{}))
             if knobs.get('tp')==1:stage_environment['PRETRAIN_MC2_ROW']='0'
             atomic_json(folder/'resolved.json',dict(knobs=knobs,args=argv,selected_from=chosen,cost_fit=fitted,
-                module=stage.get('module','ascend_pretrain.train'),environment=stage_environment))
+                module=stage.get('module','training.train'),environment=stage_environment))
         wait_files([folder/'resolved.json'],600)
         resolved=json.loads((folder/'resolved.json').read_text())
         command=[sys.executable,str(ROOT/'launch_job.py'),'--rendezvous',str(folder/'rendezvous'),

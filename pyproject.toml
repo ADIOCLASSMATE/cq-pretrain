@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cq-pretrain"
+version = "0.2.0"
+description = "Qwen3.5 CQ and unified Wan image/video pretraining"
+requires-python = ">=3.11"
+dependencies = ["PyYAML", "numpy", "Pillow", "pyarrow", "safetensors", "tokenizers", "transformers==5.7.0", "diffusers==0.38.0", "av==16.0.1"]
+
+[tool.setuptools.packages.find]
+include = ["models*", "data*", "training*", "configs*", "evaluations*", "utils*", "scripts*", "corpus_pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

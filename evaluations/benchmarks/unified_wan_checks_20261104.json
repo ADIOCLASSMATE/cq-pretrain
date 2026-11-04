@@ -1,0 +1,185 @@
+{
+  "date": "2026-11-04",
+  "device": "Ascend910B2C",
+  "notes": [
+    "Bounded correctness checks with synthetic 64x96 images / 5-frame video; not a production throughput benchmark.",
+    "Full model: pretrained Qwen3.5-2B-Base + Wan2.1-T2V-1.3B, frozen native ViT/merger and FP32 Wan VAE.",
+    "Checkpoint/resume and DP asymmetry: reduced dimensions, randomly initialized trainable model, real Wan VAE.",
+    "Two fragmented NPUs have PHB topology; MC2 preflight selected ordinary TP collectives.",
+    "Optional TorchAIR pointwise path passed precision checks; no measured speed advantage, default remains off."
+  ],
+  "cpu_regression": {
+    "tests": 126,
+    "subtests": 46,
+    "passed": true
+  },
+  "full_training": {
+    "completed_updates": 2,
+    "peak_memory_gib": 33.746153354644775,
+    "recipe": {
+      "environment": {
+        "HCCL_CONNECT_TIMEOUT": "1800",
+        "HCCL_EXEC_TIMEOUT": "1800",
+        "MKL_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "PRETRAIN_ATTENTION_LAYOUT": "SBH",
+        "PRETRAIN_ATTENTION_TILE": "2048",
+        "PRETRAIN_FUSED_CE": "1",
+        "PRETRAIN_MC2_ROW": "1",
+        "PRETRAIN_MODULE": "training.train",
+        "PRETRAIN_STACK": "core17",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "RAYON_NUM_THREADS": "1",
+        "TOKENIZERS_PARALLELISM": "false"
+      },
+      "model": {
+        "checkpoint_backbone": true,
+        "checkpoint_dit": true,
+        "freeze_vision": true,
+        "freeze_vision_merger": true,
+        "gdn_backend": "ascendc",
+        "generation_max_pixels": 6144,
+        "generation_microbatch_images": 1,
+        "generation_token_budget": 64,
+        "i2t_image_loss_probability": 0.0,
+        "image_condition_queries": 64,
+        "preserve_documents": true,
+        "renderer": "wan",
+        "vision_max_pixels": 6144,
+        "vision_min_pixels": 1024,
+        "visual_query_mode": "fixed"
+      },
+      "training": {
+        "bucket_size": 40000000,
+        "ce_chunk": 1024,
+        "data_prefetch": 2,
+        "data_snapshot": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/.runs/unified-wan-refactor/sources.yaml",
+        "data_workers": 1,
+        "device_prefetch": 1,
+        "eval_snapshot_every": 0,
+        "global_batch": 2,
+        "image_prefetch": 4,
+        "image_workers": 1,
+        "latent_encoder": "wan",
+        "lr": 5e-05,
+        "lr_decay_style": "cosine",
+        "lr_warmup_steps": 200,
+        "micro_batch": 1,
+        "output": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/.runs/unified-wan-refactor/full-train-tp2",
+        "pack_padding_multiple": 128,
+        "renderer_ema_decay": 0.999,
+        "seed": 42,
+        "sequence_length": 128,
+        "shuffle_block_rows": 4,
+        "steps": 2,
+        "tokenize_rows": 32,
+        "tp": 2,
+        "vae_chunk": 2,
+        "vae_dtype": "float32",
+        "warmup": 0
+      }
+    }
+  },
+  "cache": {
+    "unique_features": 2,
+    "unique_latents": 2,
+    "resume_new_features": 0,
+    "resume_new_latents": 0,
+    "online_first_loss": 2.094515323638916,
+    "cached_first_loss": 2.094515323638916,
+    "online_grad_norm": 49.75364303588867,
+    "cached_grad_norm": 49.753013610839844
+  },
+  "restart": {
+    "saved_step": 2,
+    "resumed_step": 3,
+    "restored": [
+      "model",
+      "Adam",
+      "FP32 masters",
+      "renderer EMA",
+      "CPU/NPU RNG",
+      "consumed data cursor"
+    ]
+  },
+  "evaluations": {
+    "checkpoint-train": [
+      {
+        "task": "T2I",
+        "num_frames": 1
+      },
+      {
+        "task": "T2V",
+        "num_frames": 5
+      },
+      {
+        "task": "I2T",
+        "reference_text_nll": 12.430514335632324,
+        "reference_text_tokens": 4
+      },
+      {
+        "task": "V2T"
+      }
+    ],
+    "checkpoint-resumed": [
+      {
+        "task": "T2I",
+        "num_frames": 1
+      },
+      {
+        "task": "T2V",
+        "num_frames": 5
+      },
+      {
+        "task": "I2T",
+        "reference_text_nll": 12.431292533874512,
+        "reference_text_tokens": 4
+      },
+      {
+        "task": "V2T"
+      }
+    ]
+  },
+  "dp_asymmetry": {
+    "completed_updates": 1,
+    "rank_packs": {
+      "0": [
+        {
+          "length": 128,
+          "text": 10,
+          "queries": 74,
+          "images": 1,
+          "generation_images": 1,
+          "i2t_null_candidates": 0,
+          "i2t_null_images": 0,
+          "vision_patches": 24,
+          "generation_tokens": 24,
+          "dit_microbatches": 1,
+          "generation_grids": [
+            [
+              1,
+              4,
+              6
+            ]
+          ]
+        }
+      ],
+      "1": [
+        {
+          "length": 128,
+          "text": 10,
+          "queries": 10,
+          "images": 1,
+          "generation_images": 0,
+          "i2t_null_candidates": 0,
+          "i2t_null_images": 0,
+          "vision_patches": 24,
+          "generation_tokens": 0,
+          "dit_microbatches": 0,
+          "generation_grids": null
+        }
+      ]
+    }
+  },
+  "raw_directory": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/.runs/unified-wan-refactor"
+}

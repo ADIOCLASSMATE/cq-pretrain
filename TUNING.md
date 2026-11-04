@@ -1,5 +1,7 @@
 # Q=64 吞吐调优记录（2026-10-18）
 
+这是 Qwen3.5-9B/MOSS 的历史实验记录。当前 2B-Base/Wan 主线的实测见 `evaluations/benchmarks/`；下文吞吐、显存和重计算结论不能直接套用到 Wan。
+
 全部为 64 × Ascend 910B2C、真实 T2I50 数据、官方预训练权重、真实冻结 FP32 VAE。
 `docs/s` 为计时区间内实际完成的文档数，非容量槽位。证据目录
 `/inspire/sj-ssd3/project/high-dimensionaldata/public/training/cq_speed_20261017/`。

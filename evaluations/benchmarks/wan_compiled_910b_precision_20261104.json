@@ -1,0 +1,8 @@
+{
+  "device": "Ascend910B2C",
+  "forward_rms": 0.0028393531683832407,
+  "input_gradient_rms": 0.01610122248530388,
+  "condition_gradient_rms": 0.01731002889573574,
+  "peak_bytes": 137922048,
+  "passed": true
+}

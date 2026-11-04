@@ -16,6 +16,17 @@
 
 ## 既有训练资产
 
+2026-11-04 的 main 已改为 Qwen3.5-2B-Base + Wan2.1-T2V-1.3B，入口为
+`configs/qwen35_2b_wan.yaml`。完整 2B-Base 权重在
+`/inspire/sj-ssd3/project/high-dimensionaldata/public/models/Qwen3.5-2B-Base`，
+固定 revision `b1485b2fa6dfa1287294f269f5fb618e03d52d7c`，`manifest.json` 的所有文件 hash 已校验。
+同级目录 `Wan2.1-T2V-1.3B` 和 `Wan2.1-VAE` 分别提供原生生成器与冻结 VAE。
+默认 TP2、每个生成目标 64 个视觉 query、ViT 与 merger 冻结；理解任务不生成视觉 query。
+视频按原生相邻 2 帧时间块，块内双向、块间 causal。AscendC/MindSpeed 的图像 GDN 对照
+与训练、恢复、缓存验证见 `evaluations/benchmarks/`。本次 LOW 验证 Notebook
+`cq-wan-gdn-check-1104`、`cq-wan-tp2-check-1104` 均已停止。
+以下 9B/MOSS 训练资产仅保留历史身份，不作为新模型的初始化或吞吐基线。
+
 - Job `cq-q64-prod128-p3-20261018`，8 实例 × 16 卡 = 128 卡，**优先级 3**（低优不消耗
   点券），平台自动容错：最多重试 100 次、间隔 60 秒。
 - 源码快照（不可编辑，历史实验依据）：`.runs/cq-production-q64-20261018/source`。

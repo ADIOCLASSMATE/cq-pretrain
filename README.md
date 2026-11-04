@@ -1,118 +1,96 @@
 # CQ Pretraining
 
-Qwen3.5 backbone、双流 content/query（CQ）建模与 MOSS-Image DiT 的多模态预训练实现。
-支持图像理解（I2T）与图像生成（T2I），包含数据管线、训练、checkpoint、EMA 和定性评估。
+主线使用 **Qwen3.5-2B-Base + Wan2.1-T2V-1.3B**。图像按单帧视频进入同一个 Wan 生成器，I2T、T2I、V2T、T2V 共用数据流、CQ 主干、训练循环和 checkpoint 协议。
 
-## 模型
+## 模型约定
 
-- Qwen3.5 语言主干交替使用 GatedDeltaNet 与 full attention。
-- Content 流更新历史状态；query 流读取允许访问的 content 状态，不写回 GatedDeltaNet 的 recurrent/conv state。
-- Qwen3.5 ViT 编码器冻结，spatial merger、语言主干和 DiT 参与训练。
-- MOSS renderer 接收 CQ 生成的 condition queries；VAE 冻结并产生 posterior latent。
-- Q=64 配置使用 8×8 query 网格，另有 Q=256 配置和 cross-attention 变体。
-- cross-attention 变体使用 `x + to_out(attention)`，无额外 gate；输出投影采用非零的小初始化（标准差 `0.02 / sqrt(2 × DiT 层数)`），从第一步传递条件梯度。旧 gated 变体的 checkpoint 不兼容，需要重新训练。
+- 生成条件来自视觉 query，经可训练投影与 Wan 原生 text embedding 后注入 cross-attention。默认每张图／整段视频 **64 个** query。
+- `model.image_condition_queries` 设置任意正整数；`visual_query_mode: native` 则按每个输入的最终视觉 token 数分配。不同目标可有不同 query 数量。
+- I2T/V2T 及对话中的用户视觉输入只训练理解分支：保留 content，跳过生成 query、目标 VAE 与 Wan loss。数据中的图像 loss 禁用标记继续生效。
+- 同一图像组 content 双向可见。视频按 Qwen 原生 temporal patch（相邻 2 帧）划分，块内双向、块间 causal。query 只读历史，不写入 KV、GDN recurrent 或卷积状态；生成 query 不读取自己的目标图像／视频。
+- ViT **及 merger 默认冻结**；可缓存 merger 后的最终视觉特征。Wan VAE 使用冻结的 posterior mean 和原生归一化。
+- Wan 使用原生 3D RoPE、Q/K 全宽 RMSNorm 与 FP32 时间调制。TP 时跨 rank 汇总 RMS 方差，不能用每个 head 的归一化代替。
 
-主要入口：
-
-| 文件 | 用途 |
+| 目录 | 职责 |
 |---|---|
-| `ascend_pretrain/model.py` | 联合模型与损失 |
-| `ascend_pretrain/qwen35.py` | Qwen3.5 与 GatedDeltaNet |
-| `ascend_pretrain/qwen35_layout.py` | 双流布局与位置编码 |
-| `ascend_pretrain/mainline.py` | CQ 执行计划 |
-| `ascend_pretrain/moss.py` | MOSS renderer |
-| `ascend_pretrain/input_pipeline/` | 数据读取、打包与设备预处理 |
-| `ascend_pretrain/train.py` | 训练入口 |
-| `ascend_pretrain/configs/` | 模型配置 |
+| `models/` | Qwen、视觉编码、CQ 与统一 Wan；NPU kernel 适配 |
+| `data/` | Parquet/JSONL 来源、时间戳、packing、缓存、异步设备预处理 |
+| `training/` | TP/DP、分布式优化器、梯度调度、EMA 与训练循环 |
+| `configs/` | 模型／训练／运行环境 YAML 与依赖锁 |
+| `evaluations/` | I2T/T2I/V2T/T2V 定性评估与实测记录 |
+| `utils/` | checkpoint、重分片、实验身份和运行协调 |
+| `scripts/` | 启动、依赖准备、缓存准备与验证命令 |
+| `tests/` | CPU 数值、语义、packing 和断点回归 |
 
-## 数据来源约定
+`configs/legacy/` 与 MOSS 参考模块仅保留旧实验的数值回归；新生产入口使用 Wan 配置。9B/MOSS checkpoint 与此架构不兼容，需新开训练阶段。
 
-DCVLM 保持原生 I2T、对话、交错和纯文本类型，不再把一半 caption 改为 T2I。新预处理复用已发行的 DCVLM-baseline，与 GenUND 指定子集合并；实际训练使用的版本以训练配置为准。新任务统一使用 `python -m corpus_pipeline`，入口与筛选规则见 [数据预处理说明](corpus_pipeline/README.md)。T2I50 已退役，旧实验的指标与数据游标不能当作新语料的结果。
+## 环境与启动
 
-## I2T 的 CFG 无条件图像目标
-
-新训练配方使用 `--i2t-image-loss-probability 0.2 --cfg-null-condition i2t_prefix`。
-每个 image-first I2T caption 样本独立以 20% 概率参与图像 flow loss；所有样本
-仍保留图像理解输入和文本 loss。T2I 生成目标全部保留。对话和交错文档中的图片
-可能具有有效上下文，不作为这种固定前缀 null 样本抽样。
-
-抽样在 CPU 打包阶段完成，由样本 ID、数据 seed 和 epoch 确定，保持 TP 和断点
-恢复一致；新 epoch 重新抽样，不要求每个小 batch 恰好选中 20%。未选图片跳过
-生成 VAE、DiT，以及 native CQ_IT 中只用于图像生成的 query 计算。全部图片仍走
-ViT/content 流。选中目标按 DiT token budget 独立分块；图像 loss 按整个 DP/GA
-更新实际选中的图片数求平均，不做 5 倍逆概率补偿。零选中 batch 只训练理解分支。
-
-`i2t_prefix` 推理 null 复用训练的 I2T 图像 CQ 可见前缀。旧配置字段缺省保持
-`1.0 + empty_t2i`；本地生产入口默认采用新配方。改变配方需要新训练阶段，不能
-当成旧 checkpoint 的精确续训。日志记录 `generation_images`、
-`i2t_null_candidates`、`i2t_null_images` 和实际 null 比例。若 I2T/T2I 各半，
-选中生成目标中的 null 比例期望为 `0.2 / (1 + 0.2) = 16.7%`。
-
-## 环境与资产
-
-依赖版本见 `environment.core17.txt`、`requirements-data.lock` 和
-`ascend_pretrain/deps.core17.lock.json`。`ascend_pretrain/setup_deps.py`
-提供固定版本依赖的准备入口；Ascend 训练还需要匹配的 CANN、torch_npu 与算子扩展。
-
-模型权重、tokenizer、数据、评估图片和运行产物需单独准备。
-配置中的 `text_assets`、`vision_assets`、`moss_assets` 使用 `assets/` 下的相对路径，
-可改为实际资产目录。`assets/` 中随代码保留轻量参考配置、参考源码及其许可证。
-定性评估样例定义、图片来源和校验值见 `validation_assets/suite.json`。
-请在仓库根目录运行命令，使相对路径保持一致。
+在仓库根目录执行。CANN 9.0、PyTorch/torch_npu、Megatron/MindSpeed 的版本见 `configs/deps.core17.lock.json`、`environment.core17.txt`；Wan/视频处理的 Python 依赖见 `environment.wan.txt`。`scripts/launch.sh` 加载项目内 CANN、AscendC/FLA 和 Wan 依赖，训练过程不下载模型。
 
 ```bash
-python -m ascend_pretrain.train --help
-python -m ascend_pretrain.setup_deps --help
+python -m scripts.setup_mindspeed --help
+NPROC_PER_NODE=2 bash scripts/launch.sh \
+  --config configs/qwen35_2b_wan.yaml \
+  --data-root /path/to/published-corpus \
+  --output /path/to/run --until-data-end
 ```
 
-## 评测权重快照
+`configs/qwen35_2b_wan.yaml` 集中定义 model、training、environment。CLI 参数覆盖 YAML 的 training 设置。模型路径可在 model 中改写；必须提供经过校验的 **2B-Base**，不能用 2B 对话权重代替。
 
-训练默认每 **1000 个全局更新 step** 单独保存推理权重，不启动 benchmark。
-`--eval-snapshot-every` 可调整间隔，设为 `0` 可关闭；恢复训练后仍按绝对 step 计数。
-现有恢复 checkpoint 的保存频率、`--keep-checkpoints` 和清理策略不变。
+多节点／低优抢占恢复继续使用 `train_production.py` 与 `launch_job.py`：每次启动新 rendezvous，恢复 optimizer、FP32 masters、renderer EMA、RNG 和已消费的数据游标。完整模型加 Adam、EMA 的单卡测试在首次 optimizer 分配时超出 64 GiB；默认采用 TP2，资源预算需按实际序列／视频长度验证。
 
-通过 `--eval-snapshot-dir` 指定持久目录。未指定时，若使用
-`--checkpoint-dir /path/to/run/checkpoints`，快照写到
-`/path/to/run/eval_snapshots/step_0001000/`；否则写到
-`<output>/eval_snapshots/step_0001000/`。后续 step 各自保留，不自动轮转删除。
+生产入口要求显式传入 `--data-root`，避免误用已退役的 small-pool 索引。MC2 只在本机 TP 组具有完整 HCCS 互联时启用；PHB 碎卡自动使用普通 TP 通信。环境变量可覆盖 YAML 中的运行环境默认值。
 
-每份快照包含完整模型的 `model_tp_*.pt` 分片，以及最后提交的 `manifest.json`。
-启用 renderer EMA 时保存 **online backbone + EMA renderer**，与定性验证一致；
-未启用 EMA 时保存 online 模型。保留推理所需参数和 buffers，不包含优化器、
-FP32 master、RNG 或数据游标。冻结 VAE 和 tokenizer 等外部资产不重复复制，
-在 manifest 中记录其版本/校验清单、模型配置、源码摘要及权重来源。
+## 数据与缓存
 
-后续评测只读取存在完整 `manifest.json` 的快照，模型装载可复用
-`checkpoint.initialize_model()`（支持 TP 重分片），不能用 `--resume` 将其作为
-完整训练恢复点。如果在 checkpoint 提交后、对应快照完成前中断，恢复到该
-1000-step 边界时会补存；已完整提交的快照验证后跳过，不覆盖。
+已发布的 DCVLM/GenUND Parquet 目录直接作为 `--data-root`。预处理仍使用 `python -m corpus_pipeline`，规则见 [数据预处理说明](corpus_pipeline/README.md)。DCVLM 保留原生任务结构，不重新生成 T2I50。
 
-采用固定源码快照的运行中作业不会自动获得此功能，需要在后续启动/恢复时使用新版代码。
+也可指定 JSONL 或混合来源 YAML：
 
-## 检查
+```yaml
+sources:
+  - path: /path/to/published-corpus
+  - path: videos.jsonl
+    video:
+      mode: native
+      qwen_num_frames: 8
+```
 
-数据管线测试需要与其测试词表匹配的 tokenizer 目录，可通过 `DCVLM_TOKENIZER` 指定，
-默认使用 `assets/tokenizer`。MOSS 参考对照测试需要配置所指向的原始 MOSS 资产。
+JSONL 简单记录使用 `task: t2i/i2t/t2v/v2t`、`caption` 和 `image_path`／`video_path`；NPY 视频使用 `frames_path` 与 `fps`。也支持原生 `messages` 和 `videos` 数组。媒体路径相对 JSONL 解析。视频保留解码 PTS；native 模式仅将末尾裁到 Wan 的 4k+1 帧，空间尺寸必须满足原生 patch 对齐。需要固定抽帧／裁剪时，在 source.video 中设置 `mode: fixed`、`num_frames`、`fps`、`height`、`width`。
 
 ```bash
-TORCH_DEVICE_BACKEND_AUTOLOAD=0 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 \
-  python -m unittest discover -s ascend_pretrain -p 'test_*.py' -t .
+# 可用 --rank / --world 将相同来源分给多个 CPU/NPU 实例。
+python -m scripts.prepare_latents --config configs/qwen35_2b_wan.yaml \
+  --data-root /path/to/sources.yaml --cache /path/to/visual-cache --device npu:0
 ```
 
-测试覆盖双流可见性、GatedDeltaNet 状态与梯度、位置编码、视觉编码与合并投影、
-数据打包、通信调度、EMA、checkpoint 恢复及 renderer 参考实现。
+训练时设置 `model.visual_cache` 为同一目录。缓存身份包含来源内容 hash、真实帧／时间戳与预处理几何、编码器身份；每个条目有 tensor 校验和并原子发布。重跑跳过已有条目；缺失条目在线计算。缓存独立于原始数据，复制整个数据目录后不依赖旧绝对路径；改变数据、编码器或处理几何会使用新条目。原始文件不被改写。
 
-## 版本管理
+保留 main 的 locality shuffle、批量 tokenize、有限预取、完整文档 packing、consumed-only 游标、H2D/VAE 独立 stream、全 DP/GA 目标归一化、DiT 分块反向与单次 CQ 梯度桥接、固定 collective 顺序、FP32 fused weight-gradient、MC2、激活重算和 renderer-only EMA。Wan attention 使用紧凑 TND 布局，不构造整张 padding mask。
+
+## 验证与评估
 
 ```bash
-git clone https://github.com/ADIOCLASSMATE/cq-pretrain.git
-cd cq-pretrain
-git switch -c feature/my-change
-git add <修改的文件>
-git diff --cached
-git commit -m "Describe the change"
-git push -u origin HEAD
+TORCH_DEVICE_BACKEND_AUTOLOAD=0 OMP_NUM_THREADS=1 .venv/bin/python -m pytest -q tests
+NPROC_PER_NODE=1 PRETRAIN_MODULE=scripts.benchmark_gdn bash scripts/launch.sh --output /path/to/gdn.json
+NPROC_PER_NODE=2 PRETRAIN_MODULE=scripts.validation.validate_wan_tp PRETRAIN_MC2_ROW=1 \
+  bash scripts/launch.sh --output /path/to/wan-tp.json
 ```
 
-`.gitignore` 使用明确的文件允许列表。新增源码或配置时需同步更新允许列表，
-再检查暂存内容；外部资产与本地运行文件不纳入版本管理。
+Ascend 910B 图像 CQ 的 GDN 层前向加反向实测（含 warmup，12 次计时中位数）：
+
+| Content 长度 | 自定义 AscendC | 官方 MindSpeed |
+|---|---:|---:|
+| 2048 | 10.46 ms | 15.72 ms |
+| 8192 | 38.60 ms | 56.60 ms |
+
+当前默认 `gdn_backend: ascendc`；保留 `mindspeed` 对照。这里只比较 GDN recurrence 提供方，卷积／门控归一化、输入、参数和 CQ 事件计划相同；不代表整模型吞吐。原始记录在 `evaluations/benchmarks/`。
+
+统一路径已通过 126 项 CPU 回归（另有 46 个子测试）、官方 Diffusers 前向／反向对照、NPU BF16 与 TP2 梯度对照、完整权重两步训练、断点续训、四任务评估、缓存重跑及不均匀 DP 目标检查。完整权重测试使用 128 token 和小尺寸媒体，单卡峰值 33.75 GiB；尚未据此承诺正式长序列吞吐。TorchAIR 调制融合已适配 Wan 的 FP32 语义并通过数值检查，默认仍关闭。
+
+训练支持 `--validation-suite` 的固定定性样例；T2V 加 `num_frames`、`fps`，V2T 指定视频路径与校验值，视频输出为 MP4。结果保留 suite hash、权重来源、耗时、显存和 HTML。此套件不声称提供官方 benchmark 分数。
+
+Wan 默认采样 `guidance: 1`；此次 I2T 不再提供 null 图像生成训练目标，因此不沿用旧 MOSS 的 CFG=3 默认值。已有独立 null 条件训练的实验可在评估样例中显式设置 guidance。
+
+每 1000 个绝对更新默认保存独立推理快照（`--eval-snapshot-every`）；训练恢复 checkpoint 的频率、保留策略和完整性校验独立管理。`--eval-snapshot-dir` 指定持久评估权重目录，零间隔关闭快照。

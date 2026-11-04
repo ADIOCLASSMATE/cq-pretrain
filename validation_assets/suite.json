@@ -10,7 +10,7 @@
       "height": 512,
       "width": 512,
       "steps": 30,
-      "guidance": 3.0,
+      "guidance": 1.0,
       "shift": 5.0,
       "seed": 4200,
       "source": {
@@ -28,7 +28,7 @@
       "height": 384,
       "width": 640,
       "steps": 30,
-      "guidance": 3.0,
+      "guidance": 1.0,
       "shift": 5.0,
       "seed": 4201,
       "source": {
@@ -46,7 +46,7 @@
       "height": 640,
       "width": 384,
       "steps": 30,
-      "guidance": 3.0,
+      "guidance": 1.0,
       "shift": 5.0,
       "seed": 4202,
       "source": {
@@ -64,7 +64,7 @@
       "height": 512,
       "width": 512,
       "steps": 30,
-      "guidance": 3.0,
+      "guidance": 1.0,
       "shift": 5.0,
       "seed": 4203,
       "source": {

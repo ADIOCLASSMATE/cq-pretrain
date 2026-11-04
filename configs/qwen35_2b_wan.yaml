@@ -1,0 +1,52 @@
+model:
+  renderer: wan
+  image_condition_queries: 64
+  visual_query_mode: fixed
+  gdn_backend: ascendc
+  freeze_vision: true
+  freeze_vision_merger: true
+  preserve_documents: true
+  generation_token_budget: 65536
+  checkpoint_backbone: true
+  checkpoint_dit: true
+  i2t_image_loss_probability: 0.0
+
+training:
+  tp: 2
+  global_batch: 128
+  sequence_length: 8192
+  micro_batch: 1
+  lr: 0.00005
+  lr_warmup_steps: 200
+  lr_decay_style: cosine
+  ce_chunk: 1024
+  bucket_size: 40000000
+  renderer_ema_decay: 0.999
+  pack_padding_multiple: 128
+  device_prefetch: 2
+  vae_chunk: 2
+  data_workers: 2
+  data_prefetch: 12
+  tokenize_rows: 32
+  shuffle_block_rows: 4
+  image_workers: 2
+  image_prefetch: 16
+  vae_dtype: float32
+  latent_encoder: wan
+  seed: 42
+
+environment:
+  PRETRAIN_STACK: core17
+  PRETRAIN_MODULE: training.train
+  PRETRAIN_ATTENTION_TILE: "2048"
+  PRETRAIN_ATTENTION_LAYOUT: SBH
+  PRETRAIN_FUSED_CE: "1"
+  PRETRAIN_COMPILE_MODULATION: "0"
+  PRETRAIN_MC2_ROW: "1"
+  OMP_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  RAYON_NUM_THREADS: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  HCCL_EXEC_TIMEOUT: "1800"
+  HCCL_CONNECT_TIMEOUT: "1800"

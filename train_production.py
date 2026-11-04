@@ -3,8 +3,8 @@
 Low-priority jobs are preempted. Each platform restart negotiates a new launch
 generation, logs under its own attempt directory, and resumes every rank from
 the newest committed checkpoint, including optimizer, FP32 masters, renderer
-EMA, RNG and the consumed-data cursor. The recipe below is the measured winner
-of .runs/cq-speed-20261017 sweeps 01-03 on 64 NPUs with real T2I50 data.
+EMA, RNG and the consumed-data cursor. Model, training and runtime settings
+come from one experiment YAML; previous MOSS throughput is not a Wan benchmark.
 """
 import argparse
 import fcntl
@@ -18,43 +18,15 @@ import sys
 import time
 import uuid
 
-from ascend_pretrain.coordination import atomic_json
-from ascend_pretrain.checkpoint_catalog import durable_json
+from utils.distributed import atomic_json
+from utils.checkpoint_catalog import durable_json
 
 ROOT = Path(__file__).resolve().parent
 
-# EMA decay 0.999 gives a 1000-update averaging horizon: 3.3% of this ~30,400
-# update epoch. The earlier 0.9999 averaged over 10,000 updates (33% of the
-# run), so EMA renderer samples stayed anchored to near-initial weights and the
-# qualitative T2I images barely moved while online-backbone I2T recovered fast.
-# EMA covers the renderer only. The DiT trains on flow matching, whose per-step
-# gradients are high variance by construction, so averaging helps. The Qwen
-# backbone trains on cross entropy and is deliberately excluded: averaging it
-# would also decouple the CQ conditions the DiT is trained against from the
-# ones an EMA backbone would emit at sampling time.
-
-# Measured recipe. TP2 beat TP4 (113.1 vs 95.1 docs/s). Full recompute is
-# mandatory, not a choice: every reduced-recompute variant OOMed at 8192
-# tokens (bb32/dit36 peaked 54.96 GiB, bb28 peaked 56.38). MC2 stays on;
-# disabling it measured 3% slower despite its large AI_CPU controller time.
-RECIPE = dict(tp=2, global_batch=128, sequence_length=8192, micro_batch=1,
-              lr=5e-5, lr_warmup_steps=200, lr_decay_style='cosine',
-              ce_chunk=1024, bucket_size=40000000, moss_ema_decay=0.999,
-              dit_microbatch_tokens=8192, pack_padding_multiple=128,
-              device_prefetch=2, vae_chunk=2, data_workers=2, data_prefetch=12,
-              tokenize_rows=32, shuffle_block_rows=4, image_workers=2,
-              image_prefetch=16, vae_dtype='float32', seed=42)
-
-ENVIRONMENT = dict(PRETRAIN_STACK='core17', PRETRAIN_MODULE='ascend_pretrain.train',
-                   PRETRAIN_ATTENTION_TILE='2048', PRETRAIN_ATTENTION_LAYOUT='SBH',
-                   PRETRAIN_FUSED_CE='1', PRETRAIN_COMPILE_MODULATION='0',
-                   PRETRAIN_MOSS_FUSED_POINTWISE='situ', PRETRAIN_MC2_ROW='1',
-                   OMP_NUM_THREADS='1', MKL_NUM_THREADS='1',
-                   TOKENIZERS_PARALLELISM='false', RAYON_NUM_THREADS='1',
-                   PYTHONDONTWRITEBYTECODE='1',
-                   # A preempted peer must not trip the collective timeout
-                   # before the controller observes its exit and restarts.
-                   HCCL_EXEC_TIMEOUT='1800', HCCL_CONNECT_TIMEOUT='1800')
+def experiment(config):
+    import yaml
+    value=yaml.safe_load(Path(config).read_text())
+    return value['training'],{k:str(v) for k,v in value.get('environment',{}).items()}
 
 
 def read_json(path):
@@ -97,26 +69,24 @@ def join_attempt(root, node_rank, nodes, timeout=1800, interval=1.):
 
 
 def training_command(args, attempt):
+    recipe,_=experiment(args.config)
     world = args.nodes*args.nproc_per_node
-    if world % RECIPE['tp']:raise ValueError('World size must divide the recipe TP')
-    dp = world//RECIPE['tp']
-    if RECIPE['global_batch'] % (dp*RECIPE['micro_batch']):
-        raise ValueError(f"global_batch {RECIPE['global_batch']} must divide DP={dp}")
+    if world % recipe['tp']:raise ValueError('World size must divide the recipe TP')
+    dp = world//recipe['tp']
+    if recipe['global_batch'] % (dp*recipe['micro_batch']):
+        raise ValueError(f"global_batch {recipe['global_batch']} must divide DP={dp}")
     training = ['--config', str(args.config), '--output', str(attempt/'train'),
-        '--data-root', str(args.data_root), '--data-mode', 'A', '--latent-encoder', 'moss',
+        '--data-root', str(args.data_root), '--data-mode', 'A',
         '--i2t-image-loss-probability',str(args.i2t_image_loss_probability),
         '--cfg-null-condition',args.cfg_null_condition,
         *(['--steps', str(args.steps)] if args.steps else ['--until-data-end']),
-        '--warmup', '10',
-        '--checkpoint',  # full recompute; every reduced variant OOMs
+        '--warmup', str(min(10,max(0,args.steps-1)) if args.steps else 10),
+        '--checkpoint',
         '--checkpoint-dir', str(args.output/'checkpoints'), '--auto-resume',
         '--save-every', str(args.save_every), '--keep-checkpoints', str(args.keep_checkpoints),
         '--save-first', '--save-final',
         '--validation-suite', str(args.validation_suite),
         '--validate-first', '--validate-final', '--validate-every', str(args.validate_every)]
-    for key, value in RECIPE.items():
-        option = '--'+key.replace('_', '-')
-        training += [option, str(value)]
     return [str(ROOT/'.venv-core17/bin/python'), str(ROOT/'launch_job.py'),
             '--nodes', str(args.nodes), '--node-rank', str(args.node_rank),
             '--nproc-per-node', str(args.nproc_per_node),
@@ -124,6 +94,7 @@ def training_command(args, attempt):
 
 
 def run(args):
+    recipe,environment_overrides=experiment(args.config)
     args.output.mkdir(parents=True, exist_ok=True)
     coordination = args.output/'coordination'
     coordination.mkdir(exist_ok=True)
@@ -139,9 +110,9 @@ def run(args):
         attempt.mkdir(parents=True, exist_ok=True)
         command = training_command(args, attempt)
         atomic_json(attempt/f'launch_node_{args.node_rank:03d}.json',
-                    dict(command=command, generation=generation, recipe=RECIPE))
+                    dict(command=command, generation=generation, recipe=recipe))
         print(json.dumps(dict(status='launching', generation=generation, command=command)), flush=True)
-        environment = dict(os.environ, **ENVIRONMENT)
+        environment = dict(environment_overrides, **os.environ)
         with (attempt/f'node_{args.node_rank:03d}.log').open('a') as log:
             child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
                                      start_new_session=True, env=environment, cwd=str(ROOT))
@@ -187,14 +158,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--config', type=Path,
-                        default=ROOT/'ascend_pretrain/configs/qwen35_9b_moss_q64.json')
-    parser.add_argument('--data-root', type=Path,
-                        default=Path('/inspire/sj-ssd3/project/high-dimensionaldata/public/datasets/dcvlm_pretrain_v1_20261016T062238Z'))
+                        default=ROOT/'configs/qwen35_2b_wan.yaml')
+    parser.add_argument('--data-root', type=Path, required=True,
+                        help='Published corpus directory or mixed-source YAML')
     parser.add_argument('--validation-suite', type=Path, default=ROOT/'validation_assets/suite.json')
-    parser.add_argument('--i2t-image-loss-probability',type=float,default=.2,
-                        help='Keep this fraction of I2T caption image losses; use 1.0 for the previous recipe')
-    parser.add_argument('--cfg-null-condition',choices=('empty_t2i','i2t_prefix'),default='i2t_prefix',
-                        help='CFG null template; use empty_t2i for the previous recipe')
+    parser.add_argument('--i2t-image-loss-probability',type=float,default=0.,
+                        help='Legacy MOSS sampling only; Wan always disables I2T image loss')
+    parser.add_argument('--cfg-null-condition',choices=('empty_t2i','i2t_prefix'),default='empty_t2i',
+                        help='Wan requires empty_t2i; i2t_prefix is for legacy MOSS checkpoints')
     parser.add_argument('--nodes', type=int, default=int(os.environ.get('PET_NNODES', '8')))
     parser.add_argument('--node-rank', type=int, default=int(os.environ.get('PET_NODE_RANK', '0')))
     parser.add_argument('--nproc-per-node', type=int, default=16)
@@ -207,6 +178,7 @@ def main():
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
     args.output = args.output.resolve()
+    recipe,environment_overrides=experiment(args.config)
     if not math.isfinite(args.i2t_image_loss_probability) or not 0<=args.i2t_image_loss_probability<=1:
         parser.error('Require finite 0 <= i2t-image-loss-probability <= 1')
     if args.nodes < 1 or not 0 <= args.node_rank < args.nodes or args.nproc_per_node < 1:
@@ -218,11 +190,11 @@ def main():
     if args.dry_run:
         command = training_command(args, args.output/'attempts'/'DRY_RUN')
         command.insert(command.index('--'), '--dry-run')
-        print(json.dumps(dict(recipe=RECIPE, environment=ENVIRONMENT,
-            world=args.nodes*args.nproc_per_node, dp=args.nodes*args.nproc_per_node//RECIPE['tp'],
-            grad_accum=RECIPE['global_batch']//(args.nodes*args.nproc_per_node//RECIPE['tp']),
+        print(json.dumps(dict(recipe=recipe, environment=environment_overrides,
+            world=args.nodes*args.nproc_per_node, dp=args.nodes*args.nproc_per_node//recipe['tp'],
+            grad_accum=recipe['global_batch']//(args.nodes*args.nproc_per_node//recipe['tp']),
             output=str(args.output), command=command), indent=2), flush=True)
-        return subprocess.call(command, env=dict(os.environ, **ENVIRONMENT), cwd=str(ROOT))
+        return subprocess.call(command, env=dict(environment_overrides, **os.environ), cwd=str(ROOT))
     return run(args)
 
 
