@@ -1,0 +1,9 @@
+{
+  "url": "https://dl.fbaipublicfiles.com/sscd-copy-detection/sscd_disc_mixup.torchscript.pt",
+  "download_proxy": false,
+  "bytes": 98791638,
+  "sha256": "9f26bd4c848cc19b73d2ae92eea6e04886f61a7b764ceb7a13aeee62e6a6db56",
+  "model": "sscd_disc_mixup",
+  "preprocessing": "RGB_resize_bilinear_320x320_imagenet_normalization",
+  "embedding_dim": 512
+}

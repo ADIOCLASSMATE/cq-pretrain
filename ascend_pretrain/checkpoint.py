@@ -102,9 +102,29 @@ def load(path, model, optimizer, config, topology, training_state=None, data_sta
     if manifest['world'] != dist.get_world_size() or manifest['topology'] != topology:
         raise ValueError('Resume requires the saved TP/DP topology')
     if manifest['config'] != config.to_dict():
-        raise ValueError('Resume model configuration differs from the checkpoint')
+        # A field added to ModelConfig after the checkpoint was written is not a
+        # real difference as long as it still holds its default: the saved run
+        # behaved exactly as the default describes. Every other discrepancy,
+        # including a non-default value for such a field, stays fatal.
+        from dataclasses import fields
+        defaults = {f.name: f.default for f in fields(config)}
+        current = config.to_dict()
+        added = set(current) - set(manifest['config'])
+        benign = all(name in defaults and current[name] == defaults[name] for name in added)
+        if not benign or {k: v for k, v in current.items() if k not in added} != manifest['config']:
+            raise ValueError('Resume model configuration differs from the checkpoint')
     if manifest.get('training_state') != training_state:
-        raise ValueError('Resume schedule, batch or data seed differs from the checkpoint')
+        # Mirror of the config rule above, for knobs that were deleted rather
+        # than added. A checkpoint written before a dead option was removed
+        # still records it; that is not a schedule difference as long as the
+        # recorded value is the inert one the option had when it was dropped.
+        saved = dict(manifest.get('training_state') or {})
+        removed = {'work_budget': 0., 'work_weights': [1., .18, 1.72]}
+        for name, inert in removed.items():
+            if name in saved and name not in (training_state or {}) and saved[name] == inert:
+                saved.pop(name)
+        if saved != training_state:
+            raise ValueError('Resume schedule, batch or data seed differs from the checkpoint')
     saved = torch.load(root / f'rank_{dist.get_rank():05d}.pt', map_location='cpu', weights_only=False)
     if ('ema' in saved)!=('ema' in manifest):
         raise ValueError('Renderer EMA shard and manifest disagree')
@@ -155,6 +175,7 @@ def initialization_model_config(config):
     execution={'checkpoint_backbone','checkpoint_dit','checkpoint_backbone_layers',
         'checkpoint_dit_layers','ce_chunk','keep_attention_activations','preserve_documents',
         'long_document_policy','generation_token_budget','generation_microbatch_images',
+        'i2t_image_loss_probability','cfg_null_condition',
         # CQ query count selects how many read-only positions each image emits.
         # It allocates no learned tensor: queries reuse the shared image-mask
         # embedding and the backbone/DiT weights are identical at any Q. A new

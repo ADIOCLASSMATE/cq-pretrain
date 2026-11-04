@@ -131,7 +131,14 @@ class DevicePreparer:
         if host_batch.generation is not None:
             from .moss_vae import prepare_dynamic
             return prepare_dynamic(self,host_batch,generator)
-        n, cfg = len(host_batch.image_indices), self.cfg
+        if self.cfg.renderer == 'moss' and not host_batch.generation_image_count:
+            # Understanding images still go through ViT. There are no selected
+            # latent targets, so do not enter the legacy VAE path below.
+            batch = host_batch.to(self.device, non_blocking=True)
+            self.stats['batch_transfer_enqueue_seconds'] += time.perf_counter()-begin
+            self.stats['batches'] += 1
+            return batch, ()
+        n, cfg = host_batch.generation_image_count, self.cfg
         side = cfg.image_size // cfg.patch_size
         randoms = [torch.randn(n, cfg.latent_channels, side, side, generator=generator),
                    torch.randn(n * cfg.flow_draws, cfg.image_tokens, cfg.latent_channels, generator=generator),
@@ -148,19 +155,21 @@ class DevicePreparer:
         batch = host_batch.to(self.device, non_blocking=True)
         self.stats['batch_transfer_enqueue_seconds']+=time.perf_counter()-begin
         begin=time.perf_counter()
+        # Every clean image stays available to the understanding backbone.
+        # Only the permitted subset becomes a sampled latent target.
+        rgb = batch.pixels.float().div_(127.5).sub_(1)
+        batch.pixels = rgb.to(torch.bfloat16)
         if n:
             if self.vae is None:
                 raise ValueError('Choose a latent encoder explicitly; use fake only for pipeline tests')
-            rgb = batch.pixels.float().div_(127.5).sub_(1)
-            mean, std = self.vae.encode(rgb)
+            targets = (rgb if batch.generation_image_indices is None else
+                       rgb.index_select(0,batch.generation_image_indices))
+            mean, std = self.vae.encode(targets)
             expected = (n, cfg.latent_channels, side, side)
             if tuple(mean.shape) != expected or tuple(std.shape) != expected:
                 raise ValueError(f'Encoder must return scaled posterior mean/std {expected}')
             sample = mean + std * posterior_noise.to(self.device, non_blocking=True)
             batch.latents = sample.flatten(2).transpose(1, 2).contiguous().to(torch.bfloat16)
-            batch.pixels = rgb.to(torch.bfloat16)
-        else:
-            batch.pixels = batch.pixels.to(torch.bfloat16)
         self.stats['encoder_enqueue_seconds']+=time.perf_counter()-begin
         begin=time.perf_counter()
         batch.noise = noise.to(self.device, dtype=torch.bfloat16, non_blocking=True)

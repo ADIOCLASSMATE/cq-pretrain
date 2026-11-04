@@ -1,0 +1,159 @@
+{
+  "network": {
+    "proxy": false,
+    "hf_download_endpoint": "https://hf-mirror.com",
+    "mirror_note": "Pinned author repository revisions; weights checked against published LFS SHA-256. No model code imported from hub."
+  },
+  "models": {
+    "cf224": {
+      "repo": "OwensLab/commfor-model-224",
+      "revision": "26afc31e6b40c312c3fd42c05a758be62446215b",
+      "sha256": "a6cc439d5a6d2dfadd60c77d27a2838ad55b34e601ecd30f46ad97266d6ac4e0",
+      "size": 86678644
+    },
+    "cf384": {
+      "repo": "OwensLab/commfor-model-384",
+      "revision": "6076002bf0d9dd37537f965ee2f06f826c333b61",
+      "sha256": "b89f36275f3bf5e2b040eee36597a8f19db051bff9a473a9cf7b2466284fb387",
+      "size": 87262324
+    },
+    "clip_vitl14": {
+      "repo": "openai/clip-vit-large-patch14",
+      "revision": "32bd64288804d66eefd0ccbe215aa642df71cc41",
+      "sha256": "a2bf730a0c7debf160f7a6b50b3aaf3703e7e88ac73de7a314903141db026dcb",
+      "size": 1710540580
+    }
+  },
+  "source_revisions": {
+    "community-forensics": "ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4",
+    "unifd": "030495aea3300a8b54c0ec37ec7fe1dd7e63c619"
+  },
+  "files": {
+    "cf224/config": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/cf224/config.json",
+      "url": "https://hf-mirror.com/OwensLab/commfor-model-224/resolve/26afc31e6b40c312c3fd42c05a758be62446215b/config.json",
+      "sha256": "9826208c73a17bb20c85d6624aa16b4a118508d89ff2c86d71e4b553474ff702",
+      "bytes": 116
+    },
+    "cf384/config": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/cf384/config.json",
+      "url": "https://hf-mirror.com/OwensLab/commfor-model-384/resolve/6076002bf0d9dd37537f965ee2f06f826c333b61/config.json",
+      "sha256": "877416e73aac0fdbc1be723f5ddf674e78a2350305865ad9031564b287b60147",
+      "bytes": 116
+    },
+    "clip_vitl14/config": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/clip_vitl14/config.json",
+      "url": "https://hf-mirror.com/openai/clip-vit-large-patch14/resolve/32bd64288804d66eefd0ccbe215aa642df71cc41/config.json",
+      "sha256": "8a09b467700c58138c29d53c605b34ebc69beaadd13274a8a2af8ad2c2f4032a",
+      "bytes": 4519
+    },
+    "community-forensics/models.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/community-forensics/models.py",
+      "url": "https://raw.githubusercontent.com/JeongsooP/Community-Forensics/ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4/models.py",
+      "sha256": "988f2f566aa4c177dd845bfccdab9eac2b3fa5174649332b09ee8cc840c8bb97",
+      "bytes": 2407
+    },
+    "community-forensics/dataloader.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/community-forensics/dataloader.py",
+      "url": "https://raw.githubusercontent.com/JeongsooP/Community-Forensics/ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4/dataloader.py",
+      "sha256": "e33032c6bf5e18c5ae3ae0a0391a8571a7bb2cfa4b140c0eb80f5ce86f14562b",
+      "bytes": 22609
+    },
+    "community-forensics/dataprocessor_hf.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/community-forensics/dataprocessor_hf.py",
+      "url": "https://raw.githubusercontent.com/JeongsooP/Community-Forensics/ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4/dataprocessor_hf.py",
+      "sha256": "3cec0839d2683694651187439f6e137928084aa0b49a80a692085fad9f5d9d92",
+      "bytes": 1925
+    },
+    "community-forensics/custom_transforms.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/community-forensics/custom_transforms.py",
+      "url": "https://raw.githubusercontent.com/JeongsooP/Community-Forensics/ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4/custom_transforms.py",
+      "sha256": "85e49fee816b20859d6f1f96fbe51d296c2d4c7b6c371326b764f57a58a25bdb",
+      "bytes": 41633
+    },
+    "community-forensics/utils.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/community-forensics/utils.py",
+      "url": "https://raw.githubusercontent.com/JeongsooP/Community-Forensics/ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4/utils.py",
+      "sha256": "575afe3d7eb31e026037ca59e8fed3ac70bd4a446462ab608a3b956a6f2af9ab",
+      "bytes": 37716
+    },
+    "community-forensics/eval.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/community-forensics/eval.py",
+      "url": "https://raw.githubusercontent.com/JeongsooP/Community-Forensics/ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4/eval.py",
+      "sha256": "ce7c2671c0a66bdf810d633021b1c95913f54adff1ce8b6958a4bfaa4c5c8815",
+      "bytes": 2552
+    },
+    "community-forensics/README.md": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/community-forensics/README.md",
+      "url": "https://raw.githubusercontent.com/JeongsooP/Community-Forensics/ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4/README.md",
+      "sha256": "c4673b4eeb21b52fb38b116439073abca9724423f7c48b16aa2956f160f491f5",
+      "bytes": 16475
+    },
+    "community-forensics/LICENSE": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/community-forensics/LICENSE",
+      "url": "https://raw.githubusercontent.com/JeongsooP/Community-Forensics/ee5b71d43db0f3779e1edd64ee927b13f2dd6ad4/LICENSE",
+      "sha256": "7ca7b8f7aaf663c7941e3bb851a4c1bbfdef51d5503be93711614f528569a5c6",
+      "bytes": 1070
+    },
+    "unifd/validate.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/unifd/validate.py",
+      "url": "https://raw.githubusercontent.com/WisconsinAIVision/UniversalFakeDetect/030495aea3300a8b54c0ec37ec7fe1dd7e63c619/validate.py",
+      "sha256": "9ab4021cc6f85002a8b8cd0fc28baa9b4861b59bffcfbd98e10d02b08c42b2d6",
+      "bytes": 9849
+    },
+    "unifd/models/clip_models.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/unifd/models/clip_models.py",
+      "url": "https://raw.githubusercontent.com/WisconsinAIVision/UniversalFakeDetect/030495aea3300a8b54c0ec37ec7fe1dd7e63c619/models/clip_models.py",
+      "sha256": "57ce5898bf0bc7ff52b5922a0aefae8bc34a9237e4d59e4a1615ff5d8c6ff7a6",
+      "bytes": 643
+    },
+    "unifd/models/clip/model.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/unifd/models/clip/model.py",
+      "url": "https://raw.githubusercontent.com/WisconsinAIVision/UniversalFakeDetect/030495aea3300a8b54c0ec37ec7fe1dd7e63c619/models/clip/model.py",
+      "sha256": "c071d011e92226f1ca0a6f7c5098d8d7d08eadc7d6db125a81b52fc234b1ec59",
+      "bytes": 17845
+    },
+    "unifd/models/clip/clip.py": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/unifd/models/clip/clip.py",
+      "url": "https://raw.githubusercontent.com/WisconsinAIVision/UniversalFakeDetect/030495aea3300a8b54c0ec37ec7fe1dd7e63c619/models/clip/clip.py",
+      "sha256": "c3f1c09abe0a0d9c429e0d47f2b8d4a4ec09dbd11eec3d7dd9846babd717e43b",
+      "bytes": 9396
+    },
+    "unifd/README.md": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/unifd/README.md",
+      "url": "https://raw.githubusercontent.com/WisconsinAIVision/UniversalFakeDetect/030495aea3300a8b54c0ec37ec7fe1dd7e63c619/README.md",
+      "sha256": "b349f2ab1f882023427b5863d2ede50f6804287db482afe04053d8fbb3666e6a",
+      "bytes": 5349
+    },
+    "unifd/LICENSE": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/unifd/LICENSE",
+      "url": "https://raw.githubusercontent.com/WisconsinAIVision/UniversalFakeDetect/030495aea3300a8b54c0ec37ec7fe1dd7e63c619/LICENSE",
+      "sha256": "923dbc0fe040cc826122491e98b20d6f401e510d50c8b666de908e59ebf2f2b2",
+      "bytes": 1091
+    },
+    "unifd/pretrained_weights/fc_weights.pth": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/official_source/unifd/pretrained_weights/fc_weights.pth",
+      "url": "https://raw.githubusercontent.com/WisconsinAIVision/UniversalFakeDetect/030495aea3300a8b54c0ec37ec7fe1dd7e63c619/pretrained_weights/fc_weights.pth",
+      "sha256": "477100745713bcc957beb2b40859536859b6483fd6301b3b9293151b194c7847",
+      "bytes": 4083
+    },
+    "cf224/weights": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/cf224/model.safetensors",
+      "url": "https://hf-mirror.com/OwensLab/commfor-model-224/resolve/26afc31e6b40c312c3fd42c05a758be62446215b/model.safetensors?download=true",
+      "sha256": "a6cc439d5a6d2dfadd60c77d27a2838ad55b34e601ecd30f46ad97266d6ac4e0",
+      "bytes": 86678644
+    },
+    "cf384/weights": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/cf384/model.safetensors",
+      "url": "https://hf-mirror.com/OwensLab/commfor-model-384/resolve/6076002bf0d9dd37537f965ee2f06f826c333b61/model.safetensors?download=true",
+      "sha256": "b89f36275f3bf5e2b040eee36597a8f19db051bff9a473a9cf7b2466284fb387",
+      "bytes": 87262324
+    },
+    "clip_vitl14/weights": {
+      "path": "corpus_pipeline/runs/detector_calibration_20261022/models/clip_vitl14/model.safetensors",
+      "url": "https://hf-mirror.com/openai/clip-vit-large-patch14/resolve/32bd64288804d66eefd0ccbe215aa642df71cc41/model.safetensors?download=true",
+      "sha256": "a2bf730a0c7debf160f7a6b50b3aaf3703e7e88ac73de7a314903141db026dcb",
+      "bytes": 1710540580
+    }
+  }
+}

@@ -3,13 +3,34 @@
 !/.gitattributes
 !/.gitignore
 !/README.md
+!/GENUND_DATASET_REPORT.md
+!/UNIFIED_MM_CORPUS_PLAN.md
+!/DCVLM_SOURCE_OVERLAP_REPORT.md
+!/INSPIRE.md
+!/TUNING.md
+!/launch_job.py
+!/train_production.py
+!/tune64.py
 !/environment.core17.txt
 !/requirements-data.lock
+!/scripts/
+!/corpus_pipeline/
 !/ascend_pretrain/
 !/assets/
 !/validation_assets/
 
+/scripts/*
+!/scripts/*.py
+!/scripts/*.md
+!/scripts/dcvlm_unblur/
+!/scripts/social_image_probe/
+!/scripts/check_genund_presence.py
+!/scripts/check_genund_presence.md
+!/scripts/test_check_genund_presence.py
+!/scripts/inventory_genund.py
+
 /ascend_pretrain/*
+!/ascend_pretrain/*.py
 !/ascend_pretrain/__init__.py
 !/ascend_pretrain/attention_plan.py
 !/ascend_pretrain/checkpoint.py
@@ -51,6 +72,10 @@
 !/ascend_pretrain/test_ema.py
 !/ascend_pretrain/test_eval_snapshot.py
 !/ascend_pretrain/test_input_pipeline.py
+!/ascend_pretrain/test_i2t_image_sampling.py
+!/ascend_pretrain/test_i2t_loss_scaling.py
+!/ascend_pretrain/test_i2t_null_inference.py
+!/ascend_pretrain/test_i2t_cq_selection.py
 !/ascend_pretrain/test_loss_accumulation.py
 !/ascend_pretrain/test_mc2.py
 !/ascend_pretrain/test_moss_reference.py
@@ -76,6 +101,7 @@
 !/ascend_pretrain/input_pipeline/chat.py
 !/ascend_pretrain/input_pipeline/device.py
 !/ascend_pretrain/input_pipeline/images.py
+!/ascend_pretrain/input_pipeline/loss_permissions.py
 !/ascend_pretrain/input_pipeline/moss_vae.py
 !/ascend_pretrain/input_pipeline/packing.py
 !/ascend_pretrain/input_pipeline/parallel.py
@@ -111,3 +137,7 @@
 
 /validation_assets/*
 !/validation_assets/suite.json
+
+__pycache__/
+*.pyc
+.pytest_cache/

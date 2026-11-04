@@ -1,0 +1,104 @@
+{
+  "schema_version": "source_context_enrichment_v1",
+  "verified_date": "2026-10-22",
+  "purpose": "Source-level context for a separately recorded second review round; not per-image verification or a policy update.",
+  "mutates_frozen_blind_inputs": false,
+  "changes_source_image_origin": false,
+  "changes_core_filter_rules": false,
+  "establishes_per_image_ground_truth": false,
+  "sources": {
+    "chartx": {
+      "scope": "upstream_dataset_and_declared_DCVLM_source_mapping",
+      "context_claims": [
+        {
+          "claim": "ChartX 原论文 §3.2 说明其绘图多样性通过 matplotlib、seaborn、plotly、mplfinance 等绘图库及参数变化实现。",
+          "url": "https://arxiv.org/html/2402.12185#S3.SS2",
+          "evidence_type": "upstream_author_paper",
+          "scope": "upstream_dataset_production_process"
+        },
+        {
+          "claim": "ChartX 原论文 §3.3 说明 GPT-4 生成数据、文本和绘图代码，随后利用生成的绘图代码渲染图像；不能把 AI 生成的数值、文本或代码直接等同于生成式图像模型产生的像素。",
+          "url": "https://arxiv.org/html/2402.12185#S3.SS3",
+          "evidence_type": "upstream_author_paper",
+          "scope": "upstream_dataset_production_process"
+        },
+        {
+          "claim": "作者数据集提供图像、CSV、Python 代码与文本；公开字段包括 imgname、img、description、summarization、redrawing 和 QA，可用于后续原始样本映射。",
+          "url": "https://huggingface.co/datasets/InternScience/ChartX",
+          "evidence_type": "upstream_author_dataset_card_and_viewer",
+          "scope": "upstream_dataset_schema"
+        }
+      ],
+      "mapping_evidence": [
+        {
+          "claim": "DCVLM 官方来源表引用 ChartX 论文，并将下载来源指向 U4R/ChartX；此链接当前重定向到 InternScience/ChartX。它支持公开声明的来源链路，不证明包装 key 到上游 imgname 的逐图对应。",
+          "url": "https://arxiv.org/html/2606.28551v3#A5.SS3",
+          "declared_source_url": "https://huggingface.co/datasets/U4R/ChartX",
+          "resolved_author_dataset_url": "https://huggingface.co/datasets/InternScience/ChartX",
+          "evidence_type": "DCVLM_author_source_table",
+          "scope": "declared_source_mapping_only"
+        },
+        {
+          "claim": "ChartVLM 官方仓库提供 ChartX 论文与作者数据集入口；旧组织路径重定向到 InternScience/ChartVLM。",
+          "url": "https://github.com/InternScience/ChartVLM",
+          "previous_url": "https://github.com/UniModal4Reasoning/ChartVLM",
+          "evidence_type": "upstream_author_repository",
+          "scope": "author_project_identity"
+        }
+      ],
+      "review_guidance": [
+        "本项目允许程序绘图，包括 LLM 辅助代码绘图；不要仅因统计量虚构、单位不合理或文字由 LLM 产生就判为生成式图像像素。",
+        "数值／标注正确性属于另一项质量审查，不是图像生产过程的充分证据。",
+        "只能声明来源级支持；未完成逐图原图或变换匹配时，不得声称当前图片已经验真。"
+      ],
+      "limitations": [
+        "未完成 DCVLM 数字 source_key 与作者 imgname 的逐项匹配。",
+        "未完成当前图像与上游图像的字节、像素或可解释变换匹配。",
+        "只读检查的一条本地配套记录不代表已审计全部 ChartX 包装数据。"
+      ]
+    },
+    "casia": {
+      "scope": "upstream_dataset_and_declared_DCVLM_source_mapping",
+      "context_claims": [
+        {
+          "claim": "CASIA 官方数据库介绍称，CASIA-OLHWDB / CASIA-HWDB 样本由 1,020 名书写者在 2007–2010 年用 Anoto 笔在纸上书写，包含独立字符和连续文本。",
+          "url": "https://nlpr.ia.ac.cn/databases/handwriting/home.html",
+          "evidence_type": "original_dataset_owner_documentation",
+          "scope": "upstream_dataset_collection_process"
+        },
+        {
+          "claim": "CASIA 官方离线说明称手写页面被扫描、分割及标注；处理后图像背景值为 255、前景为 0–254 的灰度值。小字符、白底或灰度轮廓本身不构成 AI 像素生成证据。",
+          "url": "https://nlpr.ia.ac.cn/databases/handwriting/Offline_database.html",
+          "evidence_type": "original_dataset_owner_documentation",
+          "scope": "upstream_dataset_digitization_process"
+        },
+        {
+          "claim": "CASIA 原作者 ICDAR 2011 论文说明数据由人书写产生，并描述在线轨迹和离线图像数据及其字符／文本子集。",
+          "url": "https://nlpr.ia.ac.cn/databases/download/ICDAR2011-CASIA%20databases.pdf",
+          "evidence_type": "upstream_author_paper",
+          "scope": "upstream_dataset_collection_process"
+        }
+      ],
+      "mapping_evidence": [
+        {
+          "claim": "DCVLM 官方来源表将 CASIA 列入 Naive OCR，引用 CASIA 2011 论文，下载源链接指向 pascalbliem 的 Kaggle 镜像；本次未审计该镜像全部内容与转换过程。",
+          "url": "https://arxiv.org/html/2606.28551v3#A5.SS3",
+          "declared_source_url": "https://www.kaggle.com/datasets/pascalbliem/handwritten-chinese-character-hanzi-datasets",
+          "evidence_type": "DCVLM_author_source_table",
+          "scope": "declared_source_mapping_only"
+        }
+      ],
+      "review_guidance": [
+        "不能单凭小尺寸、白底、笔画粗细或压缩模糊判定图像由 AI 生成。",
+        "官方人类书写流程是来源级支持，不是当前 DCVLM 包装图片的逐图真值。",
+        "第二轮可在理由中引用这些来源事实，但应保留镜像转换和原始字符索引未核实的边界。"
+      ],
+      "limitations": [
+        "未审计 DCVLM 所用 Kaggle 镜像的全部文件、转换脚本或生成历史。",
+        "未将当前图片映射到原始 writer、GNT 文件和字符序号。",
+        "未完成当前图像与原始样本的字节、像素或可解释变换匹配。",
+        "只读检查的一条本地配套记录不代表已审计全部 CASIA 包装数据。"
+      ]
+    }
+  }
+}

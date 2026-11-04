@@ -32,27 +32,20 @@ class CrossAttentionControl(unittest.TestCase):
     @classmethod
     def setUpClass(cls):torch.set_num_threads(1)
 
-    def test_zero_gate_is_identity_at_initialization(self):
-        """An untrained cross block must reproduce the concat-free baseline."""
+    def test_small_nonzero_output_projection_without_gate(self):
         torch.manual_seed(7)
         cfg=small_cfg(True)
         model=MOSSRenderer(cfg).double()
-        batch=layout_and_batch()
-        batch.latents=batch.latents.double();batch.noise=batch.noise.double()
-        batch.generation.time_features=torch.randn(2,256,generator=torch.Generator().manual_seed(3)).double()
-        cond=torch.randn(len(batch.generation.text_ends),cfg.image_condition_queries,cfg.width,dtype=torch.float64)
-        with torch.no_grad():
-            before=model(cond,batch)
-            # Perturbing conditions must not change the loss while gate==0.
-            other=model(cond+10*torch.randn_like(cond),batch)
-        torch.testing.assert_close(before,other,atol=0,rtol=0)
+        expected=.02/(2*cfg.dit_layers)**.5
+        for layer in model.layers:
+            self.assertFalse(hasattr(layer.cross_attn,'gate'))
+            weight=layer.cross_attn.to_out.impl.weight
+            self.assertAlmostEqual(weight.std().item(),expected,delta=expected*.05)
 
-    def test_conditions_influence_output_once_gate_opens(self):
+    def test_conditions_influence_output_from_initialization(self):
         torch.manual_seed(11)
         cfg=small_cfg(True)
         model=MOSSRenderer(cfg).double()
-        with torch.no_grad():
-            for layer in model.layers:layer.cross_attn.gate.normal_(0,.5)
         batch=layout_and_batch()
         batch.latents=batch.latents.double();batch.noise=batch.noise.double()
         batch.generation.time_features=torch.randn(2,256,generator=torch.Generator().manual_seed(3)).double()
@@ -67,8 +60,6 @@ class CrossAttentionControl(unittest.TestCase):
         torch.manual_seed(13)
         cfg=small_cfg(True)
         model=MOSSRenderer(cfg).double()
-        with torch.no_grad():
-            for layer in model.layers:layer.cross_attn.gate.normal_(0,.5)
         batch=layout_and_batch()
         batch.latents=batch.latents.double();batch.noise=batch.noise.double()
         batch.generation.time_features=torch.randn(2,256,generator=torch.Generator().manual_seed(3)).double()
@@ -106,36 +97,114 @@ class CrossAttentionControl(unittest.TestCase):
         self.assertTrue(trainable)
 
 
-    def test_projections_initialized_and_gate_gradient_alive(self):
-        """A zero to_out also zeroes d(loss)/d(gate), killing the branch.
+    def test_projections_and_conditions_get_first_step_gradients(self):
+        """Reproduces the real failure: construction under no_init_weights.
 
-        The fully-pretrained path sets perform_initialization=False and
-        official_tensors() skips this block, so without an explicit init the
-        projections stay at whatever the allocator returned -- measured as
-        exact zeros on a real 1250-step run. The gate then never receives
-        gradient and the renderer silently learns unconditional generation.
+        A fully pretrained run builds the model inside transformers'
+        no_init_weights(), which replaces torch.nn.init.* with no-ops, and sets
+        perform_initialization=False. Pretrained tensors are then restored by
+        load_pretrained, but official_tensors() deliberately skips this block,
+        so nothing ever writes it. Constructor-time init is silently discarded,
+        leaving exact zeros -- and a zero to_out zeroes d(loss)/d(gate) too, so
+        the gate can never open. Measured on a real 1250-step run: every gate
+        and every projection was still exactly zero.
         """
+        import torch.nn as nn
+        names=['uniform_','normal_','trunc_normal_','constant_','ones_','zeros_',
+               'xavier_uniform_','xavier_normal_','kaiming_uniform_','kaiming_normal_']
+        saved={n:getattr(nn.init,n) for n in names if hasattr(nn.init,n)}
+        def skip(*a,**k):pass
         torch.manual_seed(5)
+        reference=MOSSRenderer(small_cfg(True)).double()
         cfg=small_cfg(True)
-        model=MOSSRenderer(cfg).double()
+        try:
+            for n in saved:setattr(nn.init,n,skip)
+            model=MOSSRenderer(cfg).double()
+        finally:
+            for n,f in saved.items():setattr(nn.init,n,f)
+        # Whatever the allocator returned is not a deliberate initialization:
+        # on the real 1250-step run every one of these was exactly zero. Assert
+        # the invariant that matters instead of the allocator's whim -- torch's
+        # init functions were genuinely suppressed during construction.
+        probe=torch.zeros(4,4)
+        try:
+            for n in saved:setattr(nn.init,n,skip)
+            nn.init.normal_(probe,std=.02)
+        finally:
+            for n,f in saved.items():setattr(nn.init,n,f)
+        self.assertEqual(probe.abs().max().item(),0.,
+                         'precondition: no_init_weights suppresses torch init')
+        # Stand in for load_pretrained, which restores every official tensor but
+        # deliberately skips cross-attention.
+        official=set(reference.official_tensors())
+        with torch.no_grad():
+            for name,parameter in model.named_parameters():
+                if 'cross_attn' in name:continue
+                parameter.copy_(dict(reference.named_parameters())[name])
+        self.assertFalse([n for n in official if 'cross_attn' in n])
+        self.assertEqual(model.initialize_cross_attention(),len(model.layers)*3)
         for index,layer in enumerate(model.layers):
             for name in ('to_q','to_kv','to_out'):
                 weight=getattr(layer.cross_attn,name).impl.weight
+                self.assertTrue(torch.isfinite(weight).all(),'%s must be finite'%name)
                 self.assertGreater(weight.abs().max().item(),0.,
-                    'layer %d %s must be initialized, not left at zero'%(index,name))
-            self.assertEqual(layer.cross_attn.gate.abs().max().item(),0.,
-                'gate stays zero so step 0 is an exact identity')
+                    'layer %d %s must be initialized after construction'%(index,name))
         batch=layout_and_batch()
         batch.latents=batch.latents.double();batch.noise=batch.noise.double()
         batch.generation.time_features=torch.randn(2,256,generator=torch.Generator().manual_seed(3)).double()
         cond=torch.randn(len(batch.generation.text_ends),cfg.image_condition_queries,
-                         cfg.width,dtype=torch.float64)
+                         cfg.width,dtype=torch.float64,requires_grad=True)
         model(cond,batch).backward()
+        self.assertTrue(torch.isfinite(cond.grad).all())
+        self.assertGreater(cond.grad.abs().max().item(),0.)
         for index,layer in enumerate(model.layers):
-            grad=layer.cross_attn.gate.grad
-            self.assertIsNotNone(grad,'layer %d gate got no gradient'%index)
-            self.assertGreater(grad.abs().max().item(),0.,
-                'layer %d gate must receive gradient or it never opens'%index)
+            for name in ('to_q','to_kv','to_out'):
+                grad=getattr(layer.cross_attn,name).impl.weight.grad
+                self.assertIsNotNone(grad,(index,name))
+                self.assertTrue(torch.isfinite(grad).all(),(index,name))
+                self.assertGreater(grad.abs().max().item(),0.,(index,name))
+
+    def test_tp_initialization_matches_full_weights(self):
+        """TP4 must partition one draw, including the strided K/V projection."""
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        from . import parallel as P
+        cfg=small_cfg(True)
+        full=MOSSRenderer(cfg)
+        torch.manual_seed(101)
+        full.initialize_cross_attention()
+        for rank in range(4):
+            model=MOSSRenderer(cfg)
+            for layer in model.layers:
+                for name,dim,stride in [('to_q',0,1),('to_kv',0,2),('to_out',1,1)]:
+                    linear=getattr(layer.cross_attn,name)
+                    shape=list(linear.impl.weight.shape);shape[dim]//=4
+                    linear.impl.weight=torch.nn.Parameter(torch.empty(shape))
+                    P.mark_sharded(linear.impl.weight,dim=dim,stride=stride)
+            with patch.object(P,'tp_size',return_value=4),patch.object(P,'state',
+                    return_value=SimpleNamespace(get_tensor_model_parallel_rank=lambda:rank)):
+                torch.manual_seed(101)
+                model.initialize_cross_attention()
+                for expected,actual in zip(full.layers,model.layers):
+                    for name in ('to_q','to_kv','to_out'):
+                        weight=getattr(actual.cross_attn,name).impl.weight
+                        source=getattr(expected.cross_attn,name).impl.weight
+                        torch.testing.assert_close(weight,P.checkpoint_shard(source,weight),rtol=0,atol=0)
+
+    def test_recomputed_cross_attention_matches_gradients(self):
+        torch.manual_seed(23)
+        plain=MOSSRenderer(small_cfg(True)).double()
+        recomputed=copy.deepcopy(plain);recomputed.cfg.checkpoint_dit=True
+        batch=layout_and_batch()
+        batch.generation.time_features=torch.randn(2,256,dtype=torch.float64)
+        cond=torch.randn(2,4,64,dtype=torch.float64,requires_grad=True)
+        other=cond.detach().clone().requires_grad_()
+        a=plain(cond,batch);b=recomputed(other,batch)
+        a.backward();b.backward()
+        torch.testing.assert_close(a,b,rtol=0,atol=0)
+        torch.testing.assert_close(cond.grad,other.grad)
+        for (name,p),(_,q) in zip(plain.named_parameters(),recomputed.named_parameters()):
+            if p.grad is not None:torch.testing.assert_close(p.grad,q.grad,msg=name)
 
 
 if __name__=='__main__':unittest.main()

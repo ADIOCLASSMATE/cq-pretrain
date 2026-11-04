@@ -1,0 +1,60 @@
+{
+  "schema_version": "corpus_pipeline.serving_profiles.v1",
+  "generator": [
+    {
+      "profile_id": "qwen_bf16_32",
+      "cards": 32,
+      "payload_path": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/runtime/qwen-submitted-payload-r01.json",
+      "launch_command": "bash /inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/qwen/launch.sh",
+      "deployment_prefix": "qwen397b-bf16-20261022",
+      "name_prefix": "corpus-qwen397b-bf16-p3-20261022",
+      "heartbeat_root": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/qwen/runtime/corpus-20261022",
+      "model": "Qwen3.5-397B-A17B",
+      "revision": "local-config-index-sha256:76392a2c8b8da7f7952c23cc4c56e46c7a056d110dfab7b68b49e05548423218",
+      "precision": "BF16",
+      "max_images": 16,
+      "max_model_len": 65536,
+      "qualification_required": true,
+      "official_recipe": "https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/Qwen3.5-397B-A17B.html",
+      "ready_requires": "fresh model authentication + 26 image OCR/color/order checks across concurrency 1/4/8; production content QC remains separate",
+      "processor_revision": "sha256:e674e497b49ea0d7e7f6d094806f7263989da7ced01bb393af4c7507dddc4d37"
+    },
+    {
+      "profile_id": "qwen_w8a8_16",
+      "cards": 16,
+      "payload_path": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/runtime/qwen-w8a8-template-payload.json",
+      "launch_command": "bash /inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/qwen/launch-w8a8.sh",
+      "deployment_prefix": "qwen397b-w8a8-20261022",
+      "name_prefix": "corpus-qwen397b-w8a8-p3-20261022",
+      "heartbeat_root": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/qwen/runtime/corpus-20261022-w8a8",
+      "model": "Qwen3.5-397B-A17B-W8A8",
+      "revision": "local-quant-config-index-sha256:0555fcb5efa1d62e3183f0893816eca2979f573d5b3003d3ff7469f96c921141",
+      "precision": "W8A8_DYNAMIC",
+      "max_images": 16,
+      "max_model_len": 32768,
+      "qualification_required": true,
+      "official_recipe": "https://docs.vllm.ai/projects/ascend/en/latest/tutorials/models/Qwen3.5-397B-A17B.html",
+      "ready_requires": "fresh model authentication + 26 image OCR/color/order checks across concurrency 1/4/8; production content QC remains separate",
+      "processor_revision": "sha256:e0d32a81d9417915b6a92212b7ef7f6b45d393137dfd6066254e1137c8ca6094"
+    }
+  ],
+  "verifier": [
+    {
+      "profile_id": "gemma_bf16_16_tp4x4",
+      "cards": 16,
+      "payload_path": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/runtime/gemma-submitted-payload-r01.json",
+      "qualification_required": true,
+      "local_replicas": 4,
+      "minimum_live_job_quota_cards": 16,
+      "launch_command": "env CORPUS_BACKEND=inspire_job CORPUS_LOCAL_REPLICAS=4 bash /inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/gemma4/launch.sh",
+      "deployment_prefix": "gemma4-31b-20261022",
+      "name_prefix": "corpus-gemma4-bf16-p3-20261022",
+      "heartbeat_root": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/gemma4/runtime",
+      "model": "Gemma4-31B-IT",
+      "revision": "842da3794eaa0b77d5f08bae87a17459d91ff475",
+      "precision": "BF16",
+      "max_images": 8,
+      "processor_revision": "sha256:086ba19672111f365ec50e29f3ff86c3a88c6c654fb1b7a16c23a3a3ebff5552"
+    }
+  ]
+}

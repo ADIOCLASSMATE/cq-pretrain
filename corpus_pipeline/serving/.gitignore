@@ -1,0 +1,5 @@
+private/
+runtime/
+qwen/runtime/
+__pycache__/
+!qwen36_w8a8_20261024/runtime/

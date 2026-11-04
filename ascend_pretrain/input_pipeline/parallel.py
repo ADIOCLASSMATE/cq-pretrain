@@ -66,6 +66,14 @@ class OrderedGradientBuckets:
                 if group is not None:
                     group.register_grad_ready(parameter, self.wrapped.force_all_reduce)
 
+    def absent_renderer(self):
+        # An I2T pack can use every image for understanding while sampling no
+        # renderer targets. Vision gradients still arrive through text loss.
+        for parameter in self.wrapped.module.renderer.parameters():
+            group = self.wrapped.param_to_bucket_group.get(parameter)
+            if group is not None:
+                group.register_grad_ready(parameter, self.wrapped.force_all_reduce)
+
     def absent_text(self):
         module=getattr(self.wrapped.module,'lm_head',None)
         if module is not None:

@@ -27,6 +27,10 @@ def parse_args():
     parser.add_argument('--tiny', action='store_true')
     parser.add_argument('--method', choices=('CQ_IT','Bi_I+CQ_T'))
     parser.add_argument('--image-condition-queries', type=int)
+    parser.add_argument('--i2t-image-loss-probability',type=float,
+                        help='Probability of computing null image loss for image-first I2T captions; text understanding is retained')
+    parser.add_argument('--cfg-null-condition',choices=('empty_t2i','i2t_prefix'),
+                        help='Null template used by qualitative CFG sampling; inherits the model config')
     parser.add_argument('--tp', type=int, default=1)
     parser.add_argument('--sequence-length', type=int, default=8192)
     parser.add_argument('--images', type=int, default=2)
@@ -108,6 +112,9 @@ def parse_args():
         parser.error('Require finite lr > 0 and 0 <= min-lr <= lr')
     if not math.isfinite(args.moss_ema_decay) or not 0<=args.moss_ema_decay<1:
         parser.error('Require finite 0 <= moss-ema-decay < 1')
+    if args.i2t_image_loss_probability is not None and (
+            not math.isfinite(args.i2t_image_loss_probability) or not 0<=args.i2t_image_loss_probability<=1):
+        parser.error('Require finite 0 <= i2t-image-loss-probability <= 1')
     if args.eval_snapshot_every < 0:
         parser.error('Require eval-snapshot-every >= 0')
     return args
@@ -121,6 +128,16 @@ def learning_rate(step, args):
     progress = min(1., max(0., (step - args.lr_warmup_steps) /
         max(1, args.lr_decay_steps - args.lr_warmup_steps)))
     return args.min_lr + .5 * (args.lr - args.min_lr) * (1 + math.cos(math.pi * progress))
+
+
+def data_loss_scales(batch,global_text_tokens,global_generation_images,dp):
+    """Global target averages after DP reduction, independent of pack sizes.
+
+    Understanding-only images remain in the backbone but must not change the
+    renderer denominator. A replica with zero selected images contributes zero.
+    """
+    return (dp*batch.text_indices.numel()/max(1,global_text_tokens),
+            dp*batch.generation_image_count/max(1,global_generation_images))
 
 
 def main():
@@ -146,6 +163,8 @@ def main():
     if args.text_assets is not None:cfg.text_assets=args.text_assets
     if args.method is not None: cfg.method=args.method
     if args.image_condition_queries is not None: cfg.image_condition_queries=args.image_condition_queries
+    if args.i2t_image_loss_probability is not None:cfg.i2t_image_loss_probability=args.i2t_image_loss_probability
+    if args.cfg_null_condition is not None:cfg.cfg_null_condition=args.cfg_null_condition
     if args.preserve_documents:cfg.preserve_documents=True
     if args.long_document_policy is not None:cfg.long_document_policy=args.long_document_policy
     if args.dit_microbatch_tokens is not None:cfg.generation_token_budget=args.dit_microbatch_tokens
@@ -255,6 +274,16 @@ def main():
         elif cfg.vision_encoder=='qwen35':model.patch_embed.load_pretrained(cfg.vision_assets)
         if cfg.renderer=='moss':
             loaded_weights=dict(backbone=loaded_weights,renderer=model.renderer.load_pretrained(cfg.moss_assets))
+    # Added blocks have no pretrained source and are built under no_init_weights,
+    # so they must be initialized explicitly here, outside that context. Resume
+    # and init-checkpoint paths restore these tensors from the checkpoint.
+    if (cfg.renderer=='moss' and not args.resume and not args.init_checkpoint
+            and hasattr(model.renderer,'initialize_cross_attention')):
+        initialized=model.renderer.initialize_cross_attention()
+        if initialized:
+            startup.update(cross_attention_projections_initialized=initialized,
+                           cross_attention_residual='ungated',
+                           cross_attention_output_init_std=.02/(2*cfg.dit_layers)**.5)
     model = model.to(device='npu').train()
     if args.init_checkpoint and not args.resume:
         loaded_weights=checkpoint_io.initialize_model(args.init_checkpoint,model,cfg)
@@ -560,7 +589,10 @@ def main():
                     sum(d['completed'] and d.get('direction')=='I2T' for x in micro_batches if x for d in x[1]['documents']),
                     sum(x[0].ids.shape[1]+len(x[0].mainline.query_positions) for x in micro_batches if x),
                     sum(x[0].ids.shape[1]-x[1]['occupied'] for x in micro_batches if x),
-                    sum(x[1].get('dit_microbatches',int(bool(x[1]['images']))) for x in micro_batches if x)],device='npu',dtype=torch.int64)
+                    sum(x[1].get('dit_microbatches',int(bool(x[0].generation_image_count))) for x in micro_batches if x),
+                    sum(x[0].generation_image_count for x in micro_batches if x),
+                    sum(x[1].get('i2t_null_candidates',0) for x in micro_batches if x),
+                    sum(x[1].get('i2t_null_images',0) for x in micro_batches if x)],device='npu',dtype=torch.int64)
                 dist.all_reduce(counts,group=P.state().get_data_parallel_group())
                 counts=counts.tolist()
                 if counts[4]==0:
@@ -581,8 +613,7 @@ def main():
                         batch=padding_batch; scales=(0.,0.)
                     else:
                         cpu_batch,receipt=item[0],item[1]
-                        scales=(dp*cpu_batch.text_indices.numel()/max(1,counts[0]),
-                                dp*len(cpu_batch.image_indices)/max(1,counts[1]))
+                        scales=data_loss_scales(cpu_batch,counts[0],counts[12],dp)
                         batch=loader.acquire(item)
                         consumed_receipts.append(receipt)
                     data_prepare_seconds+=time.perf_counter()-prep_begin
@@ -597,6 +628,7 @@ def main():
                     if ordered_buckets:
                         finish_parameter_gathers(wrapped)
                         if not len(batch.image_indices): ordered_buckets.absent_images()
+                        elif not batch.generation_image_count:ordered_buckets.absent_renderer()
                         if not batch.text_indices.numel():ordered_buckets.absent_text()
                     if args.phase_timing:
                         events[1].record()
@@ -637,9 +669,12 @@ def main():
                     host_wait=data_wait_seconds,prepare_host=data_prepare_seconds,device_wait=data_device_wait_seconds,
                     packs=[dict(length=x[0].ids.shape[1],text=x[0].text_indices.numel(),
                         queries=len(x[0].mainline.query_positions),images=len(x[0].image_indices),
+                        generation_images=x[0].generation_image_count,
+                        i2t_null_candidates=x[1].get('i2t_null_candidates',0),
+                        i2t_null_images=x[1].get('i2t_null_images',0),
                         vision_patches=sum(x[0].vision.lengths) if x[0].vision else 0,
                         generation_tokens=x[1].get('generation_tokens',0),
-                        dit_microbatches=x[1].get('dit_microbatches',1 if len(x[0].image_indices) else 0),
+                        dit_microbatches=x[1].get('dit_microbatches',1 if x[0].generation_image_count else 0),
                         generation_grids=x[0].generation.grids if x[0].generation else None) for x in micro_batches if x])
                 if args.phase_timing:
                     rank_row.update(forward_ms=sum(pack_forward_ms),backward_ms=sum(pack_backward_ms))
@@ -675,14 +710,19 @@ def main():
                     resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/2**20],device='npu')
                 dist.all_reduce(resource_values,op=dist.ReduceOp.MAX)
                 row.update(body_tokens=counts[2],occupied_tokens=counts[3],images_consumed=counts[1],
+                           generation_images=counts[12],i2t_null_candidates=counts[13],i2t_null_images=counts[14],
+                           i2t_null_selection_rate=counts[14]/counts[13] if counts[13] else None,
+                           i2t_null_generation_fraction=counts[14]/counts[12] if counts[12] else None,
                            generation_tokens=counts[5],documents_completed=counts[6],
                            t2i_captions_completed=counts[7],i2t_captions_completed=counts[8],
                            active_microbatches=counts[4],data_wait_seconds=resource_values[0].item(),
-                           supervised_text_tokens=counts[0],condition_query_tokens=counts[1]*cfg.image_condition_queries,
+                           supervised_text_tokens=counts[0],
+                           condition_query_tokens=(counts[12] if cfg.method=='CQ_IT' else counts[1])*cfg.image_condition_queries,
                            backbone_processed_slots=counts[9],padding_tokens=counts[10],dit_microbatches=counts[11],
                            data_prepare_seconds=resource_values[1].item(),data_device_wait_seconds=resource_values[2].item(),
                            cpu_peak_rss_gib=resource_values[3].item(),
-                           images_per_second=counts[1]/seconds,documents_per_second=counts[6]/seconds,
+                           images_per_second=counts[1]/seconds,generation_images_per_second=counts[12]/seconds,
+                           documents_per_second=counts[6]/seconds,
                            body_tokens_per_second=counts[2]/seconds,occupied_tokens_per_second=counts[3]/seconds)
             if args.phase_timing:
                 phases = torch.tensor([sum(pack_forward_ms),sum(pack_backward_ms),
@@ -764,6 +804,7 @@ def main():
             summary['body_tokens_per_second']=sum(x['body_tokens'] for x in measurements)/wall_seconds
             summary['occupied_tokens_per_second']=sum(x['occupied_tokens'] for x in measurements)/wall_seconds
             summary['images_per_second']=sum(x['images_consumed'] for x in measurements)/wall_seconds
+            summary['generation_images_per_second']=sum(x['generation_images'] for x in measurements)/wall_seconds
             summary['documents_per_second']=sum(x['documents_completed'] for x in measurements)/wall_seconds
             summary['generation_tokens_per_second']=sum(x['generation_tokens'] for x in measurements)/wall_seconds
             total_seconds=sum(x['seconds'] for x in measurements)
@@ -771,7 +812,8 @@ def main():
             summary['capacity_slots_per_second']=total_capacity/total_seconds
             summary['capacity_slots_per_second_per_card']=total_capacity/total_seconds/world
             summary['wall_capacity_slots_per_second']=total_capacity/wall_seconds
-            for key in ('occupied_tokens','body_tokens','images_consumed','supervised_text_tokens',
+            for key in ('occupied_tokens','body_tokens','images_consumed','generation_images',
+                        'i2t_null_candidates','i2t_null_images','supervised_text_tokens',
                         'condition_query_tokens','backbone_processed_slots','padding_tokens','active_microbatches','dit_microbatches'):
                 values=[x[key] for x in measurements]
                 summary[key+'_per_update']=dict(mean=statistics.mean(values),min=min(values),max=max(values))

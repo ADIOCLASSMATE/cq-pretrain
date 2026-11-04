@@ -1,0 +1,319 @@
+{
+  "schema_version": "prepared.staged_recaption_policy.v1",
+  "version": "2026-10-23",
+  "kind": "versioned_design_contract_implemented_by_executable_planner_not_a_dynamic_rules_dsl",
+  "production_execution_enabled": true,
+  "supported_collections": [
+    "dcvlm",
+    "genund"
+  ],
+  "user_choices": {
+    "early_phase": "retain_native_and_exactly_bound_existing_or_generated_text_unless_confirmed_wrong; flag_uncertainty; supplement_verified_missing_or_failure_only",
+    "late_phase": "separately_select_future_high_resolution_pool; current_corpora_receive_potential_tags_only",
+    "image_ai_policy": "inherit_current_policy; ai_text_mark_not_reject"
+  },
+  "invariants": {
+    "original_data_read_only": true,
+    "preserve_original_text_and_provenance": true,
+    "dcvlm_direction_conversion_allowed": false,
+    "t2i_collection": "genund",
+    "replace_qa_with_caption": false,
+    "replace_interleaved_body": false,
+    "ai_text_is_recaption_trigger": false,
+    "short_caption_alone_is_recaption_trigger": false,
+    "missing_triplet_alone_triggers_early_generation": false,
+    "sscd_neighbor_implies_caption_reusable": false,
+    "planning_decision_grants_training_admission": false,
+    "schema_success_implies_grounding": false,
+    "uncertainty_alone_triggers_early_rewrite": false,
+    "uncertainty_counts_as_qualified_coverage": false,
+    "source_layout_candidate_implies_per_image_quality": false,
+    "upstream_annotation_claim_implies_local_recovery": false,
+    "potential_tag_selects_future_highres_pool": false
+  },
+  "decision_axes": {
+    "pairing_state": [
+      "verified",
+      "unresolved",
+      "broken"
+    ],
+    "caption_state": [
+      "usable_original",
+      "usable_generated",
+      "missing_verified",
+      "field_not_a_caption",
+      "quality_suspected",
+      "quality_failure_verified",
+      "unknown"
+    ],
+    "caption_origin": [
+      "human",
+      "ai",
+      "mixed",
+      "unknown"
+    ],
+    "quality_evidence_scope": [
+      "per_annotation_visual_review",
+      "source_stratum_audit",
+      "not_reviewed"
+    ],
+    "actions": [
+      "blocked_by_existing_gate",
+      "repair_metadata",
+      "preserve_native_task",
+      "reuse_original",
+      "reuse_annotation",
+      "clean_surface",
+      "review_caption",
+      "generate_missing",
+      "regenerate_verified_failure",
+      "complete_highres_caption",
+      "not_in_stage_pool"
+    ]
+  },
+  "gate_order": [
+    "resolve_source_snapshot_and_native_task_contract",
+    "apply_existing_source_image_and_record_gates",
+    "verify_asset_and_annotation_join",
+    "recover_all_known_existing_caption_fields",
+    "evaluate_phase_and_annotation_compatibility",
+    "plan_only_needed_annotation_work",
+    "validate_structure_and_grounding",
+    "publish_immutable_delta_and_training_view"
+  ],
+  "phases": {
+    "early_mixed": {
+      "caption_requirement": "at_least_one_task_compatible_exactly_bound_usable_description_without_confirmed_semantic_failure; full_triplet_not_required",
+      "native_noncaption_tasks": "preserve_native_targets_roles_and_order; uncertainty_marked; confirmed_wrong_native_QA_pending",
+      "new_generation_reasons": [
+        "caption_missing_after_verified_metadata_recovery",
+        "confirmed_caption_semantic_failure_with_verified_asset_binding_and_no_usable_alternative"
+      ],
+      "suspected_failure": "retain_and_mark_when_binding_and_other_gates_pass; not_qualified_coverage",
+      "preserve_existing_multigranularity_examples": true,
+      "new_annotation_quality_contract": "retain_actual_per_variant_checks_and_concerns; early_uncertain_without_confirmed_failure_may_be_retained_and_flagged; never_highres_coverage",
+      "uncertainty_policy": {
+        "applies_to": [
+          "native_text",
+          "validated_imported_candidate",
+          "generated_candidate"
+        ],
+        "retain_actual_verdict_and_concerns": true,
+        "retained_with_uncertainty": true,
+        "confirmed_failure_blocks_candidate": true,
+        "optional_review_transport_failure": "retain_usable_original_and_mark_review_failure; do_not_fabricate_pass",
+        "does_not_relax": [
+          "image_source_provenance",
+          "image_AI_policy",
+          "original_size",
+          "asset_annotation_binding"
+        ]
+      },
+      "default_original_audit_fraction": 0.0
+    },
+    "highres_1mp": {
+      "target_training_max_pixels": 1048576,
+      "interpretation": "total_training_image_pixels; not_one_million_records_or_minimum_original_area",
+      "coverage_manifest_required": true,
+      "coverage_unit": "eligible_exact_asset_view_referenced_by_frozen_stage_manifest",
+      "coverage_scope": "all_eligible_exact_asset_views_used_by_T2I_or_caption_I2T_in_frozen_stage_manifest; explicitly_selected_auxiliary_caption_views_accounted_separately",
+      "outside_stage_pool": "not_in_stage_pool",
+      "requirement": "validated_short_medium_long_descriptions_from_resolvable_image_evidence",
+      "reuse_existing_only_if_highres_contract_compatible": true,
+      "existing_metadata_unresolved": "repair_metadata_before_recaptions",
+      "caption_native_task": "select_description_under_original_direction_language_and_instruction_contract",
+      "qa_ocr_dialogue_editing_interleaved": "image_caption_sidecar_only; preserve_native_targets_roles_order_and_context",
+      "sidecars_inserted_into_training_automatically": false,
+      "original_small_image_upsampling_proves_highres_quality": false,
+      "layout": "separate_selected_structured_annotation_branch",
+      "blockers_and_abstentions_count_as_covered": false,
+      "coverage_scope_status": "explicit_future_selected_pool_only; current_corpora_not_automatically_selected",
+      "non_caption_task_views": "not_automatically_added_to_recaption_pool; original_training_records_preserved"
+    }
+  },
+  "ordered_rules": [
+    {
+      "id": "R00",
+      "condition": "required existing image/record/source gates rejected or unresolved",
+      "action": "blocked_by_existing_gate"
+    },
+    {
+      "id": "R01",
+      "condition": "pairing unresolved/broken, schema ambiguous, or referenced annotation not yet located",
+      "action": "repair_metadata"
+    },
+    {
+      "id": "R02",
+      "condition": "native pure text or early non-caption task with no explicit auxiliary-caption contract",
+      "action": "preserve_native_task"
+    },
+    {
+      "id": "R03",
+      "condition": "late stage asset view not selected in frozen recaption coverage pool; does not remove original native training record",
+      "action": "not_in_stage_pool"
+    },
+    {
+      "id": "R04",
+      "condition": "existing annotation matches exact asset/view/language/task and evidence; early permits uncertainty flags without confirmed failure; highres requires complete qualified triplet with genuine phase-compatible receipts",
+      "action": "reuse_annotation"
+    },
+    {
+      "id": "R06",
+      "condition": "source adapter proves a surface-only correction is semantics-preserving",
+      "action": "clean_surface"
+    },
+    {
+      "id": "R05",
+      "condition": "early original caption usable and exactly bound, with no confirmed semantic failure; retain uncertainty flags",
+      "action": "reuse_original"
+    },
+    {
+      "id": "R07",
+      "condition": "early usable caption quality suspected or uncertain, exactly bound, and not established as failed",
+      "action": "reuse_original",
+      "qualified_coverage": false,
+      "alternative_action": "reuse_annotation_when_exactly_bound_existing_candidate_selected",
+      "retained_with_uncertainty": true
+    },
+    {
+      "id": "R08",
+      "condition": "early caption task, pairing verified, all known caption fields inspected and missing or non-caption",
+      "action": "generate_missing"
+    },
+    {
+      "id": "R09",
+      "condition": "early caption verified semantically failed, image identity and join verified, no other compatible usable annotation",
+      "action": "regenerate_verified_failure"
+    },
+    {
+      "id": "R10",
+      "condition": "late stage eligible selected asset has no compatible complete qualified triplet",
+      "action": "complete_highres_caption"
+    },
+    {
+      "id": "R99",
+      "condition": "no usable exactly bound caption or applicable generation/repair rule; unresolved requirements remain",
+      "action": "review_caption",
+      "automatic_training_admission": false
+    }
+  ],
+  "model_review": {
+    "output": [
+      "usable",
+      "needs_correction",
+      "uncertain"
+    ],
+    "assess": [
+      "visible_grounding",
+      "task_compatibility",
+      "language_and_format",
+      "material_coverage_gaps",
+      "unsupported_details",
+      "visible_text_fidelity_when_task_requires"
+    ],
+    "single_global_clip_threshold": null,
+    "minimum_caption_words": null,
+    "short_missing_details_without_material_task_failure": "not_a_hard_failure",
+    "source_audit_does_not_certify_every_record": true,
+    "random_baseline_and_risk_samples_kept_separate": true,
+    "missing_explicit_caption_skips_need_judge": true,
+    "systematic_source_errors": "fix_adapter_or_route_affected_subsource; avoid_judging_every_record_before_inevitable_regeneration",
+    "early_uncertain": "retain_usable_exactly_bound_text_and_true_quality_flags; never_count_as_highres_coverage"
+  },
+  "reuse": {
+    "annotation_reuse_identity": [
+      "asset_content_identity",
+      "actual_visual_view_and_geometry",
+      "annotation_artifact_hash",
+      "language",
+      "native_task_attachment_contract",
+      "stage_annotation_contract",
+      "quality_evidence_and_revision"
+    ],
+    "request_cache_identity": "retain_existing_strict_model_processor_prompt_context_budget_identity; do_not_relax_cache",
+    "different_caption_fields_are_views_not_unique_images": true,
+    "near_duplicates_edits_and_crops_require_separate_validation": true
+  },
+  "stage_accounting": [
+    "native_records",
+    "unique_asset_views",
+    "metadata_repair_pending",
+    "reused_original",
+    "reused_annotation",
+    "review_pending",
+    "generated_missing",
+    "regenerated_verified_failure",
+    "highres_triplets_verified",
+    "confirmed_quality_failures",
+    "not_in_stage_pool",
+    "retained_with_uncertainty",
+    "resolution_potential_records",
+    "resolution_potential_admitted_records",
+    "layout_source_routes",
+    "future_highres_pool_selected"
+  ],
+  "reporting": {
+    "fractions_require_current_snapshot_inventory": true,
+    "stratified_canary_not_population_estimate": true,
+    "generated_caption_origin": "ai",
+    "original_unknown_origin_remains_unknown": true
+  },
+  "evidence": [
+    "corpus_pipeline/research/RECAPTION_SOURCE_ROUTING_20261023.md",
+    "corpus_pipeline/research/STAGED_RECAPTION_INTEGRATION_AUDIT_20261023.md",
+    "corpus_pipeline/research/MOSS_PIPELINE_FACTS_20261022.md",
+    "corpus_pipeline/research/LAYOUT_SOURCE_ROUTING_20261023.md",
+    "corpus_pipeline/REFACTOR_REPORT_20261023.md"
+  ],
+  "images_only_derivation": {
+    "allowed_collection": "genund",
+    "requires": [
+      "qualified_image_asset",
+      "explicit_standalone_caption_derivation_contract",
+      "new_derived_record_identity",
+      "grounded_caption_quality_acceptance"
+    ],
+    "original_unrecovered_qa_or_sequence_marked_restored": false,
+    "unresolved_original_record_stays_unresolved": true
+  },
+  "sampling": {
+    "task_mixture_independent_of_caption_variant_selection": true,
+    "original_vs_existing_vs_new_weights": null,
+    "weight_status": "requires_explicit_frozen_training_stage_configuration",
+    "candidate_count_does_not_multiply_image_exposure": true,
+    "one_task_compatible_text_view_per_sample": true,
+    "late_annotations_do_not_mutate_early_release": true
+  },
+  "implementation": {
+    "planner": "corpus_pipeline.production.planner",
+    "runner": "corpus_pipeline.production.staged_run",
+    "reader": "corpus_pipeline.production.reader",
+    "entrypoint": "python -m corpus_pipeline process",
+    "runtime_rules_source": "Python planner plus config/rules.json and config/sources.json; this JSON documents invariants, not arbitrary executable predicates",
+    "collection_support": "DCVLM native snapshot; genund exact-stem TAR contracts for BLIP3o Long/Short and laion-aesthetics only",
+    "potential": "corpus_pipeline.production.potential"
+  },
+  "annotation_potential": {
+    "output": "batches/*/annotation_potential.jsonl",
+    "original_pixel_area_default": 1048576,
+    "pixel_area_cli": "--potential-min-pixels",
+    "minimum_original_short_edge": 128,
+    "dimension_source": "inspected_original_dimensions_only; unknown_stays_unknown",
+    "quality_claim": false,
+    "training_admission_independent": true,
+    "future_highres_pool_selected": false,
+    "automatic_api_required": false,
+    "layout_default": "source",
+    "layout_source_contracts": "corpus_pipeline/prepared/config/layout_source_contracts.json",
+    "exact_source_contract_count": 186,
+    "routes": [
+      "layout_candidate",
+      "not_default_layout",
+      "sample_to_decide"
+    ],
+    "unknown_or_mixed_source": "source_level_sampling_backlog; no_automatic_per_image_API",
+    "local_layout_binding_verified_count": 0,
+    "source_page_claim_is_local_recovery": false,
+    "image_level_layout_requires": "explicit --layout select"
+  }
+}

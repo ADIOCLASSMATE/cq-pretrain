@@ -9,6 +9,8 @@ import threading
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .loss_permissions import FIELDS as LOSS_PERMISSION_FIELDS
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -128,7 +130,9 @@ class Catalog:
             begin = ends[group - 1] if group else 0
             key = (shard, group)
             if key not in cache['groups']:
-                table = parquet.read_row_group(group, columns=self.COLUMNS, use_threads=False)
+                columns = self.COLUMNS + [name for name in LOSS_PERMISSION_FIELDS
+                                           if name in parquet.schema_arrow.names]
+                table = parquet.read_row_group(group, columns=columns, use_threads=False)
                 if table.nbytes <= self.cache_bytes:
                     while cache['groups'] and cache['bytes'] + table.nbytes > self.cache_bytes:
                         cache['bytes'] -= cache['groups'].popitem(last=False)[1].nbytes

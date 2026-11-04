@@ -25,9 +25,17 @@ class Batch:
     mainline: object = None
     generation: object = None
     vision: object = None             # Packed Qwen pixels + CPU-prepared spatial layout
+    # Indices into the understanding images/CQ rows, not into latent tokens.
+    # None preserves the historical all-images target set; empty means no DiT.
+    generation_image_indices: torch.Tensor | None = None
+
+    @property
+    def generation_image_count(self):
+        return len(self.image_indices) if self.generation_image_indices is None else self.generation_image_indices.numel()
 
     def to(self, device, non_blocking=False):
-        result=Batch(**{f.name:getattr(self,f.name).to(device,non_blocking=non_blocking) for f in fields(self)
+        result=Batch(**{f.name:(getattr(self,f.name).to(device,non_blocking=non_blocking)
+                              if getattr(self,f.name) is not None else None) for f in fields(self)
                         if f.name not in ('attention_plan','mainline','vision','generation')})
         if self.vision is not None:result.vision=self.vision.to(device,non_blocking=non_blocking)
         if self.generation is not None:result.generation=self.generation.to(device,non_blocking=non_blocking)
@@ -41,7 +49,7 @@ class Batch:
         import warnings
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore',message="The argument 'device' of Tensor.pin_memory",category=DeprecationWarning)
-            result=Batch(**{f.name:(getattr(self,f.name).pin_memory(device=device) if getattr(self,f.name).numel()
+            result=Batch(**{f.name:(getattr(self,f.name).pin_memory(device=device) if getattr(self,f.name) is not None and getattr(self,f.name).numel()
                                    else getattr(self,f.name)) for f in fields(self)
                            if f.name not in ('attention_plan','mainline','vision','generation')})
             if self.vision is not None:result.vision=self.vision.pin_memory(device)

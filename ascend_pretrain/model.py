@@ -185,8 +185,11 @@ class JointModel(nn.Module):
         # renderer gradients behind an uncomputed output-head gradient.
         image_loss=None
         image_condition=None
-        if len(batch.image_indices):
-            image_condition = hidden[batch.mainline.condition_indices]
+        if batch.generation_image_count:
+            indices = batch.mainline.condition_indices
+            if batch.generation_image_indices is not None:
+                indices = indices.index_select(0, batch.generation_image_indices)
+            image_condition = hidden[indices]
             if not defer_renderer:image_loss = self.renderer(image_condition, batch)
         text_hidden = hidden[batch.text_indices]
         targets = batch.ids.flatten()[batch.text_indices]

@@ -1,0 +1,68 @@
+{
+  "schema": "corpus.unified.pipeline.v1",
+  "scope": "full",
+  "required_collections": [
+    "dcvlm",
+    "genund"
+  ],
+  "inputs": [
+    {
+      "collection": "dcvlm",
+      "adapter": "dcvlm_native",
+      "root": "/REPLACE_WITH_SEALED_DCVLM_NATIVE"
+    },
+    {
+      "collection": "genund",
+      "adapter": "genund_native",
+      "root": "/REPLACE_WITH_SEALED_GENUND_NATIVE"
+    }
+  ],
+  "output": "/REPLACE_WITH_SHARED_OUTPUT/joint_v1",
+  "compute": {
+    "threads": 3,
+    "memory_limit": "128GB",
+    "rows_per_task": 8192,
+    "batch_size": 128,
+    "dtype": "float32",
+    "io_workers": 8,
+    "inference_engine": "optimized",
+    "optimized_qualification": "/REPLACE_WITH_CURRENT_OPTIMIZED_QUALIFICATION.json"
+  },
+  "resources": {
+    "max_cards": 512,
+    "frontpass_max_cards": 48,
+    "review_max_cards": 512,
+    "sscd_max_cards": 48,
+    "prefer_occupied_nodes": true
+  },
+  "cache": {
+    "directory": "/REPLACE_WITH_SHARED_OUTPUT/image_cache",
+    "histories": [
+      "/REPLACE_WITH_HISTORY_REGISTRY"
+    ]
+  },
+  "screening": {
+    "backend": "serving",
+    "primary": "qwen3.6-35b-a3b",
+    "concurrency": 128,
+    "primary_pool": "/REPLACE_WITH_READY_SERVING_POOL",
+    "history_decision_manifests": [],
+    "quality_decisions": [],
+    "api_key_file": "/REPLACE_WITH_PRIVATE_API_KEY_FILE"
+  },
+  "sscd": {
+    "threshold": 0.75,
+    "block_rows": 250000,
+    "query_tile": 8192,
+    "database_tile": 65536,
+    "candidate_batch": 32768,
+    "query_count": 128,
+    "reference_top_k": 10,
+    "min_free_gib": 50,
+    "backend_qualification": "/REPLACE_WITH_CURRENT_NPU_NUMERICAL_QUALIFICATION.json"
+  },
+  "policy": {
+    "profile": "task_aware_v1",
+    "t2i_uncertain": "exclude"
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "experiment": "detector_calibration_20261022",
+  "frozen_at_utc": "2026-10-22T08:22:35.358302+00:00",
+  "mode": "review_only",
+  "automatic_rejection": false,
+  "training_eligibility_decision": null,
+  "review_thresholds": {
+    "cf384": 0.9,
+    "unifd": 0.95
+  },
+  "priority_both_thresholds": {
+    "cf384": 0.9,
+    "unifd": 0.95
+  },
+  "diagnostic_only_models": [
+    "cf224"
+  ],
+  "selection_rule": "For each primary model, smallest threshold in [0.90,0.95,0.98,0.99,0.995,0.999] with <=1% calibration source-supported-keep exceedance; visual inspection confirmed non-AI domain triggers; this is an alert budget, not an FPR guarantee.",
+  "calibration_source_supported_keep_n": 444,
+  "calibration_source_supported_keep_flagged": {
+    "cf384": 1,
+    "unifd": 3
+  },
+  "calibration_visual_review_unique_images": 79,
+  "selection_inputs_sha256": {
+    "corpus_pipeline/runs/detector_calibration_20261022/calibration.samples.jsonl": "5f34c365aebe450823b9f1acf3e1e24483e95aca0d3c5ca1c46feeed278dff71",
+    "corpus_pipeline/runs/detector_calibration_20261022/calibration.scores.jsonl": "65252815ee16421b9423f92662e0ce7aa1db3fb056d6cbb4cecc3169d62453ae",
+    "corpus_pipeline/runs/detector_calibration_20261022/visual_reviews.calibration.jsonl": "7e585a4b17ea55db81e20fe3505be49dc663616c53e01665156b032440f2156e"
+  },
+  "implementation_sha256": {
+    "corpus_pipeline/detector_calibration/infer.py": "7c923112a269536ee6ae1add6d7bdba471af4cee8610afe2dc2a5d62fb3ea657",
+    "corpus_pipeline/detector_calibration/evaluate_policy.py": "09bf5e68aaef7ee803adf2bdf8d056d12741d8a331dea23870e0ab6f6e383857"
+  },
+  "holdout_images_viewed_before_freeze": false,
+  "note_on_prior_statistics": "Early CF224-only fixed-threshold all-sample summary was computed. Final CF384/UniFD choices use calibration-only files; no holdout images or final UniFD/combined holdout evaluation were inspected before freeze. This is exploratory validation, not preregistered or source-disjoint.",
+  "protected_source_origins": [
+    "programmatic",
+    "rendered"
+  ],
+  "verified_real_source_ai_edit": "annotate_and_preserve_existing_source_policy",
+  "unknown_or_mixed_low_score": "no_model_alert_never_proof_of_real",
+  "scope": "Official single-center-crop CPU FP32 baseline. No positive-ground-truth calibration or verified real-source AI-edited evaluation.",
+  "confidence": "provisional_review_operating_point_not_automatic_filter"
+}

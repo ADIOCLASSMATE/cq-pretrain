@@ -105,20 +105,11 @@ class TextProjection(nn.Module):
 class CrossAttention(nn.Module):
     """Latents (query) read CQ conditions (key/value); no RoPE on either side.
 
-    Conditions are an unordered set of learned reads of the image, not a
-    spatial sequence, so rotary position would impose a false geometry. The
-    gate is zero-initialized: at step zero this block is exactly the identity
-    and the renderer reproduces the pretrained MOSS computation, so the
-    control starts from the same place as the baseline.
-
-    The projections must be initialized here, explicitly. This block has no
-    counterpart in the official checkpoint, so `official_tensors` skips it; and
-    a fully pretrained run sets `perform_initialization=False`, so MCore never
-    initializes it either. Left to those two paths the weights stay at whatever
-    the allocator returned, which measured as exact zeros -- and a zero to_out
-    makes d(loss)/d(gate) zero as well, so the gate can never open. The branch
-    is then permanently dead while training looks healthy, because the renderer
-    simply learns unconditional generation.
+    The residual is ungated so conditions influence the renderer immediately.
+    A small, nonzero output projection limits the initial perturbation while
+    preserving gradients to the query, key/value and upstream CQ conditions.
+    MOSSRenderer.initialize_cross_attention() initializes the added weights;
+    pretrained construction must call it again outside no_init_weights().
     """
     def __init__(self,dim,heads):
         super().__init__();self.heads=heads//P.tp_size();self.dim=dim//heads
@@ -127,19 +118,13 @@ class CrossAttention(nn.Module):
         self.to_q=P.ColumnLinear(dim,dim)
         self.to_kv=P.ColumnLinear(dim,2*dim,stride=2)
         self.to_out=P.RowLinear(dim,dim)
-        with torch.no_grad():
-            for linear in (self.to_q,self.to_kv,self.to_out):
-                P.normal_init(linear.impl.weight)
-        # Zero gate keeps step 0 an exact identity; nonzero projections keep the
-        # gradient path to that gate alive so it can actually open.
-        self.gate=nn.Parameter(torch.zeros(dim))
 
     def forward(self,x,memory,layout):
         q=self.q_norm(self.to_q(self.norm_q(x)).unflatten(-1,(self.heads,-1))).flatten(1)
         k,v=self.to_kv(self.norm_kv(memory)).chunk(2,-1)
         k=self.k_norm(k.unflatten(-1,(self.heads,-1))).flatten(1)
         y=cross_packed_attention(q,k,v,self.heads,layout)
-        return x+self.to_out(y)*self.gate
+        return x+self.to_out(y)
 
 
 def cross_packed_attention(q,k,v,heads,layout):
@@ -207,6 +192,7 @@ class MOSSRenderer(nn.Module):
         self.final_norm_video=RMSNorm(dim)
         self.final_linear_video=nn.Linear(dim,cfg.latent_channels,bias=False)
         self.video_head_modulation=nn.Linear(dim,2*dim)
+        self.initialize_cross_attention()
 
     def project_conditions(self,conditions,layout,rope=None):
         dtype=self.video_embedder.weight.dtype
@@ -272,8 +258,8 @@ class MOSSRenderer(nn.Module):
             name=name.replace('.impl.','.')
             # Cross-attention conditioning is this project's addition and has
             # no counterpart in the official checkpoint. Keep strict matching
-            # for every pretrained tensor by excluding it here; its zero gate
-            # makes the untrained block an identity at initialization.
+            # for every pretrained tensor by excluding it here. The added
+            # projections are initialized separately after pretrained loading.
             if '.cross_attn.' in name:continue
             if name.endswith('.proj.qkv.weight'):
                 for label,part in zip(('q','k','v'),tensor.chunk(3,dim=0)):
@@ -281,6 +267,33 @@ class MOSSRenderer(nn.Module):
             else:target[name]=tensor
         target['rope.bands']=self.rope.bands
         return target
+
+    def initialize_cross_attention(self):
+        """Initialize new projections; call outside no_init_weights() as well.
+
+        Scale output std by sqrt(2 * depth) to keep the accumulated residual
+        perturbation small. A nonzero output lets Q/K/V and CQ receive gradients
+        on the first update. This never changes official pretrained tensors.
+        """
+        if not self.cross_conditioning:return 0
+        count=0
+        with torch.no_grad():
+            for layer in self.layers:
+                for name in ('to_q','to_kv','to_out'):
+                    linear=getattr(layer.cross_attn,name)
+                    std=.02/(2*self.cfg.dit_layers)**.5 if name=='to_out' else .02
+                    weight=linear.impl.weight
+                    shape=list(weight.shape)
+                    if getattr(weight,'tensor_model_parallel',False):
+                        shape[weight.partition_dim]*=P.tp_size()
+                    # All TP/DP ranks share the seed. Draw the same full matrix
+                    # then select each TP shard (including interleaved K/V), so
+                    # different heads do not start from identical local draws.
+                    value=weight.new_empty(shape)
+                    torch.nn.init.normal_(value,std=std)
+                    weight.copy_(P.checkpoint_shard(value,weight))
+                    count+=1
+        return count
 
     def load_pretrained(self,path):
         from safetensors import safe_open

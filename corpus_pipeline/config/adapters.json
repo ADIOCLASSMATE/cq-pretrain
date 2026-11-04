@@ -1,0 +1,201 @@
+{
+  "schema_version": "corpus_pipeline.adapters.v1",
+  "version": "2026-10-22.stage1.1",
+  "description": "Explicit source-scoped adapter settings. Template values are expanded by the runner using unit.config; adapters receive concrete paths. No basename search or automatic caption-key guessing.",
+  "sources": [
+    {
+      "id": "genund.infinity_mm.legacy_source_images_root",
+      "match": {
+        "collection": "genund",
+        "source": "Infinity-MM"
+      },
+      "config": {
+        "path_prefix_map": {
+          "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM": "{collection_root}/Infinity-MM"
+        }
+      },
+      "evidence": {
+        "local_report": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/reports/genund_20261021/annotations.json",
+        "semantic_report": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/reports/genund_20261021/annotation_semantics.json",
+        "observed_at_utc": "2026-10-21T11:52:57.438870+00:00",
+        "references_checked": 9,
+        "annotation_files_checked": 3,
+        "rewritten_paths_matching_historical_stat_evidence": 9,
+        "upstream_url": "https://huggingface.co/datasets/BAAI/Infinity-MM",
+        "examples": [
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_13/merge_priority_sample_10M_13.json",
+            "record_index": 0,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage1/merge_priority_sample_10M_13/00000/228318.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_13/00000/228318.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          },
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_13/merge_priority_sample_10M_13.json",
+            "record_index": 1,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage1/merge_priority_sample_10M_13/00000/228319.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_13/00000/228319.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          },
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_13/merge_priority_sample_10M_13.json",
+            "record_index": 2,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage1/merge_priority_sample_10M_13/00000/228320.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_13/00000/228320.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          },
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_1/merge_priority_sample_10M_1.json",
+            "record_index": 0,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage1/merge_priority_sample_10M_1/00000/235892.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_1/00000/235892.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          },
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_1/merge_priority_sample_10M_1.json",
+            "record_index": 1,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage1/merge_priority_sample_10M_1/00000/235893.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_1/00000/235893.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          },
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_1/merge_priority_sample_10M_1.json",
+            "record_index": 2,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage1/merge_priority_sample_10M_1/00000/235894.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_1/00000/235894.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          },
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/DocStruct4M_struct_aware_parse_10.json",
+            "record_index": 0,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/00000/283800.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/00000/283800.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          },
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/DocStruct4M_struct_aware_parse_10.json",
+            "record_index": 1,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/00000/283801.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/00000/283801.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          },
+          {
+            "annotation_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/DocStruct4M_struct_aware_parse_10.json",
+            "record_index": 2,
+            "original_image_path": "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/00000/283802.png",
+            "observed_resolved_path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/00000/283802.png",
+            "historical_stat_exists": true,
+            "semantic_pairing_verified": false
+          }
+        ]
+      },
+      "limits": [
+        "Only the exact prefix plus a slash boundary is rewritten; all remaining stage/subset/shard/member components are retained.",
+        "The original audit performed stat checks, not image decoding or semantic image-text verification.",
+        "Current availability must be checked at run time. Historical existence is not injected as exists=True.",
+        "Applies only to Infinity-MM records. No evidence supports rewriting the broader old root for other sources."
+      ]
+    }
+  ],
+  "pending_schema_overrides": [
+    {
+      "id": "openuni.megalith.caption_columns",
+      "enabled": false,
+      "match": {
+        "collection": "genund",
+        "source": "openuni",
+        "path_glob": "*openuni/data/megalith-10m/*"
+      },
+      "observed_caption_fields": [
+        "caption_internlm2",
+        "caption_internlm2_short",
+        "caption_florence2",
+        "caption_florence2_short",
+        "caption_sharecap",
+        "caption_sharecap_short"
+      ],
+      "unusable_default_caption_observed": "caption and sampled TXT can be a Flickr URL rather than a natural-language description",
+      "required_before_enable": [
+        "Explicitly select a caption view and preserve its model provenance; do not collapse six recaptions into six unique images.",
+        "Join captions/<shard>/<key>.json to a validated local image index before declaring a pair.",
+        "The generic caption field must not override a selected recaption when it contains only a URL."
+      ],
+      "evidence_paths": [
+        "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/reports/genund_20261021/annotations.json",
+        "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/reports/unified_mm_20261022/deep_metadata_verified.json"
+      ],
+      "example_metadata_path": "/inspire/dataset/gen-und-mm-pretrain/01/openuni/data/megalith-10m/captions/00887/008870204.json"
+    },
+    {
+      "id": "openuni.laion6m.linked_annotation",
+      "enabled": false,
+      "match": {
+        "collection": "genund",
+        "source": "openuni",
+        "path_glob": "*openuni/data/laion6m/*"
+      },
+      "observed_fields": {
+        "manifest": [
+          "image",
+          "annotation"
+        ],
+        "caption_json": [
+          "caption",
+          "detailed_caption"
+        ]
+      },
+      "required_before_enable": [
+        "Resolve data.json image and annotation references against explicitly configured raw and captions roots, then check their existence.",
+        "Do not interpret the annotation JSON filename as caption text."
+      ],
+      "evidence_paths": [
+        "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/reports/genund_20261021/annotations.json",
+        "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/reports/unified_mm_20261022/deep_metadata_verified.json"
+      ]
+    },
+    {
+      "id": "cc12m_imagenet_and_sd3.unlocated_annotations",
+      "enabled": false,
+      "sources": [
+        "CC12M_and_Imagenet21K_Recap",
+        "Stable_Diffusion_3_Recaption"
+      ],
+      "reason": "Prior bounded local audits found images but no sampled metadata files; local caption field names and joins have not been established. No schema override is justified from dataset naming alone.",
+      "evidence_path": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/reports/unified_mm_20261022/deep_metadata_verified.json"
+    }
+  ],
+  "relative_path_findings": [
+    {
+      "source": "LLaVA-OneVision-Mid-Data",
+      "expected_base": "source_root",
+      "observed_examples": [
+        "cc3m_llava_recap/00052/0.jpg",
+        "ureader-instruction-1.0/ChartQA/train/png/00006834003065.png",
+        "LLaVA-ReCap-118K/00005/0.jpg"
+      ],
+      "action": "Existing explicit source_root candidate is sufficient; no prefix rewrite."
+    },
+    {
+      "source": "llava_ov_data_new",
+      "expected_base": "collection_root",
+      "observed_examples": [
+        "llava_ov_data_new/CLEVR-Math(MathV360K)/identity_1040.jpg"
+      ],
+      "action": "Existing explicit collection_root candidate is sufficient; no prefix rewrite."
+    }
+  ],
+  "validation": {
+    "offline_rewrite_assertions_passed": 9,
+    "new_live_mount_stat_checks": 0,
+    "active_prefix_rules": 1,
+    "active_caption_schema_overrides": 0
+  }
+}

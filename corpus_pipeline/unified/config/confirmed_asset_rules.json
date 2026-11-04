@@ -1,0 +1,13 @@
+[
+  {
+    "scope": "asset",
+    "asset_id": "2637f446bc6640220c9b726c624f2156836bb7a67b754c098f7fda5f126c7fcc",
+    "reason": "placeholder",
+    "confirmed": true,
+    "evidence_ids": [
+      "sha256:3ca03e4b1d53cbff403a3436ddf7153f28658e654a65af074fb0bf668d148db7",
+      "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/cluster/runs/dcvlm_frontpass_20261022T2129Z/postprocess_20261024/sscd_release_20261026/quality_overlay/asset_rule.json"
+    ],
+    "note": "已完成DCVLM中的确证商品缺图占位图，只匹配原图编码SHA，不传播到SSCD相似图。"
+  }
+]

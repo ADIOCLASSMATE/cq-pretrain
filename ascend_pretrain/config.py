@@ -32,6 +32,10 @@ class ModelConfig:
     preserve_documents: bool = False
     long_document_policy: str = 'window'
     generation_microbatch_images: int = 0
+    # Old checkpoints trained every image. New production runs explicitly
+    # sample image-first caption targets while keeping all understanding input.
+    i2t_image_loss_probability: float = 1.0
+    cfg_null_condition: str = 'empty_t2i'
     linear_heads: int = 16
     linear_head_dim: int = 128
     linear_conv_kernel: int = 4
@@ -82,6 +86,12 @@ class ModelConfig:
         if self.generation_max_pixels and self.generation_max_pixels<256:raise ValueError('Generation must fit one 16x16 cell')
         if self.generation_token_budget < 0 or self.generation_microbatch_images < 0:
             raise ValueError('Generation microbatch limits must be nonnegative')
+        if not 0 <= self.i2t_image_loss_probability <= 1:
+            raise ValueError('I2T image loss probability must be between 0 and 1')
+        if self.i2t_image_loss_probability != 1 and self.renderer != 'moss':
+            raise ValueError('I2T image loss sampling requires the MOSS renderer')
+        if self.cfg_null_condition not in ('empty_t2i', 'i2t_prefix'):
+            raise ValueError('CFG null condition must be empty_t2i or i2t_prefix')
         if self.preserve_documents and (self.renderer != 'moss' or self.vision_encoder != 'qwen35'):
             raise ValueError('Whole-document packing requires the native Qwen/MOSS path')
         if self.long_document_policy not in ('window','error'):

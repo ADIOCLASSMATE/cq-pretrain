@@ -1,0 +1,18 @@
+vllm serve Eco-Tech/Qwen3.6-35B-A3B-w8a8 \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --data-parallel-size 1 \
+  --tensor-parallel-size 2 \
+  --enable-expert-parallel \
+  --seed 1024 \
+  --quantization ascend \
+  --served-model-name qwen3.6 \
+  --max-num-seqs 128 \
+  --max-model-len 262144 \
+  --max-num-batched-tokens 16384 \
+  --trust-remote-code \
+  --gpu-memory-utilization 0.90 \
+  --enable-prefix-caching \
+  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}' \
+  --additional-config '{"enable_cpu_binding":true, "enable_flashcomm1":true, "multistream_overlap_shared_expert": true}' \
+  --async-scheduling

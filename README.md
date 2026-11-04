@@ -10,6 +10,7 @@ Qwen3.5 backbone、双流 content/query（CQ）建模与 MOSS-Image DiT 的多�
 - Qwen3.5 ViT 编码器冻结，spatial merger、语言主干和 DiT 参与训练。
 - MOSS renderer 接收 CQ 生成的 condition queries；VAE 冻结并产生 posterior latent。
 - Q=64 配置使用 8×8 query 网格，另有 Q=256 配置和 cross-attention 变体。
+- cross-attention 变体使用 `x + to_out(attention)`，无额外 gate；输出投影采用非零的小初始化（标准差 `0.02 / sqrt(2 × DiT 层数)`），从第一步传递条件梯度。旧 gated 变体的 checkpoint 不兼容，需要重新训练。
 
 主要入口：
 
@@ -23,6 +24,29 @@ Qwen3.5 backbone、双流 content/query（CQ）建模与 MOSS-Image DiT 的多�
 | `ascend_pretrain/input_pipeline/` | 数据读取、打包与设备预处理 |
 | `ascend_pretrain/train.py` | 训练入口 |
 | `ascend_pretrain/configs/` | 模型配置 |
+
+## 数据来源约定
+
+DCVLM 保持原生 I2T、对话、交错和纯文本类型，不再把一半 caption 改为 T2I。新预处理复用已发行的 DCVLM-baseline，与 GenUND 指定子集合并；实际训练使用的版本以训练配置为准。新任务统一使用 `python -m corpus_pipeline`，入口与筛选规则见 [数据预处理说明](corpus_pipeline/README.md)。T2I50 已退役，旧实验的指标与数据游标不能当作新语料的结果。
+
+## I2T 的 CFG 无条件图像目标
+
+新训练配方使用 `--i2t-image-loss-probability 0.2 --cfg-null-condition i2t_prefix`。
+每个 image-first I2T caption 样本独立以 20% 概率参与图像 flow loss；所有样本
+仍保留图像理解输入和文本 loss。T2I 生成目标全部保留。对话和交错文档中的图片
+可能具有有效上下文，不作为这种固定前缀 null 样本抽样。
+
+抽样在 CPU 打包阶段完成，由样本 ID、数据 seed 和 epoch 确定，保持 TP 和断点
+恢复一致；新 epoch 重新抽样，不要求每个小 batch 恰好选中 20%。未选图片跳过
+生成 VAE、DiT，以及 native CQ_IT 中只用于图像生成的 query 计算。全部图片仍走
+ViT/content 流。选中目标按 DiT token budget 独立分块；图像 loss 按整个 DP/GA
+更新实际选中的图片数求平均，不做 5 倍逆概率补偿。零选中 batch 只训练理解分支。
+
+`i2t_prefix` 推理 null 复用训练的 I2T 图像 CQ 可见前缀。旧配置字段缺省保持
+`1.0 + empty_t2i`；本地生产入口默认采用新配方。改变配方需要新训练阶段，不能
+当成旧 checkpoint 的精确续训。日志记录 `generation_images`、
+`i2t_null_candidates`、`i2t_null_images` 和实际 null 比例。若 I2T/T2I 各半，
+选中生成目标中的 null 比例期望为 `0.2 / (1 + 0.2) = 16.7%`。
 
 ## 环境与资产
 

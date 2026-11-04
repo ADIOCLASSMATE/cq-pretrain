@@ -114,6 +114,7 @@ def test_empty_corpus_spans_are_dropped():
     assert [s['kind'] for s in spans] == ['image']
 
 
+from pathlib import Path
 import unittest
 
 import numpy as np
@@ -223,3 +224,65 @@ class QueryPruning(unittest.TestCase):
         plan, _, _ = self.plan_for(torch.empty(0, dtype=torch.long))
         self.assertTrue(len(plan.query_positions) > 0,
                         'a fully unsupervised pack still needs a DDP-safe graph')
+
+
+class ResumeConfigCompatibility(unittest.TestCase):
+    """Adding a defaulted field must not orphan existing checkpoints."""
+
+    def check(self, saved, current, defaults):
+        from dataclasses import fields
+        added = set(current) - set(saved)
+        benign = all(n in defaults and current[n] == defaults[n] for n in added)
+        return benign and {k: v for k, v in current.items() if k not in added} == saved
+
+    def test_new_field_at_default_is_accepted(self):
+        saved = {'width': 4096, 'layers': 32}
+        current = {'width': 4096, 'layers': 32, 'moss_cross_attention': False}
+        self.assertTrue(self.check(saved, current, {'moss_cross_attention': False}))
+
+    def test_new_field_at_non_default_is_rejected(self):
+        saved = {'width': 4096}
+        current = {'width': 4096, 'moss_cross_attention': True}
+        self.assertFalse(self.check(saved, current, {'moss_cross_attention': False}),
+                         'a model that actually changed must not resume')
+
+    def test_changed_existing_field_is_rejected(self):
+        saved = {'width': 4096, 'layers': 32}
+        current = {'width': 2048, 'layers': 32, 'moss_cross_attention': False}
+        self.assertFalse(self.check(saved, current, {'moss_cross_attention': False}))
+
+    def test_removed_field_is_rejected(self):
+        saved = {'width': 4096, 'layers': 32}
+        current = {'width': 4096}
+        self.assertFalse(self.check(saved, current, {}))
+
+    def test_real_config_matches_its_own_dict(self):
+        from .config import ModelConfig
+        from dataclasses import fields
+        cfg = ModelConfig.load(Path(__file__).parent / 'configs/qwen35_9b_moss_q64.json')
+        current = cfg.to_dict()
+        defaults = {f.name: f.default for f in fields(cfg)}
+        saved = {k: v for k, v in current.items() if k != 'moss_cross_attention'}
+        self.assertTrue(self.check(saved, current, defaults),
+                        'the real production config must resume its own checkpoints')
+
+    def strip(self, saved, current):
+        saved = dict(saved)
+        removed = {'work_budget': 0., 'work_weights': [1., .18, 1.72]}
+        for name, inert in removed.items():
+            if name in saved and name not in current and saved[name] == inert:
+                saved.pop(name)
+        return saved == current
+
+    def test_removed_inert_knob_is_accepted(self):
+        saved = {'seed': 42, 'work_budget': 0., 'work_weights': [1., .18, 1.72]}
+        self.assertTrue(self.strip(saved, {'seed': 42}))
+
+    def test_removed_knob_with_active_value_is_rejected(self):
+        saved = {'seed': 42, 'work_budget': 45000.}
+        self.assertFalse(self.strip(saved, {'seed': 42}),
+                         'a checkpoint trained with the knob ON must not resume')
+
+    def test_changed_schedule_is_still_rejected(self):
+        saved = {'seed': 42, 'lr': 5e-5, 'work_budget': 0.}
+        self.assertFalse(self.strip(saved, {'seed': 42, 'lr': 1e-4}))

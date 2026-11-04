@@ -1,0 +1,153 @@
+{
+  "schema_version": "prepared.pipeline_plan.v1",
+  "version": "2026-10-22.min128",
+  "kind": "design_contract_not_production_executor_configuration",
+  "production_execution_enabled": false,
+  "supported_collections": [
+    "dcvlm",
+    "genund"
+  ],
+  "future_snapshot_requires_validation": "DCVLM-balance-200B",
+  "arbitrary_dataset_discovery": false,
+  "runtime_api_source_rediscovery": false,
+  "source_rule_snapshot": "prepared_profiles.json",
+  "genund_source_contracts": "genund_source_contracts.json",
+  "task_policy": {
+    "dcvlm": "preserve_native_direction_roles_and_order",
+    "t2i_allowed_collection": "genund",
+    "qa_to_caption_replacement": false,
+    "fabricate_multiturn_or_interleaved": false,
+    "record_classification": "deterministic_role_turn_segment_validation",
+    "ambiguous_semantics": "model_review_with_unknown_option"
+  },
+  "source_policy": {
+    "ai_generated_image": "reject_from_training_index",
+    "ai_edited_image_with_verified_real_parent": "retain_and_mark_subject_to_other_checks",
+    "ai_edited_image_unknown_or_mixed_parent": "quarantine",
+    "ai_edited_image_explicit_non_natural_parent": "reject_from_training_index",
+    "programmatic_or_rendered_image": "not_rejected_by_origin_alone",
+    "ai_text": "retain_and_mark_subject_to_text_quality",
+    "unknown_low_detector_score": "not_proof_of_real",
+    "physical_source_deletion": false
+  },
+  "size_policy": {
+    "mode": "enforce",
+    "minimum_short_edge_px": 128,
+    "comparison": "min(original_width, original_height) >= 128",
+    "allow_domain_exceptions": false,
+    "upsampling_does_not_satisfy_minimum": true,
+    "multimodal_record_requires_all_required_images": true
+  },
+  "stages": [
+    {
+      "id": "profile_bind",
+      "status": "compiler_implemented",
+      "api_required": false
+    },
+    {
+      "id": "schema_native_task",
+      "status": "existing_record_indexer_plus_profile_validation",
+      "api_required": false
+    },
+    {
+      "id": "source_gate",
+      "status": "existing_policy_preserved",
+      "api_required": false
+    },
+    {
+      "id": "size_hash_decode",
+      "status": "sample_preflight_implemented",
+      "production_threshold": 128
+    },
+    {
+      "id": "ai_detectors_review",
+      "status": "separate_pilots_complete_orchestration_pending",
+      "automatic_model_rejection": false
+    },
+    {
+      "id": "sscd_candidates",
+      "status": "not_integrated",
+      "threshold": null,
+      "query": [
+        "published_snapshot",
+        "current_batch",
+        "held_out_evaluation_assets"
+      ]
+    },
+    {
+      "id": "typed_annotation",
+      "status": "not_integrated",
+      "preserve_original": true
+    },
+    {
+      "id": "independent_quality_review",
+      "status": "not_integrated",
+      "include_random_low_risk_audits": true
+    },
+    {
+      "id": "selected_layout",
+      "status": "not_integrated",
+      "homepage_examples": "synthetic_reference_only_never_authenticity_gold"
+    },
+    {
+      "id": "transactional_publish",
+      "status": "not_integrated",
+      "concurrent_delta_recheck_required": true
+    }
+  ],
+  "proposed_model_roles": {
+    "primary": {
+      "model": "Qwen3.5-397B-A17B",
+      "precision": "BF16",
+      "initial_npu_cards": 32,
+      "deployment_status": "historical_stopped_service_not_restarted"
+    },
+    "secondary": {
+      "model": "Gemma-4-31B-IT",
+      "precision": "BF16",
+      "initial_npu_cards": 4,
+      "deployment_status": "weights_and_actual_vision_canary_pending"
+    },
+    "paid_review": {
+      "roles": [
+        "detector_disagreement",
+        "source_conflict",
+        "hard_ocr",
+        "complex_interleaved",
+        "selected_layout_gold",
+        "random_quality_audit"
+      ],
+      "require_real_image_capability_probe": true
+    }
+  },
+  "dedup_contract": {
+    "separate_entities": [
+      "asset",
+      "record",
+      "training_view"
+    ],
+    "same_image_different_supervision": "share_asset_preserve_valid_record",
+    "near_duplicate": "candidate_requires_domain_verification",
+    "chart_document_ui": "compare_text_numbers_and_local_differences",
+    "unverified_embedding_reuse": false,
+    "caption_variants_multiply_asset_weight": false
+  },
+  "publication_contract": {
+    "source_images_read_only": true,
+    "copy_full_image_corpus": false,
+    "unknown_is_publishable": false,
+    "required_asset_checks_missing": "quarantine_record",
+    "versioned_incremental_annotations": true,
+    "source_storage_domain_must_be_resolvable_by_training": true,
+    "final_manifest_atomic": true,
+    "idempotency_key_includes": [
+      "source_revision",
+      "asset_or_record_context",
+      "stage",
+      "rule_revision",
+      "model_revision",
+      "processor_revision",
+      "prompt_revision"
+    ]
+  }
+}

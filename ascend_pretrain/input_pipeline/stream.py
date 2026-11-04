@@ -11,6 +11,7 @@ import numpy as np
 from .catalog import Catalog, permute
 from .images import ImageReader
 from .tokenizer import tokenizer_root,tokenizer_metadata
+from .loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed
 from . import chat
 
 
@@ -43,10 +44,14 @@ class DocumentStream:
                               view=view, rank=rank, world=world, seed=seed, epoch=epoch,
                               block_rows=block_rows, native_images=native_images,
                               image_size=image_size, tokenization='qwen35_chat_template_v1',
-                              tokenizer=self.tokenizer_info)
+                              tokenizer=self.tokenizer_info,
+                              image_loss_permissions=LOSS_PERMISSION_CONTRACT)
         self.position = dict(block=0, row=0)
         if cfg is not None:
             self.signature['generation']={'renderer':cfg.renderer,'max_pixels':cfg.generation_max_pixels,'flow_draws':cfg.flow_draws,'channels':cfg.latent_channels,'token_budget':cfg.generation_token_budget}
+            if cfg.i2t_image_loss_probability != 1:
+                self.signature['generation']['i2t_image_loss_probability']=cfg.i2t_image_loss_probability
+                self.signature['generation']['i2t_sampling']='sample_seed_epoch_sha256_v1'
             if cfg.preserve_documents:
                 self.signature['packing']={'preserve_documents':True,'long_document_policy':cfg.long_document_policy,
                     'generation_microbatch_images':cfg.generation_microbatch_images}
@@ -94,6 +99,8 @@ class DocumentStream:
         documents, token_count, corpus_count = [], 0, 0
         for row, (layout, direction, templated) in zip(rows, built):
             elements, counted = [], 0
+            allowed = image_loss_allowed(row)
+            image_permissions = [image_loss_allowed(row, info) for info in row['images']]
             for span in layout:
                 if span['kind'] == 'text':
                     ids = next(tokens).ids
@@ -112,7 +119,8 @@ class DocumentStream:
                         locator = dict(shard=row['source_shard'], offset=info['offset'],
                                        length=info['length'], sha256=info['sha256'])
                         reference = f"{row['source_shard']}:{info['offset']}:{info['sha256']}"
-                        elements.append(dict(type='image', image_ref=reference, locator=locator))
+                        elements.append(dict(type='image', image_ref=reference, locator=locator,
+                                             image_loss_allowed=image_permissions[span['image_index']]))
                 else:
                     raise ValueError(f'Unknown span kind: {span["kind"]}')
             if self.counting_matches_corpus and counted != row['text_tokens']:
@@ -120,7 +128,7 @@ class DocumentStream:
             corpus_count += row['text_tokens']
             documents.append(dict(id=row['sample_id'], elements=elements, text_tokens=counted,
                                   format=row['format'],direction=direction,templated=templated,
-                                  corpus_text_tokens=row['text_tokens']))
+                                  corpus_text_tokens=row['text_tokens'],image_loss_allowed=allowed))
         stats = dict(documents=len(documents), text_spans=len(spans), tokenizer_tokens=token_count,
                      corpus_text_tokens=corpus_count, tokenize_seconds=tokenize_seconds,
                      parquet_seconds=read_seconds)

@@ -115,6 +115,23 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     return prune_queries(batch,cfg,keep)
 
 
+def make_null_batch(cfg,tokens,processed,tokenizer):
+    """Use the checkpoint's trained null template and retain its image CQ.
+
+    An image-first I2T caption exposes only the fixed user prefix to image
+    queries. Its instruction and answer follow the image and are invisible to
+    these queries. Keep the same template here instead of substituting an
+    empty T2I instruction, which has a different visible prefix.
+    """
+    mode=cfg.cfg_null_condition
+    if mode=='empty_t2i':
+        return make_batch(cfg,tokens,[],processed,'T2I',tokenizer=tokenizer)
+    if mode=='i2t_prefix':
+        batch=make_batch(cfg,tokens,[],processed,'I2T',prune=False,tokenizer=tokenizer)
+        return prune_queries(batch,cfg,batch.mainline.query_image[0])
+    raise ValueError(f'Unknown CFG null condition: {mode}')
+
+
 @torch.no_grad()
 def score_reference(model,case,tokenizer,tokens,processor,vae):
     """Fixed teacher-forced caption NLL and one fixed-noise conditional flow loss."""
@@ -195,8 +212,10 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     if min(height,width)<16 or height%16 or width%16 or height*width>cfg.generation_max_pixels:
         raise ValueError('Validation shape violates the training pixel/alignment cap')
     processed=processor(np.zeros((height,width,3),np.uint8))
-    def conditions(prompt):
-        batch=make_batch(cfg,tokens,tokenizer.encode(prompt,add_special_tokens=False).ids,processed,'T2I',tokenizer=tokenizer).to('npu')
+    def conditions(prompt=None):
+        batch=(make_null_batch(cfg,tokens,processed,tokenizer) if prompt is None else
+            make_batch(cfg,tokens,tokenizer.encode(prompt,add_special_tokens=False).ids,
+                       processed,'T2I',tokenizer=tokenizer)).to('npu')
         # Clean target pixels are strictly invisible to image CQ. Zero features
         # eliminate a useless ViT forward, tested against the full CQ plan.
         empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device='npu',dtype=model.embedding.weight.dtype)
@@ -207,7 +226,7 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     guidance=case.get('guidance',3.)
     negative_projected=None
     if guidance!=1.:
-        negative,other=conditions('')
+        negative,other=conditions()
         negative_projected=model.renderer.project_conditions(negative,other)
     generator=torch.Generator(device='cpu').manual_seed(case['seed'])
     latent=torch.randn(sum(layout.lengths),cfg.latent_channels,generator=generator).to('npu')
@@ -237,6 +256,7 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     if P.state().get_tensor_model_parallel_rank()==0:Image.fromarray(pixels).save(output/f"{case['id']}.png")
     return dict(image=f"{case['id']}.png",prompt=case['prompt'],height=height,width=width,
                 seed=case['seed'],steps=len(sigmas)-1,guidance=guidance,shift=case.get('shift',5.),
+                cfg_null_condition=cfg.cfg_null_condition,
                 latent_std=latent.std().item(),latent_mean=latent.mean().item())
 
 

@@ -1,0 +1,23 @@
+{
+  "model_path": "/inspire/sj-ssd3/global_public/public_models/Qwen3.5-397B-A17B-w8a8-mtp",
+  "model_name": "Qwen3.5-397B-A17B-W8A8",
+  "max_model_len": 32768,
+  "max_num_seqs": 16,
+  "max_images": 16,
+  "epoch": "corpus-20261022-w8a8",
+  "engine_key_path": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/private/engine.key",
+  "client_key_hash_path": "/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain/corpus_pipeline/serving/private/client.sha256",
+  "precision": "W8A8_DYNAMIC",
+  "nodes": 1,
+  "data_parallel_size": 2,
+  "revision": "local-quant-config-index-sha256:0555fcb5efa1d62e3183f0893816eca2979f573d5b3003d3ff7469f96c921141",
+  "processor_files": {
+    "config.json": "3ae7fa89c2f7d1354096418ddaf1331e9e0898a8ca11e804fb6dbaa087efb7da",
+    "preprocessor_config.json": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+    "video_preprocessor_config.json": "28a340356435be8f0f2bef2d955232785609a373d36df0ee6c51ce632a94780e",
+    "tokenizer.json": "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+    "tokenizer_config.json": "aefe82b6d1bfb01fcb2a889986fb99e4cec84ee84327116887d883d0b9e7f1e6",
+    "vocab.json": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+  },
+  "processor_revision": "sha256:e0d32a81d9417915b6a92212b7ef7f6b45d393137dfd6066254e1137c8ca6094"
+}

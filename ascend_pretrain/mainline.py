@@ -213,6 +213,17 @@ def build_native_plan(batch,cfg):
     spans=[indices[indices.ge(0)] for indices in batch.image_indices]
     if spans and (batch.vision is None or len(batch.vision.grid_thw)!=len(spans)):
         raise ValueError('Native image spans require matching vision geometry')
+    image_readouts=torch.arange(len(spans))
+    if cfg.method=='CQ_IT' and batch.generation_image_indices is not None:
+        image_readouts=batch.generation_image_indices
+        if (image_readouts.device.type!='cpu' or image_readouts.dtype!=torch.long
+                or image_readouts.ndim!=1):
+            raise ValueError('Generation image indices must be a CPU int64 vector')
+        if (image_readouts.numel() and
+                (int(image_readouts.min())<0 or int(image_readouts.max())>=len(spans))):
+            raise ValueError('Generation image index is outside the understanding image set')
+        if image_readouts.unique().numel()!=image_readouts.numel():
+            raise ValueError('Generation image indices must not repeat')
     if not len(text) and not spans:text=idx[:1]
     local=torch.arange(q);anchors=[];ropes=[]
     for indices,(_,h,w) in zip(spans,batch.vision.grid_thw if spans else ()):
@@ -224,6 +235,12 @@ def build_native_plan(batch,cfg):
         ropes.append(batch.row_col[:,indices[0]].float()[:,None]+offsets[:,:,None])
     selected=torch.cat(anchors) if anchors else torch.empty(0,dtype=torch.long)
     qrope=torch.cat(ropes,dim=1) if ropes else torch.empty(2,0,1)
+    # All images remain clean understanding content. CQ readouts never write
+    # KV/GDN state, so omitted generation targets need no image queries at all.
+    # Keep the historical virtual output slots below for stable image indexing.
+    if cfg.method=='CQ_IT':
+        selected=selected.reshape(len(spans),q)[image_readouts].flatten()
+        qrope=qrope.reshape(2,len(spans),q,1)[:,image_readouts].reshape(2,-1,1)
     query_positions=torch.cat((text,selected)) if cfg.method=='CQ_IT' else text
     query_image=batch.image_queries[:,query_positions]
     query_rope=batch.row_col[:,query_positions].float().clone()
@@ -237,7 +254,7 @@ def build_native_plan(batch,cfg):
         q_allowed&=(batch.segments[:,query_positions,None]==batch.segments[:,None,:])&batch.segments[:,query_positions,None].ge(0)
         cq_mask,cq_valid=safe_mask(torch.cat((c_allowed,q_allowed),1))
     conditions=torch.arange(s,s+len(spans)*q).reshape(len(spans),q)
-    output_positions=torch.cat((text,conditions.flatten())) if cfg.method=='CQ_IT' else text
+    output_positions=torch.cat((text,conditions[image_readouts].flatten())) if cfg.method=='CQ_IT' else text
     pieces=[];cursor=0
     if cfg.method=='Bi_I+CQ_T':
         for indices,anchor in zip(spans,anchors):

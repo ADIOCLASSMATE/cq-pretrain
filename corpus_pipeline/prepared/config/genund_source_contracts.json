@@ -1,0 +1,3531 @@
+{
+  "schema_version": "corpus_pipeline.genund_parent_contracts.v1",
+  "contract_version": "2026-10-22.prepared.1",
+  "collection_id": "genund",
+  "collection_version": "gen-und-mm-pretrain:01",
+  "reference_mount": "/inspire/dataset/gen-und-mm-pretrain/01",
+  "created_from": "existing bounded audits only; no new mount/API/cluster action",
+  "evidence_scope": "Existence/schema samples, not full coverage, usability, authenticity or complete semantic pairing. UNKNOWN means not established.",
+  "policy_scope": "ai_only_with_verified_natural_source_edit_exception",
+  "authority_inputs": {
+    "source_rules": {
+      "path": "corpus_pipeline/config/sources.json",
+      "version": "2026-10-22.stage1.2",
+      "sha256": "33c4c3288d3f7357a6489a3b12e5d877f119ac2d3f8f3a57eb8b428546f1143f"
+    },
+    "adapters": {
+      "path": "corpus_pipeline/config/adapters.json",
+      "sha256": "3c65898a83da7f9ab947fa5cdb11d2f6227c9fa90862b57fdb9e6a27c116243f"
+    }
+  },
+  "global_invariants": {
+    "parent_contracts_do_not_replace_compiled_path_rules": true,
+    "native_dcvlm_types_preserved": true,
+    "genund_qa_not_implicitly_t2i": true,
+    "image_ai_generated_rejected_in_all_task_families": true,
+    "verified_natural_parent_ai_edit_retained_and_marked": true,
+    "programmatic_non_ai_images_allowed": true,
+    "ai_captions_marked_not_rejected": true,
+    "missing_annotation_does_not_authorize_invented_original_qa": true,
+    "interleaving_requires_original_sequence_evidence": true,
+    "per_parent_all_records_same_type": false,
+    "unknown_semantics": "pending",
+    "physical_input_mutation": false,
+    "training_ready": false,
+    "layout_presence": "not_observed_in_bounded_samples; not_full_absence_proof",
+    "older_strict_natural_only_recommendations_superseded": true
+  },
+  "contracts": [
+    {
+      "contract_id": "genund.parent.BLIP3o-Pretrain-JourneyDB",
+      "source_id": "BLIP3o-Pretrain-JourneyDB",
+      "source_prefix": "BLIP3o-Pretrain-JourneyDB/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_JPG_shard_directories"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-JourneyDB/JourneyDB_361/03619469.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "约419万文件（条件外推）",
+        "upstream_reported": "4M图像",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "Midjourney 合成场景、人物与物体、艺术风格、设计",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "caption_pair",
+          "T2I_prompt",
+          "I2T_caption"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Reject all records containing generated JourneyDB images regardless of task direction."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:BLIP3o-Pretrain-JourneyDB",
+        "parent_image_origin": "ai_generated",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": true,
+        "reject_rules": [
+          {
+            "rule_id": "genund:BLIP3o-Pretrain-JourneyDB",
+            "match": {
+              "collection": "genund",
+              "source": "BLIP3o-Pretrain-JourneyDB"
+            },
+            "evidence": [
+              {
+                "url": "https://huggingface.co/datasets/BLIP3o/BLIP3o-Pretrain-JourneyDB",
+                "claim": "JourneyDB/MJHQ 的图像为 Midjourney 生成，所有含这些图像的任务记录排除。"
+              }
+            ]
+          }
+        ],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "txt"
+        ],
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": false,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": "upstream_original_image_id_and_annotation_index",
+        "pending": [
+          "not_needed_for_training_rejected_source"
+        ]
+      },
+      "recaption": {
+        "mode": "disabled_rejected_ai_source",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": false,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "JourneyDB",
+          "relation": "shared_upstream_origin",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/BLIP3o/BLIP3o-Pretrain-JourneyDB",
+          "claim": "JourneyDB/MJHQ 的图像为 Midjourney 生成，所有含这些图像的任务记录排除。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.BLIP3o-Pretrain-Long-Caption",
+      "source_id": "BLIP3o-Pretrain-Long-Caption",
+      "source_prefix": "BLIP3o-Pretrain-Long-Caption/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_same_stem_JPG_TXT"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "sampled_present",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Long-Caption/raw/1222745462.jpg",
+        "local_annotation_example": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Long-Caption/raw/10809383.txt",
+        "metadata_files_sampled_in_followup": 2,
+        "followup_limits": [
+          "per_directory_entry_limit"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": [
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Long-Caption/raw/00066734.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Long-Caption/raw/00081519.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          }
+        ]
+      },
+      "scale": {
+        "local_reported": "大目录；本轮未估全量",
+        "upstream_reported": "27M图像",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "通用图像理解、物体与人物、环境与场景、视觉细节描述",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [
+          "caption_pair"
+        ],
+        "upstream_candidates": [
+          "caption_pair"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Keep original Qwen2.5-VL-7B synthetic caption provenance; determine T2I versus I2T view explicitly rather than infer file-order direction."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:BLIP3o-Pretrain-Long-Caption",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "ai",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": [
+          "TXT_contents"
+        ],
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "ai",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": "same_parent_directory_and_exact_stem",
+        "upstream_join_candidates": null,
+        "pending": [
+          "verify full image/TXT coverage and source provenance"
+        ]
+      },
+      "recaption": {
+        "mode": "reuse_existing_long_caption_then_quality_control_and_fill_missing_variants",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "BLIP3o_long_short",
+          "relation": "cross_release_overlap_unknown_not_same_images_by_default",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/BLIP3o/BLIP3o-Pretrain-Long-Caption",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.BLIP3o-Pretrain-Short-Caption",
+      "source_id": "BLIP3o-Pretrain-Short-Caption",
+      "source_prefix": "BLIP3o-Pretrain-Short-Caption/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_same_stem_JPG_TXT"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "sampled_present",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Short-Caption/00358/001461330.jpg",
+        "local_annotation_example": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Short-Caption/00358/001461176.txt",
+        "metadata_files_sampled_in_followup": 20,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": [
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Short-Caption/00051/000206981.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Short-Caption/00051/000206983.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Short-Caption/00061/000247718.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Short-Caption/00061/000247720.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/BLIP3o-Pretrain-Short-Caption/00168/000687899.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          }
+        ]
+      },
+      "scale": {
+        "local_reported": "约478万文件（条件外推）",
+        "upstream_reported": "5M图像",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "通用照片、商品、室内场景、插画",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [
+          "caption_pair"
+        ],
+        "upstream_candidates": [
+          "caption_pair"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Keep original Qwen2.5-VL-7B synthetic caption provenance; determine T2I versus I2T view explicitly rather than infer file-order direction."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:BLIP3o-Pretrain-Short-Caption",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "ai",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": [
+          "TXT_contents"
+        ],
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "ai",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": "same_parent_directory_and_exact_stem",
+        "upstream_join_candidates": null,
+        "pending": [
+          "verify full image/TXT coverage and source provenance"
+        ]
+      },
+      "recaption": {
+        "mode": "reuse_existing_short_caption_then_quality_control_and_fill_missing_variants",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "BLIP3o_long_short",
+          "relation": "cross_release_overlap_unknown_not_same_images_by_default",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/BLIP3o/BLIP3o-Pretrain-Short-Caption",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.CC12M_and_Imagenet21K_Recap",
+      "source_id": "CC12M_and_Imagenet21K_Recap",
+      "source_prefix": "CC12M_and_Imagenet21K_Recap/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_JPG_shard_directories; upstream_Parquet_not_locally_confirmed"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/CC12M_and_Imagenet21K_Recap/train-02955-of-02970/2374.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "约2,268万文件（条件外推）",
+        "upstream_reported": "约22.7M记录",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "ImageNet 物体类别、CC12M 网页图文、通用视觉描述",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "caption_pair",
+          "classification_if_original_class_retained"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "ImageNet class labels and caption views are separate targets; no invented question-answer turns."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:CC12M_and_Imagenet21K_Recap",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "ai",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "recaption",
+          "recaption_short",
+          "class"
+        ],
+        "source_of_text": "ai",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "upstream.id",
+          "upstream.image",
+          "class"
+        ],
+        "pending": [
+          "locate matching metadata revision; establish local index to upstream image/id; do not guess fields from dataset name"
+        ]
+      },
+      "recaption": {
+        "mode": "recover_existing_long_short_recaptions_before_new_caption",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "CC12M",
+          "relation": "documented_image_source",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "ImageNet21K",
+          "relation": "documented_image_source",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/gmongaras/CC12M_and_Imagenet21K_Recap",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.DenseFusion-1M",
+      "source_id": "DenseFusion-1M",
+      "source_prefix": "DenseFusion-1M/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_PNG_shard_directories"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/DenseFusion-1M/000063/4073298002699.png",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "约110万文件（条件外推）",
+        "upstream_reported": "1.059M样本",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "通用照片、视觉艺术、商业设计与商品、信息图、文档与带文字图像",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "I2T_dense_caption",
+          "caption_pair"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "4V-100K is a caption-annotation subset of the 1M image pool; keep distinct text variants without inflating asset count."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:DenseFusion-1M",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "ai",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "caption"
+        ],
+        "source_of_text": "ai",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "image_id",
+          "image_path",
+          "url"
+        ],
+        "pending": [
+          "locate JSONL with matching IDs and paths; local image count is not caption coverage"
+        ]
+      },
+      "recaption": {
+        "mode": "recover_existing_dense_caption_then_grounding_check_and_T2I_variants_if_configured",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "DenseFusion",
+          "relation": "4V_subset_of_1M_image_pool; actual_local_ids_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "LAION",
+          "relation": "documented_selection_pool",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://github.com/baaivision/DenseFusion",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.DenseFusion-4V-100K",
+      "source_id": "DenseFusion-4V-100K",
+      "source_prefix": "DenseFusion-4V-100K/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_PNG_shard_directories"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/DenseFusion-4V-100K/000030/377449011145.png",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "116,720个PNG文件名（精确）",
+        "upstream_reported": "100K标注样本",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "通用照片、视觉艺术、商业设计与商品、OCR 与信息密集图像",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "I2T_dense_caption",
+          "caption_pair"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "4V-100K is a caption-annotation subset of the 1M image pool; keep distinct text variants without inflating asset count."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:DenseFusion-4V-100K",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "ai",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "caption"
+        ],
+        "source_of_text": "ai",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "image_id",
+          "image_path",
+          "url"
+        ],
+        "pending": [
+          "locate JSONL with matching IDs and paths; local image count is not caption coverage"
+        ]
+      },
+      "recaption": {
+        "mode": "recover_existing_dense_caption_then_grounding_check_and_T2I_variants_if_configured",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "DenseFusion",
+          "relation": "4V_subset_of_1M_image_pool; actual_local_ids_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "LAION",
+          "relation": "documented_selection_pool",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://github.com/baaivision/DenseFusion",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.FineVision",
+      "source_id": "FineVision",
+      "source_prefix": "FineVision/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "169_observed_image_subdirectories; upstream_multiconfig_Parquet_not_locally_confirmed"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/FineVision/vistext/2374.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "169个子目录；总图片量未实测",
+        "upstream_reported": "17.3M图像/24.3M样本",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "caption 与知识、图表与表格、通用 VQA、定位与计数、数学、OCR、OCR QA、科学、纯文本",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "I2T_QA",
+          "I2T_caption",
+          "multi_image_understanding",
+          "multiturn_I2T",
+          "OCR",
+          "grounding",
+          "text_only"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Image count does not define turns; multi-image QA is not automatically a web interleaved document.",
+        "Program-drawn diagrams/charts/text are allowed under current policy, not filtered merely as synthetic."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:FineVision",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "texts[].user",
+          "texts[].assistant"
+        ],
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "images",
+          "texts",
+          "source",
+          "relevance",
+          "visual_dependency",
+          "image_correspondence",
+          "formatting",
+          "min"
+        ],
+        "pending": [
+          "locate original annotations and quality scores; map each image to source/config/split/record"
+        ]
+      },
+      "recaption": {
+        "mode": "preserve_or_repair_original_assistant_outputs; caption_only_subsets_get_caption_rewrite",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "FineVision_LLaVA_OV15",
+          "relation": "authors_recommend_cross_mixture_dedup; actual_overlap_pending",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/HuggingFaceM4/FineVision",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.Infinity-MM",
+      "source_id": "Infinity-MM",
+      "source_prefix": "Infinity-MM/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "stage1_to_stage4_image_directories",
+        "large_JSON_conversation_annotations"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "sampled_present",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage4/gpt4o_60k/00026/46283.png",
+        "local_annotation_example": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_13/merge_priority_sample_10M_13.json:record0.conversations[1].value (nonempty assistant answer verified in annotation_semantics.json)",
+        "metadata_files_sampled_in_followup": 8,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": [
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_1/merge_priority_sample_10M_1.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "id",
+              "image",
+              "value"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_12/merge_priority_sample_10M_12.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "id",
+              "image",
+              "value"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage1/merge_priority_sample_10M_13/merge_priority_sample_10M_13.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "id",
+              "image",
+              "value"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage2/DocStruct4M/DocStruct4M_struct_aware_parse_10/DocStruct4M_struct_aware_parse_10.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "id",
+              "image",
+              "qw2vl_loss",
+              "value"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/Infinity-MM/stage2/Visdial/Visdial-Visdial-20k/Visdial-Visdial-20k.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "id",
+              "image",
+              "qw2vl_loss",
+              "value"
+            ],
+            "text_observed": true
+          }
+        ]
+      },
+      "scale": {
+        "local_reported": "4个stage；总记录量未实测",
+        "upstream_reported": "44.8M阶段记录，含纯文本",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "图像 caption、通用视觉指令、OCR、文档、图表与屏幕、数学与推理、GPT-4 与合成指令、纯文本指令",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [
+          "single_turn_I2T_conversation_in_samples"
+        ],
+        "upstream_candidates": [
+          "I2T_caption",
+          "I2T_QA",
+          "multiturn_I2T",
+          "OCR",
+          "document_understanding",
+          "text_only"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Stage is curriculum provenance, not a uniform task label.",
+        "GPT-generated instructions are synthetic text and do not prove AI-generated images.",
+        "Do not treat generated instruction wording as a T2I target; preserve image/text direction."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:Infinity-MM",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": [
+          "conversations[].value_with_from_role"
+        ],
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": "image path via exact source-scoped prefix map + id/conversations same record",
+        "upstream_join_candidates": null,
+        "pending": [
+          "validate remaining stages and pure-text records; current annotation versions and incomplete release replacement"
+        ],
+        "path_prefix_map": {
+          "/inspire/hdd/project/deepgen/public/data_zoo/source_images/Infinity-MM": "{collection_root}/Infinity-MM"
+        },
+        "prefix_boundary_required": true,
+        "adapter_rule_id": "genund.infinity_mm.legacy_source_images_root"
+      },
+      "recaption": {
+        "mode": "caption_subset_recaption; QA_and_documents_preserve_original_question_task_and_order",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason.",
+        "Rewrite only exact Infinity-MM prefix with slash boundary, never the broad old source_images root; nine historical stat hits are not live validation.",
+        "Check upstream obsolete stage2/7M_0712_math_plus_system_release_0802 versus replacement, retaining actual mounted revision."
+      ],
+      "dedup_families": [
+        {
+          "family": "LLaVA_OneVision",
+          "relation": "stage3_documented_reuse",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "Docmatix",
+          "relation": "stage3_documented_reuse",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "Infinity_cross_stage",
+          "relation": "same_source_may_recur_across_stages",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json",
+        "corpus_pipeline/config/adapters.json",
+        "reports/genund_20261021/annotation_semantics.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/BAAI/Infinity-MM/tree/main/stage2",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.JourneyDB-train",
+      "source_id": "JourneyDB-train",
+      "source_prefix": "JourneyDB-train/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_JPG_shard_directories"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/JourneyDB-train/130/a22c5543-201f-4cd7-beae-96b7e8f3f0a5.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "约419万文件（条件外推）",
+        "upstream_reported": "4.453M原图/4.190M有标注图",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "合成场景与人物、艺术风格与设计、prompt 反推、风格检索、图像描述、视觉问答",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "caption_pair",
+          "T2I_prompt",
+          "I2T_caption",
+          "I2T_QA"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Reject all records containing generated JourneyDB images regardless of task direction."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:JourneyDB-train",
+        "parent_image_origin": "ai_generated",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": true,
+        "reject_rules": [
+          {
+            "rule_id": "genund:JourneyDB-train",
+            "match": {
+              "collection": "genund",
+              "source": "JourneyDB-train"
+            },
+            "evidence": [
+              {
+                "url": "https://github.com/JourneyDB/JourneyDB",
+                "claim": "JourneyDB/MJHQ 的图像为 Midjourney 生成，所有含这些图像的任务记录排除。"
+              }
+            ]
+          }
+        ],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": false,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": "upstream_original_image_id_and_annotation_index",
+        "pending": [
+          "not_needed_for_training_rejected_source",
+          "upstream prompt/caption/QA concepts documented; exact field schema not established in this contract"
+        ]
+      },
+      "recaption": {
+        "mode": "disabled_rejected_ai_source",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": false,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "JourneyDB",
+          "relation": "shared_upstream_origin",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://github.com/JourneyDB/JourneyDB",
+          "claim": "JourneyDB/MJHQ 的图像为 Midjourney 生成，所有含这些图像的任务记录排除。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.LLaVA-OneVision-1.5-Instruct-Data-Images",
+      "source_id": "LLaVA-OneVision-1.5-Instruct-Data-Images",
+      "source_prefix": "LLaVA-OneVision-1.5-Instruct-Data-Images/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "157_observed_image_subdirectories"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-1.5-Instruct-Data-Images/IconQA/train-00000-of-00001/031286.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "157个子目录；总图片量未实测",
+        "upstream_reported": "父指令集约22M记录，非图片数",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "文档与 OCR、图表、数学与几何、科学、通用 VQA、网页截图、百科与知识图像、父集中另含纯文本指令",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "I2T_QA",
+          "I2T_caption",
+          "multiturn_I2T",
+          "multi_image_understanding",
+          "OCR",
+          "grounding",
+          "text_only_in_parent_annotations"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "-Images is a physical media resource; parent instruction count is not local sample count.",
+        "Keep role/content and from/value variants source-scoped."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:LLaVA-OneVision-1.5-Instruct-Data-Images",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "conversations[].value",
+          "conversations[].content"
+        ],
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "id",
+          "image",
+          "conversations",
+          "data_source"
+        ],
+        "pending": [
+          "recover parent Instruct metadata matched to local images; parent text-only records are not inferred from an image directory"
+        ]
+      },
+      "recaption": {
+        "mode": "annotation_first_task_preserving_rewrite; images_only_can_get_new_caption_but_not_recovered_QA",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "FineVision_LLaVA_OV15",
+          "relation": "authors_recommend_cross_mixture_dedup; actual_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "LLaVA_OneVision",
+          "relation": "shared_parent_family; row_overlap_pending",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/mvp-lab/LLaVA-OneVision-1.5-Instruct-Data",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.LLaVA-OneVision-1.5-Mid-Training-85M",
+      "source_id": "LLaVA-OneVision-1.5-Mid-Training-85M",
+      "source_prefix": "LLaVA-OneVision-1.5-Mid-Training-85M/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "flat_extracted_JPG; some_recs_obelics_filenames_observed"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-1.5-Mid-Training-85M/recs_obelics_06_data_00070_rel_00246449_abs_130251287.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "per_directory_entry_limit"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "平铺大目录；本轮未估全量",
+        "upstream_reported": "85M训练样本标称",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "通用自然图像、视觉概念、网页与文档来源图像、中英文图片描述",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "caption_pair",
+          "interleaved_only_if_original_document_and_order_recovered"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "OBELICS/MINT origin does not prove current record retains an interleaved sequence.",
+        "EN/CN variants may reuse assets; retain language variants and distinguish task views."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:LLaVA-OneVision-1.5-Mid-Training-85M",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "source",
+          "language",
+          "part",
+          "image_or_record_id; actual_local_schema_pending"
+        ],
+        "pending": [
+          "locate corresponding captions/records; restore original document ordering if claimed as interleaved"
+        ]
+      },
+      "recaption": {
+        "mode": "recover_recaptions_or_create_grounded_caption_view; no_reconstructed_web_document_from_filename",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "ImageNet21K",
+          "relation": "documented_upstream_image_origin; exact_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "LAIONCN",
+          "relation": "documented_upstream_image_origin; exact_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "DataComp",
+          "relation": "documented_upstream_image_origin; exact_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "Zero250M",
+          "relation": "documented_upstream_image_origin; exact_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "COYO",
+          "relation": "documented_upstream_image_origin; exact_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "SA1B",
+          "relation": "documented_upstream_image_origin; exact_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "MINT",
+          "relation": "documented_upstream_image_origin; exact_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "OBELICS",
+          "relation": "documented_upstream_image_origin; exact_overlap_pending",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/mvp-lab/LLaVA-OneVision-1.5-Mid-Training-85M",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.LLaVA-OneVision-Mid-Data",
+      "source_id": "LLaVA-OneVision-Mid-Data",
+      "source_prefix": "LLaVA-OneVision-Mid-Data/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "seven_image_subdirectories",
+        "eight_large_JSON_annotations",
+        "upstream_separate_processed_JSON_and_image_TAR_GZ"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "sampled_present",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-Mid-Data/LLaVA-ReCap-118K/00006/2374.jpg",
+        "local_annotation_example": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-Mid-Data/LLaVA-OneVision-Mid-Data.json:record0.conversations[1].value (nonempty assistant answer verified in annotation_semantics.json)",
+        "metadata_files_sampled_in_followup": 8,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": [
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-Mid-Data/LLaVA-OneVision-Mid-Data.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "image",
+              "value"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-Mid-Data/LLaVA-ReCap-118K_all.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "image",
+              "value"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-Mid-Data/LLaVA-ReCap-558K_all.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "image",
+              "value"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-Mid-Data/cc3m_llava_recap_all.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "image",
+              "value"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/LLaVA-OneVision-Mid-Data/evol_instruct_processed.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "data_source",
+              "from",
+              "id",
+              "value"
+            ],
+            "text_observed": true
+          }
+        ]
+      },
+      "scale": {
+        "local_reported": "7个图片子目录；8份JSON",
+        "upstream_reported": "完整混合规模未确认",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "视觉指令、合成文档 OCR、文档理解、图片描述、英文与中文",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [
+          "single_turn_I2T_conversation_in_samples"
+        ],
+        "upstream_candidates": [
+          "I2T_caption",
+          "I2T_QA",
+          "OCR",
+          "document_understanding",
+          "text_only"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Keep SynthDog programmatically rendered OCR documents allowed and labeled; old strict-natural-only report wording is superseded.",
+        "Do not change ureader questions into T2I prompts."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:LLaVA-OneVision-Mid-Data",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": [
+          "conversations[].value_with_from_role"
+        ],
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": "image relative to source_root; conversations in same JSON record",
+        "upstream_join_candidates": null,
+        "pending": [
+          "verify all JSON subsets; do not count aggregate and component annotation files twice"
+        ],
+        "path_base": "source_root"
+      },
+      "recaption": {
+        "mode": "caption_subset_rewrite; preserve_OCR_targets_QA_and_document_structure",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "CC3M",
+          "relation": "local_cc3m_llava_recap_subset",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "COCO",
+          "relation": "LLaVA_ReCap_118K_image_family",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "UReader",
+          "relation": "document_understanding_family",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/lmms-lab/LLaVA-OneVision-Mid-Data",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.Salmonnn",
+      "source_id": "Salmonnn",
+      "source_prefix": "Salmonnn/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "four_image_subcollections",
+        "class_directories_and_flat_JPG/JPEG"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/Salmonnn/InternVL-SA-1B-Caption/sa_1990516.jpg.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "4个子集；总量未实测",
+        "upstream_reported": "各子集分别说明",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "自然场景、ImageNet 物体类别、密集图片描述、来源未完全确认的图片资源",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "caption_pair",
+          "multi_image_caption_if_original_annotations_recovered",
+          "classification_if_original_labels_retained"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Community image packaging does not prove corresponding author captions were included.",
+        "Do not infer ShareGPT4V identity from sharecaption directory name."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:Salmonnn",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "source_specific_original_id/path; actual_local_schema_pending"
+        ],
+        "pending": [
+          "recover per-subset original annotations and revisions; sharecaption upstream mapping unresolved"
+        ]
+      },
+      "recaption": {
+        "mode": "recover_existing_caption_then_selectively_recaption; images_only_fallback_is_new_caption",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "SA1B",
+          "relation": "InternVL-SA-1B-Caption_documented_origin",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "ImageNet21K",
+          "relation": "documented_origin",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "DenseFusion",
+          "relation": "candidate_mapping_not_revision_verified",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [
+        {
+          "relative_path": "Salmonnn/InternVL-SA-1B-Caption",
+          "upstream_fields": [
+            "id",
+            "image",
+            "conversations"
+          ],
+          "local_annotation_status": "pending",
+          "notes": "image may be list; EN/CN/multi-image records share assets"
+        },
+        {
+          "relative_path": "Salmonnn/imagenet-21k",
+          "upstream_fields": [
+            "jpeg.jpg",
+            "__key__",
+            "__url__"
+          ],
+          "local_annotation_status": "pending",
+          "notes": "class directory is not natural language caption"
+        },
+        {
+          "relative_path": "Salmonnn/sharecaption",
+          "upstream_identity": null,
+          "local_annotation_status": "pending",
+          "notes": "do not alias automatically to ShareGPT4V"
+        },
+        {
+          "relative_path": "Salmonnn/densefusion-1m",
+          "upstream_identity_candidate": "Salmonnn/dense",
+          "local_annotation_status": "pending",
+          "notes": "candidate not exact revision mapping"
+        }
+      ],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/OpenGVLab/InternVL-SA-1B-Caption",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.ScaleCap450k_image",
+      "source_id": "ScaleCap450k_image",
+      "source_prefix": "ScaleCap450k_image/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_images",
+        "ZIP_image_archives"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/ScaleCap450k_image/images/laion_filter_image/420985db6f2566de6641783f598a829ab922f28fb4b736323d8513838f4a5364.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "per_directory_entry_limit"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "图片目录+ZIP；总量未实测",
+        "upstream_reported": "450K标称/455,011标注行",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "通用视觉理解、文本生成图像、多样且信息丰富的高分辨率图片",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "I2T_dense_caption",
+          "caption_pair"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Original long caption is a candidate, not guaranteed factual truth; keep raw annotation."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:ScaleCap450k_image",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "ai",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "conversations[].value_with_from_role"
+        ],
+        "source_of_text": "ai",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "ScaleCap450k.json",
+          "images[]",
+          "conversations"
+        ],
+        "pending": [
+          "locate ScaleCap450k.json and pair source paths; distinguish zip and extracted copies"
+        ]
+      },
+      "recaption": {
+        "mode": "recover_existing_superdetailed_caption_then_grounding_review; derive_T2I_lengths_only_after_approval",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "ShareGPT4V",
+          "relation": "documented_100K_component",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "LAION5B",
+          "relation": "documented_selected_component",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/long-xing1/ScaleCap-450k",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.Stable_Diffusion_3_Recaption",
+      "source_id": "Stable_Diffusion_3_Recaption",
+      "source_prefix": "Stable_Diffusion_3_Recaption/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_JPG_shard_directories; upstream_Parquet_unconfirmed_locally"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/Stable_Diffusion_3_Recaption/train-00815-of-01870/2374.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "约1,086万文件（条件外推）",
+        "upstream_reported": "10,862,932记录",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "ImageNet 物体类别、通用网页图片、文本生成图像",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "caption_pair",
+          "classification_if_original_class_retained"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Not SD3-generated images by dataset name: publisher combines ImageNet2012 and CC12M source images.",
+        "ImageNet upstream id=999999999 is not a valid unique asset key.",
+        "ImageNet templates and CC12M model captions require distinct text-origin marks."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:Stable_Diffusion_3_Recaption",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "mixed",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "caption"
+        ],
+        "source_of_text": "mixed",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "upstream.image",
+          "upstream.id; not_unique_for_ImageNet"
+        ],
+        "pending": [
+          "locate matching metadata; no schema override activated yet; image hash or validated path required"
+        ]
+      },
+      "recaption": {
+        "mode": "reuse_original_template_or_model_caption; improve_T2I_caption_after_image_acceptance",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason.",
+        "Never reject because source name includes Stable_Diffusion; evaluate actual source/path lineage and image evidence.",
+        "Never deduplicate all records sharing constant upstream id=999999999."
+      ],
+      "dedup_families": [
+        {
+          "family": "ImageNet2012",
+          "relation": "documented_original_image_source",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "CC12M",
+          "relation": "documented_original_image_source",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/gmongaras/Stable_Diffusion_3_Recaption",
+          "claim": "发布者明示 ImageNet2012 与 CC12M 原图、模板/模型文本；不能因 Stable Diffusion 名称判为生成图。网页子集仍需逐图审核。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.UniWorld-V1-new",
+      "source_id": "UniWorld-V1-new",
+      "source_prefix": "UniWorld-V1-new/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "23_task_image_subdirectories",
+        "BLIP3o60k_same_stem_TXT",
+        "StyleBooth_special_CSV",
+        "Ghibli_original_result_PNG_pairs"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "sampled_present",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/UniWorld-V1-new/data/coco2017_caption_sketch-236k/images/00214588.jpg",
+        "local_annotation_example": "/inspire/dataset/gen-und-mm-pretrain/01/UniWorld-V1-new/data/BLIP3o-60k/occupation_2/1938.txt",
+        "metadata_files_sampled_in_followup": 3,
+        "followup_limits": [
+          "directory_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": [
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/UniWorld-V1-new/data/BLIP3o-60k/occupation_1/1938.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/UniWorld-V1-new/data/BLIP3o-60k/occupation_2/1938.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/UniWorld-V1-new/data/StyleBooth-11k/stylebooth_dataset/train.csv",
+            "records_examined": 16,
+            "prefix_truncated": true,
+            "field_names": [
+              "EnStyle",
+              "None",
+              "SearchResult:DICT",
+              "ShortStyleName",
+              "Source:FILE",
+              "Target:FILE",
+              "ZhStyle"
+            ],
+            "text_observed": false
+          }
+        ]
+      },
+      "scale": {
+        "local_reported": "23个任务子集；含明显小副本",
+        "upstream_reported": "约2.7M任务样本",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "文本生成图像、图像编辑与修复、风格转换、商品提取与虚拟试穿、边缘与深度、姿态与分割",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [
+          "caption_pair_in_rejected_BLIP3o60k",
+          "style_edit_source_target_pair_in_StyleBooth_samples"
+        ],
+        "upstream_candidates": [
+          "T2I",
+          "image_editing",
+          "multiturn_image_editing",
+          "conditional_generation",
+          "structured_prediction"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "AI editing is allowed only for a verified natural parent and must be marked; source and target are distinct assets.",
+        "Human/COCO prompt provenance in BLIP3o-60k does not make generated targets natural.",
+        "Control/depth/edge/pose/segmentation outputs are task conditions or labels, not automatically AI-generated photographs.",
+        "An orphan source photo may receive a separate new caption view after acceptance; never pretend it recovers a missing edit pair."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:UniWorld-V1-new",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [
+          {
+            "rule_id": "genund:UniWorld-V1-new:b6c4f7afe9",
+            "match": {
+              "collection": "genund",
+              "source": "UniWorld-V1-new",
+              "path_glob": "*UniWorld-V1-new/data/BLIP3o-60k/*"
+            },
+            "evidence": [
+              {
+                "url": "https://huggingface.co/datasets/BLIP3o/BLIP3o-60k",
+                "claim": "GPT-4o 蒸馏 T2I 生成图；Human/COCO 标签描述提示来源，不证明目标为原始照片。"
+              }
+            ]
+          }
+        ],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": [
+          "BLIP3o60k.TXT_contents",
+          "StyleBooth.EnStyle",
+          "StyleBooth.ZhStyle",
+          "StyleBooth.ShortStyleName"
+        ],
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": "task-specific source/target roles; StyleBooth Source:FILE/Target:FILE relative to stylebooth_dataset",
+        "upstream_join_candidates": null,
+        "pending": [
+          "recover instruction/source/target/control metadata for each task; verify each edit target lineage to natural parent"
+        ],
+        "stylebooth_columns": [
+          "EnStyle",
+          "ZhStyle",
+          "ShortStyleName",
+          "Target:FILE",
+          "Source:FILE",
+          "SearchResult:DICT"
+        ],
+        "stylebooth_parser": "validate header; split first five commas then parse final JSON field; ordinary CSV yielded extra columns in sampled rows"
+      },
+      "recaption": {
+        "mode": "native_edit_or_control_task_preserving_annotation; no_caption_replacement_for_missing_edit_instructions",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason.",
+        "Evidence must establish target asset -> parent asset -> natural origin; source path naming alone is insufficient.",
+        "When any required source/target/control asset is rejected or unresolved, quarantine the complete task rather than silently deleting a segment.",
+        "Ghibli local historical audit found only 24 original/result pairs (48 images), not full 36K."
+      ],
+      "dedup_families": [
+        {
+          "family": "COCO2017",
+          "relation": "multiple_control_and_segmentation_tasks_share_base_images",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "DeepFashion",
+          "relation": "product_and_pose_tasks_share_base_images",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "VITON_HD",
+          "relation": "product_and_pose_tasks_share_base_images",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/LanguageBind/UniWorld-V1#data-details",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.laion-aesthetics-12m",
+      "source_id": "laion-aesthetics-12m",
+      "source_prefix": "laion-aesthetics-12m/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "same_stem_JPG_TXT_JSON_shards"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "sampled_present",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/laion-aesthetics-12m/01263/012631976.jpg",
+        "local_annotation_example": "/inspire/dataset/gen-und-mm-pretrain/01/laion-aesthetics-12m/01263/012630700.txt",
+        "metadata_files_sampled_in_followup": 20,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": [
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/laion-aesthetics-12m/00074/000740001.json",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "caption",
+              "error_message",
+              "exif",
+              "height",
+              "key",
+              "original_height",
+              "original_width",
+              "sha256",
+              "status",
+              "url",
+              "width"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/laion-aesthetics-12m/00074/000740004.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/laion-aesthetics-12m/00093/000930101.json",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "caption",
+              "error_message",
+              "exif",
+              "height",
+              "key",
+              "original_height",
+              "original_width",
+              "sha256",
+              "status",
+              "url",
+              "width"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/laion-aesthetics-12m/00093/000930547.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/laion-aesthetics-12m/00167/001670004.txt",
+            "records_examined": 1,
+            "prefix_truncated": false,
+            "field_names": [
+              "text"
+            ],
+            "text_observed": true
+          }
+        ]
+      },
+      "scale": {
+        "local_reported": "约893万文件（条件外推）",
+        "upstream_reported": "约12M图文对的来源名称",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "通用网页图片、审美图像生成、英文图文对",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [
+          "caption_pair"
+        ],
+        "upstream_candidates": [
+          "caption_pair"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Aesthetic score does not prove natural image origin or high text grounding.",
+        "URL is provenance; local JPG is actual image; non-English caption not automatically corrupted."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:laion-aesthetics-12m",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": [
+          "TXT_contents",
+          "JSON.caption"
+        ],
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": "same shard+key/stem; metadata sha256 only trusted after bytes verification",
+        "upstream_join_candidates": null,
+        "pending": [
+          "verify snapshot/revision/aesthetic threshold; metadata success status and source evidence; text language and content quality"
+        ]
+      },
+      "recaption": {
+        "mode": "keep_original_web_caption; selectively_add_grounded_long_medium_short_T2I_variants",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "LAION_aesthetics",
+          "relation": "OpenUni_laion6m_documented_derived_source; exact_local_overlap_pending",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "LAION5B",
+          "relation": "shared_upstream_family",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://laion.ai/blog/laion-aesthetics/",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.llava_ov_data_new",
+      "source_id": "llava_ov_data_new",
+      "source_prefix": "llava_ov_data_new/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "79_image_subdirectories",
+        "llava_ov_all_with_image.json"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "sampled_present",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/llava_ov_data_new/robut_wtq(cauldron,llava_format)/cauldron_robut_wtq_images_robut_wtq_00008030.png.jpg",
+        "local_annotation_example": "/inspire/dataset/gen-und-mm-pretrain/01/llava_ov_data_new/llava_ov_all_with_image.json:record0.conversations[1].value (nonempty assistant answer verified in annotation_semantics.json)",
+        "metadata_files_sampled_in_followup": 1,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": [
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/llava_ov_data_new/llava_ov_all_with_image.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "conversations",
+              "from",
+              "id",
+              "image",
+              "value"
+            ],
+            "text_observed": true
+          }
+        ]
+      },
+      "scale": {
+        "local_reported": "79个子目录+聚合JSON",
+        "upstream_reported": "当前上游约3.94M记录",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "通用 VQA、OCR、文档理解、图表、数学与几何、网页截图与代码",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [
+          "single_turn_I2T_conversation_in_samples"
+        ],
+        "upstream_candidates": [
+          "I2T_QA",
+          "multiturn_I2T",
+          "OCR",
+          "document_understanding",
+          "caption_if_original_task_is_caption",
+          "grounding_if_original_labels"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Paths already include llava_ov_data_new prefix; do not double-prefix.",
+        "Screenshot-to-HTML/QA is not automatically original webpage interleaving."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:llava_ov_data_new",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": [
+          "conversations[].value_with_from_role"
+        ],
+        "upstream_fields_pending_local_validation": null,
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": "image relative to collection_root; same-record id/conversations",
+        "upstream_join_candidates": null,
+        "pending": [
+          "recover and validate data_source for each row; retain original nested source/task identity"
+        ],
+        "path_base": "collection_root"
+      },
+      "recaption": {
+        "mode": "preserve_QA/OCR/native_task; recaption_only_actual_caption_subsets",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "LLaVA_OneVision",
+          "relation": "Infinity_stage3_documented_reuse",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "Cauldron",
+          "relation": "documented_mixture_parent",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "UReader",
+          "relation": "documented_mixture_parent",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "Cambrian",
+          "relation": "documented_mixture_parent",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/lmms-lab/LLaVA-OneVision-Data",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.mjhq30k_imgs",
+      "source_id": "mjhq30k_imgs",
+      "source_prefix": "mjhq30k_imgs/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "ten_category_JPG_directories"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/mjhq30k_imgs/indoor/58a80954ffcf8411abbe4381976cdb5dbf3294b5.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "30,000张图片（精确）",
+        "upstream_reported": "30K评测图像",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "animals、art、fashion、food、indoor、landscape、logo、people、plants、vehicles",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "T2I_evaluation"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Keep evaluation exclusion separate from AI-generated image exclusion; no training release."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:mjhq30k_imgs",
+        "parent_image_origin": "ai_generated",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": true,
+        "reject_rules": [
+          {
+            "rule_id": "genund:mjhq30k_imgs",
+            "match": {
+              "collection": "genund",
+              "source": "mjhq30k_imgs"
+            },
+            "evidence": [
+              {
+                "url": "https://huggingface.co/datasets/playgroundai/MJHQ-30K",
+                "claim": "JourneyDB/MJHQ 的图像为 Midjourney 生成，所有含这些图像的任务记录排除。"
+              }
+            ]
+          }
+        ],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "meta_data.json.*.prompt",
+          "meta_data.json.*.category"
+        ],
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": false,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": "upstream image stem to meta_data.json key",
+        "pending": [
+          "not_needed_for_training_rejected_evaluation_source"
+        ]
+      },
+      "recaption": {
+        "mode": "disabled_rejected_ai_evaluation_source",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": false,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "MJHQ30K",
+          "relation": "heldout_evaluation_family",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://huggingface.co/datasets/playgroundai/MJHQ-30K",
+          "claim": "JourneyDB/MJHQ 的图像为 Midjourney 生成，所有含这些图像的任务记录排除。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.openuni",
+      "source_id": "openuni",
+      "source_prefix": "openuni/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "six_subcollections",
+        "image_TAR_and_extracted_copies",
+        "caption_TAR_and_JSON",
+        "image_annotation_path_manifests",
+        "Megalith_download_metadata_Parquet"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "sampled_present",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/openuni/data/cc12m/raw/cc12m-train-0146.tar::000833173.jpg (archive member exists)",
+        "local_annotation_example": "/inspire/dataset/gen-und-mm-pretrain/01/openuni/data/megalith-10m/captions/00887/008870204.json:record0.caption_internlm2 (text field)",
+        "metadata_files_sampled_in_followup": 20,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "per_directory_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": [
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/openuni/data/cc12m/data.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "annotation",
+              "image"
+            ],
+            "text_observed": false
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/openuni/data/laion6m/data.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "annotation",
+              "image"
+            ],
+            "text_observed": false
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/openuni/data/megalith-10m/megalith10m_all.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "annotation",
+              "image"
+            ],
+            "text_observed": false
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/openuni/data/redcaps5m_resized/redcaps5m_data.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "annotation",
+              "image"
+            ],
+            "text_observed": false
+          },
+          {
+            "path": "/inspire/dataset/gen-und-mm-pretrain/01/openuni/data/text-to-image-2M/data/data_1024_10K.1.json",
+            "records_examined": 32,
+            "prefix_truncated": true,
+            "field_names": [
+              "annotation",
+              "image"
+            ],
+            "text_observed": false
+          }
+        ]
+      },
+      "scale": {
+        "local_reported": "6个子目录；总图像量未实测",
+        "upstream_reported": "6M/5M/CC12M/约10M/2M来源",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "审美网页图片、Reddit 自然图片、CC12M 重描述、Flickr 图片、真实与合成图像混合",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [
+          "caption_pair_from_joined_annotation_samples"
+        ],
+        "upstream_candidates": [
+          "T2I_caption_pair"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Six Megalith caption fields are views of one asset, not six images.",
+        "Do not use Megalith download metadata caption/TXT when it is only a Flickr page URL.",
+        "Known Flux/DALL-E branches reject; unresolved T2I2M branch stays pending, never infer natural from missing keyword.",
+        "RedCaps raw/resized relationship requires identity check; TAR plus extracted copies must not double count."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:openuni",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "unknown",
+        "whole_source_reject": false,
+        "reject_rules": [
+          {
+            "rule_id": "genund:openuni:fa0931a484",
+            "match": {
+              "collection": "genund",
+              "source": "openuni",
+              "path_glob": "*openuni/data/text-to-image-2M/*flux*"
+            },
+            "evidence": [
+              {
+                "url": "https://huggingface.co/datasets/jackyhate/text-to-image-2M",
+                "claim": "text-to-image-2M 官方明确 Flux/DALL·E 生成分支；按来源路径匹配，非 caption 文本关键词判断。"
+              }
+            ]
+          },
+          {
+            "rule_id": "genund:openuni:5f6c70b020",
+            "match": {
+              "collection": "genund",
+              "source": "openuni",
+              "path_glob": "*openuni/data/text-to-image-2M/*dalle*"
+            },
+            "evidence": [
+              {
+                "url": "https://huggingface.co/datasets/jackyhate/text-to-image-2M",
+                "claim": "text-to-image-2M 官方明确 Flux/DALL·E 生成分支；按来源路径匹配，非 caption 文本关键词判断。"
+              }
+            ]
+          },
+          {
+            "rule_id": "genund:openuni:c8ee309727",
+            "match": {
+              "collection": "genund",
+              "source": "openuni",
+              "path_glob": "*openuni/data/text-to-image-2M/*dall-e*"
+            },
+            "evidence": [
+              {
+                "url": "https://huggingface.co/datasets/jackyhate/text-to-image-2M",
+                "claim": "text-to-image-2M 官方明确 Flux/DALL·E 生成分支；按来源路径匹配，非 caption 文本关键词判断。"
+              }
+            ]
+          }
+        ],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": [
+          "laion6m.caption",
+          "laion6m.detailed_caption",
+          "megalith.caption_internlm2",
+          "megalith.caption_internlm2_short",
+          "megalith.caption_florence2",
+          "megalith.caption_florence2_short",
+          "megalith.caption_sharecap",
+          "megalith.caption_sharecap_short",
+          "text-to-image-2M.prompt"
+        ],
+        "upstream_fields_pending_local_validation": [
+          "laion6m.re_caption",
+          "redcaps5m.re_caption"
+        ],
+        "source_of_text": "unknown",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": "manifest image and annotation paths -> independently validated raw/caption roots or TAR members; join by source/shard/key",
+        "upstream_join_candidates": null,
+        "pending": [
+          "establish archive member index; selected caption view and source/model provenance; real-vs-generated component identity"
+        ]
+      },
+      "recaption": {
+        "mode": "reuse_high_quality_existing_recaptions; fill_missing_lengths_only_after_image_filter",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason.",
+        "Megalith Parquet lacks image bytes; sampled local JPEG matches prove only bounded availability.",
+        "Ignore URL-only caption defaults; explicit six-field selection precedes text validation.",
+        "Check RedCaps .aria2 and TAR completeness; no completed-pair claim from archive presence.",
+        "Preserve duplicate shard IDs/member keys in source namespace; never global-basename match."
+      ],
+      "dedup_families": [
+        {
+          "family": "CC12M",
+          "relation": "documented_image_source",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "LAION_aesthetics",
+          "relation": "laion6m_derived_from_aesthetics12m",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "RedCaps",
+          "relation": "raw_and_resized_candidate_variants",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "Megalith_Flickr",
+          "relation": "six_recaptions_shared_image",
+          "actual_content_overlap_verified": false
+        },
+        {
+          "family": "LLaVA_NeXT",
+          "relation": "real_image_component_of_T2I2M_upstream",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [
+        {
+          "relative_path": "openuni/data/cc12m",
+          "carrier": "raw image TAR/extracted and captions TAR plus data.json",
+          "manifest_fields": [
+            "image",
+            "annotation"
+          ],
+          "local_caption_fields": null,
+          "upstream_caption_fields": null,
+          "pending": "validate actual caption schema and matching key; no assumed generic caption-field fallback"
+        },
+        {
+          "relative_path": "openuni/data/laion6m",
+          "carrier": "raw image TAR and captions TAR/extracted JSON plus data.json",
+          "manifest_fields": [
+            "image",
+            "annotation"
+          ],
+          "local_caption_fields": [
+            "caption",
+            "detailed_caption"
+          ],
+          "upstream_caption_fields": [
+            "re_caption"
+          ],
+          "pending": "explicit raw_root/captions_root; local schema differs from upstream doc"
+        },
+        {
+          "relative_path": "openuni/data/megalith-10m",
+          "carrier": "raw TAR/Parquet metadata and independent captions TAR/JSON plus megalith10m_all.json",
+          "manifest_fields": [
+            "image",
+            "annotation"
+          ],
+          "local_caption_fields": [
+            "caption_internlm2",
+            "caption_internlm2_short",
+            "caption_florence2",
+            "caption_florence2_short",
+            "caption_sharecap",
+            "caption_sharecap_short"
+          ],
+          "proposed_default_view": "caption_internlm2_short",
+          "default_view_status": "proposal_from_OpenUni_training_docs_requires_quality_check",
+          "forbidden_fallback": "generic caption or TXT when URL-only",
+          "join": "captions/<shard>/<key>.json to raw index; retain six field origins"
+        },
+        {
+          "relative_path": "openuni/data/redcaps5m",
+          "carrier": "raw TAR including observed .aria2 state files",
+          "local_caption_fields": null,
+          "upstream_caption_fields": [
+            "re_caption"
+          ],
+          "pending": "validate linked annotation and archive completeness"
+        },
+        {
+          "relative_path": "openuni/data/redcaps5m_resized",
+          "carrier": "raw TAR plus redcaps5m_data.json",
+          "manifest_fields": [
+            "image",
+            "annotation"
+          ],
+          "local_caption_fields": null,
+          "pending": "validate relationship to redcaps5m and captions; not an independent 5M by name"
+        },
+        {
+          "relative_path": "openuni/data/text-to-image-2M",
+          "carrier": "raw TAR/extracted JPG+JSON; manifests under data",
+          "local_caption_fields": [
+            "prompt"
+          ],
+          "generated_image_components": [
+            "Flux-dev",
+            "DALL-E_3"
+          ],
+          "natural_image_component": "LLaVA-NeXT original images as upstream statement; per-record mapping required",
+          "pending": "retain only provenance-confirmed allowed branch; 512/1024 size alone does not decide origin"
+        }
+      ],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json",
+        "corpus_pipeline/config/adapters.json",
+        "reports/genund_20261021/tar_pairs.json",
+        "reports/genund_20261021/megalith_caption_pairs.json",
+        "reports/genund_20261021/parquet_followup.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://github.com/wusize/OpenUni/blob/main/docs/DATASETS.md",
+          "claim": "已在本地审计发现图像；来源集合混合或逐图生成机制尚未证明，默认隔离。"
+        }
+      ]
+    },
+    {
+      "contract_id": "genund.parent.pixmo-ask-model-anything",
+      "source_id": "pixmo-ask-model-anything",
+      "source_prefix": "pixmo-ask-model-anything/",
+      "collection": "genund",
+      "status": "prepared_requires_runtime_validation",
+      "original_carriers": [
+        "extracted_JPG_shard_directories"
+      ],
+      "annotation_availability": {
+        "local_images": "observed_in_bounded_audit",
+        "local_text": "not_located_within_audit_budget",
+        "full_coverage": null,
+        "local_image_example": "/inspire/dataset/gen-und-mm-pretrain/01/pixmo-ask-model-anything/0023/45440.jpg",
+        "local_annotation_example": null,
+        "metadata_files_sampled_in_followup": 0,
+        "followup_limits": [
+          "dataset_entry_limit",
+          "unvisited_directories"
+        ],
+        "semantic_image_text_alignment_verified": false,
+        "observed_local_schemas": []
+      },
+      "scale": {
+        "local_reported": "约15.4万文件（条件外推）",
+        "upstream_reported": "161,737 QA行",
+        "unique_image_count": null,
+        "usable_record_count": null
+      },
+      "domain_description": {
+        "value": "多样自然图片、物体识别、图片细节问答、较长回答",
+        "basis": "upstream_description_not_per_image_domain_labels"
+      },
+      "task_families": {
+        "observed_local": [],
+        "upstream_candidates": [
+          "single_turn_I2T_QA"
+        ],
+        "native_direction": null,
+        "record_routing": "parse_original_schema_roles_and_order; parent task family is a prior, not a per-record label"
+      },
+      "preserve_native_semantics": [
+        "Multiple QA rows sharing image are valid separate supervision; do not collapse all questions by asset hash.",
+        "Do not reverse answer into T2I prompt; do not call concatenated independent QA original multi-turn."
+      ],
+      "source_filter": {
+        "authority": "corpus_pipeline/config/sources.json",
+        "parent_rule_id": "genund:pixmo-ask-model-anything",
+        "parent_image_origin": "mixed",
+        "parent_caption_origin": "mixed",
+        "whole_source_reject": false,
+        "reject_rules": [],
+        "other_path_rules": "resolve_in_full_compiled_source_manifest",
+        "natural_parent_ai_edit": "retain_and_mark_only_after_target_to_parent_lineage_verified",
+        "unknown_image_origin": "pending_review_not_auto_keep",
+        "programmatic_non_ai_images": "allowed_by_user_policy_after_source_validation"
+      },
+      "caption_reuse": {
+        "local_fields": null,
+        "upstream_fields_pending_local_validation": [
+          "question",
+          "answer"
+        ],
+        "source_of_text": "mixed",
+        "reuse_existing_before_regeneration": true,
+        "url_only_text_is_caption": false,
+        "regenerated_caption_origin": "ai"
+      },
+      "pairing": {
+        "local_join_contract": null,
+        "upstream_join_candidates": [
+          "image_url",
+          "image_sha256",
+          "question",
+          "answer"
+        ],
+        "pending": [
+          "locate matching QA Parquet; match downloaded bytes to upstream image_sha256"
+        ]
+      },
+      "recaption": {
+        "mode": "preserve_question_and_answer; repair_grounding_only; standalone_new_caption_if_no_QA",
+        "images_only_fallback": {
+          "allowed_after_image_acceptance": true,
+          "creates": "new_grounded_caption_view_only",
+          "must_not_claim_original_annotation": true,
+          "must_not_invent_original_qa_or_conversation": true,
+          "original_task_restoration": false
+        },
+        "long_medium_short_variants": "only_for_approved_T2I_caption_views; shared_image_asset_and_variant_group",
+        "layout_json": "optional_candidate_selection_then_verified_annotation; no locally confirmed MOSS layout schema in bounded audit"
+      },
+      "no_per_record_api_needed_for": [
+        "known_source_and_path_rules",
+        "file_format_and_presence",
+        "image_dimensions_and_exact_hash",
+        "roles_turn_counts_image_counts_in_explicit_schema",
+        "explicit_original_sequence_order",
+        "known_join_key_and_path_prefix_map"
+      ],
+      "runtime_checks": [
+        "Validate current mount and immutable input manifest; historical CPU paths are evidence, not current file existence.",
+        "Read image header/dimensions, validate actual decode and bytes hash; directory presence never proves decodability.",
+        "Resolve IDs within source/shard namespaces; validate one-to-many joins and orphan rates; never zip independent files by row order.",
+        "Apply current compiled source/path policy and per-asset provenance before image detector/API gates.",
+        "Validate split and evaluation overlaps, source licensing metadata, and current record schema before release.",
+        "Deduplicate image assets separately from task records/caption variants; preserve full multimodal sequence when any image is removed or quarantined.",
+        "Verify generated text grounding and role/turn/order conservation; mark AI-generated captions instead of filtering the image for that reason."
+      ],
+      "dedup_families": [
+        {
+          "family": "PixMo_AMA",
+          "relation": "documented_multiple_QA_per_image",
+          "actual_content_overlap_verified": false
+        }
+      ],
+      "subcontracts": [],
+      "evidence_refs": [
+        "GENUND_DATASET_REPORT.md",
+        "reports/genund_20261021/dataset_summary.json",
+        "reports/unified_mm_20261022/deep_metadata_verified.json",
+        "corpus_pipeline/config/sources.json"
+      ],
+      "upstream_evidence": [
+        {
+          "url": "https://docs.allenai.org/training_data/pixmo",
+          "claim": "人类问题与语言模型协助回答；官方例子包含 AI 图，human-annotated 不等于 natural-image。"
+        }
+      ]
+    }
+  ]
+}

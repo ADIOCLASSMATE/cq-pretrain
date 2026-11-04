@@ -12,6 +12,19 @@ import torch
 
 from ..data import Batch
 from ..mainline import build_plan
+from .loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed
+
+
+def select_i2t_image(sample_id, probability, seed=0, epoch=0):
+    """Independent Bernoulli draws keyed by occurrence, safe across TP/restart.
+
+    No batch quota or inverse-probability weighting: the skipped images are
+    intentionally absent from the image objective. A new epoch redraws them.
+    """
+    if probability == 1:return True
+    if probability == 0:return False
+    digest=hashlib.sha256(f'i2t-null-v1:{seed}:{epoch}:{sample_id}'.encode()).digest()
+    return int.from_bytes(digest[:8],'big') < int(probability*(1 << 64))
 
 
 def token_contract(root, cfg):
@@ -47,7 +60,10 @@ class Packer:
         self.document_size=None
         self.packing_contract=dict(preserve_documents=cfg.preserve_documents,
             long_document_policy=cfg.long_document_policy,length=length,max_images=max_images,
-            padding_multiple=padding_multiple)
+            padding_multiple=padding_multiple,image_loss_permissions=LOSS_PERMISSION_CONTRACT)
+        if cfg.i2t_image_loss_probability != 1:
+            self.packing_contract['i2t_image_loss_probability']=cfg.i2t_image_loss_probability
+            self.packing_contract['i2t_sampling']='sample_seed_epoch_sha256_v1'
         self.stats=dict(batches=0,pack_seconds=0.,plan_seconds=0.,pin_seconds=0.,atomic_captions=0,
                         atomic_documents=0,long_document_windows=0)
         if cfg.vision_encoder == 'qwen35':
@@ -106,6 +122,8 @@ class Packer:
         rope = np.zeros((2, s, 1), np.int64)
         image_queries = np.zeros(s, bool)
         text_indices, image_indices, pixels, records = [], [], [], []
+        generation_image_indices=[]
+        i2t_null_candidates=i2t_null_images=0
         vision_pixels,vision_grids=[],[]
         position, seg, body_count = 0, 0, 0
         generation_tokens=0
@@ -114,6 +132,17 @@ class Packer:
             doc = self.documents.peek()
             if doc is None:
                 break
+            # Only image-first caption pairs have the fixed trained null
+            # prefix. Conversation/interleaved images may have real context.
+            is_null=doc.get('format')=='caption' and doc.get('direction')=='I2T'
+            signature=getattr(self.documents,'signature',{})
+            sampled_image=not is_null or select_i2t_image(doc['id'],cfg.i2t_image_loss_probability,
+                signature.get('seed',0),signature.get('epoch',0))
+            # This is an objective permission, independent of source format or
+            # random null-target sampling. Validate all flags before packing.
+            image_loss_allowed(doc)
+            image_permissions={index:image_loss_allowed(doc,element)
+                for index,element in enumerate(doc['elements']) if element['type']=='image'}
             continued=bool(self.element or self.offset)
             if not self.prepared_images:self.documents.prefetch_images(doc, self.element)
             if cfg.preserve_documents and self.element==0 and self.offset==0:
@@ -141,10 +170,11 @@ class Packer:
             if not cfg.preserve_documents and doc.get('format')=='caption' and self.element==0 and self.offset==0:
                 image_elements=[i for i,e in enumerate(doc['elements']) if e['type']=='image']
                 if len(image_elements)==1:
+                    generate_image=sampled_image and image_permissions[image_elements[0]]
                     if self.processor is not None:
                         target,_,grid=self.prepare_image(doc,image_elements[0])
                         image_tokens=grid[1]*grid[2]//4
-                        nt=target.shape[0]*target.shape[1]//256+cfg.image_condition_queries
+                        nt=(target.shape[0]*target.shape[1]//256+cfg.image_condition_queries) if generate_image else 0
                     else:
                         image_tokens=cfg.image_tokens;nt=0
                     needed=sum(len(e['input_ids']) for e in doc['elements'] if e['type']=='text')+image_tokens+4
@@ -157,8 +187,9 @@ class Packer:
                     if needed<=s:self.stats['atomic_captions']+=1
             if first and first['type']=='image' and self.max_images and len(pixels)>=self.max_images:break
             if first and first['type']=='image' and self.processor is not None:
+                generate_image=sampled_image and image_permissions[self.element]
                 first_target,_,grid=self.prepare_image(doc)
-                if not cfg.preserve_documents and cfg.renderer=='moss' and pixels and cfg.generation_token_budget:
+                if generate_image and not cfg.preserve_documents and cfg.renderer=='moss' and generation_image_indices and cfg.generation_token_budget:
                     first_tokens=first_target.shape[0]*first_target.shape[1]//256+cfg.image_condition_queries
                     if generation_tokens+first_tokens>cfg.generation_token_budget:break
                 needed=grid[1]*grid[2]//4+3
@@ -204,13 +235,14 @@ class Packer:
                     if self.offset == len(e['input_ids']):
                         self.element += 1; self.offset = 0
                 elif e['type'] == 'image':
+                    generate_image=sampled_image and image_permissions[self.element]
                     if self.max_images and len(pixels)>=self.max_images:break
                     if self.processor is not None:
                         target,processed,grid=self.prepare_image(doc)
                         height,width=grid[1]//2,grid[2]//2
                         if cfg.renderer=='moss':
-                            nt=target.shape[0]*target.shape[1]//256+cfg.image_condition_queries
-                            if not cfg.preserve_documents and pixels and cfg.generation_token_budget and generation_tokens+nt>cfg.generation_token_budget:break
+                            nt=(target.shape[0]*target.shape[1]//256+cfg.image_condition_queries) if generate_image else 0
+                            if not cfg.preserve_documents and generation_image_indices and cfg.generation_token_budget and generation_tokens+nt>cfg.generation_token_budget:break
 
                     else:
                         height=width=math.isqrt(cfg.image_tokens)
@@ -226,6 +258,10 @@ class Packer:
                     ids[position:end], segment[position:end] = t['image'], seg
                     image_queries[position:end] = True
                     image_indices.append(np.arange(position, end, dtype=np.int64))
+                    if generate_image:generation_image_indices.append(len(image_indices)-1)
+                    if is_null:
+                        i2t_null_candidates+=1
+                        i2t_null_images+=int(generate_image)
                     sigma[position:end], sigma[end] = position + 1, position
                     local = np.arange(n)
                     rope[0, position:end, 0] = rope_cursor + local // width
@@ -277,9 +313,11 @@ class Packer:
             text_indices=torch.tensor(text_indices, dtype=torch.long), image_queries=torch.from_numpy(image_queries[None]),
             sigma=torch.from_numpy(sigma[None]), segments=torch.from_numpy(segment[None]), row_col=torch.from_numpy(rope),
             noise=torch.empty(0), times=torch.empty(0), mask=torch.empty(0,dtype=torch.bool), valid_rows=torch.empty(0,dtype=torch.bool))
-        if pixels and cfg.renderer=='moss':
+        if cfg.renderer=='moss' or len(generation_image_indices)!=n_images:
+            batch.generation_image_indices=torch.tensor(generation_image_indices,dtype=torch.long)
+        if generation_image_indices and cfg.renderer=='moss':
             from ..generation import GenerationInputs
-            batch.generation=GenerationInputs.prepare(pixels,cfg.image_condition_queries,cfg.dit_width//cfg.dit_heads,
+            batch.generation=GenerationInputs.prepare([pixels[i] for i in generation_image_indices],cfg.image_condition_queries,cfg.dit_width//cfg.dit_heads,
                 token_budget=cfg.generation_token_budget if cfg.preserve_documents else 0,
                 max_images=cfg.generation_microbatch_images if cfg.preserve_documents else 0)
         if vision_pixels:
@@ -297,6 +335,8 @@ class Packer:
         self.serial += 1
         receipt = dict(serial=self.serial, next_state=self.state_dict(), documents=records,
                        body_tokens=body_count, occupied=position, images=n_images,
+                       generation_images=batch.generation_image_count,
+                       i2t_null_candidates=i2t_null_candidates,i2t_null_images=i2t_null_images,
                        generation_tokens=generation_tokens,
                        dit_microbatches=(max(1,len(batch.generation.microbatches)) if batch.generation else 0),
                        ids_sha256=hashlib.sha256(ids.tobytes()).hexdigest())

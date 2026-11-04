@@ -1,0 +1,17 @@
+{
+  "schema_version": "corpus_pipeline.rules.v1",
+  "version": "2026-10-22.stage1.3",
+  "policy": "ai_only",
+  "allow_ai_edits_from_natural_sources": true,
+  "defaults": {
+    "unknown_image": "quarantine",
+    "unresolved_image": "quarantine",
+    "ai_caption": "retain_and_mark",
+    "disallowed_image_action": "reject"
+  },
+  "rejected_image_origins": [
+    "ai_generated",
+    "ai_edited"
+  ],
+  "description": "排除AI生成图；AI编辑图若有明确真实原图来源则保留并标注，原图来源未知则隔离、明确非真实则排除。程序绘图和渲染图不因非自然属性排除；未知来源隔离；AI文本保留并标注。多图编辑来源必须绑定到对应图片，不从邻近图片推断。"
+}

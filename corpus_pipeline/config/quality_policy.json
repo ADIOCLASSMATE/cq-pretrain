@@ -1,0 +1,9 @@
+{
+  "schema_version": "corpus.quality_policy.config.v1",
+  "enabled": true,
+  "require_blur_evidence": true,
+  "scope": "reviewed_subset",
+  "current_overlay": "../cluster/runs/dcvlm_frontpass_20261022T2129Z/postprocess_20261024/codex_uncertain_20261024/QUALITY_POLICY_CURRENT.json",
+  "user_policy": "你直接帮我弄好，带模糊的直接不要",
+  "description": "本次仅对绑定的688张复核图应用新质量策略；范围外明确标记未检查，继续原有AI及其他门控，不宣称模糊检查通过。范围内明显模糊排除，不确定保持pending。真实纹理、绘画笔触、纯色遮挡或平滑渐变本身不构成模糊证据。scope=all_images可显式要求所有图像均有模糊复核证据。"
+}

@@ -1,0 +1,65 @@
+{
+  "schema": "corpus.orchestration.v1",
+  "run": "/REPLACE_WITH_NEW_RUN",
+  "repository": "/REPLACE_WITH_REPOSITORY",
+  "python": "/REPLACE_WITH_REPOSITORY/.venv/bin/python",
+  "sdk_python": "/root/.local/share/uv/tools/inspire-skill/bin/python",
+  "account": "wjx-ascend",
+  "workspace": "昇腾卡公共空间",
+  "deadline_utc": "REPLACE_WITH_ISO8601_DEADLINE_WITH_TIMEZONE",
+  "max_cards": 512,
+  "priority": 1,
+  "cpu_priority": 6,
+  "name_prefix": "REPLACE_WITH_UNIQUE_RUN_PREFIX",
+  "queue_port_base": 29001,
+  "review_notebook": "REPLACE_WITH_REVIEW_CPU_NAME",
+  "api_key_file": "/REPLACE_WITH_PRIVATE_API_KEY_FILE",
+  "frontpass_qualification": "/REPLACE_WITH_FRONTPASS_QUALIFICATION.json",
+  "sscd_qualification": "/REPLACE_WITH_SSCD_QUALIFICATION.json",
+  "baseline_index": "/REPLACE_WITH_SEALED_BASELINE_SELECTED_INDEX",
+  "baseline_reconciliation": "/REPLACE_WITH_SEALED_BASELINE_RECONCILIATION",
+  "model_assets": "/REPLACE_WITH_REPOSITORY/corpus_pipeline/serving/qwen36_w8a8_20261024",
+  "dataset_roots": {
+    "REPLACE_WITH_PLAN_DATASET_ID": "/inspire/dataset/gen-und-mm-pretrain/01"
+  },
+  "platform": {
+    "account": "wjx-ascend",
+    "workspace": "昇腾卡公共空间",
+    "project": "多模态大模型新架构评测探索与scaling-law",
+    "group": "910B资源",
+    "image": "REPLACE_WITH_VALIDATED_NPU_IMAGE",
+    "datasets": [
+      "gen-und-mm-pretrain:01"
+    ]
+  },
+  "cpu_workers": [
+    {
+      "name": "REPLACE_WITH_INGEST_CPU_NAME",
+      "notebook_id": "REPLACE_WITH_ACCEPTED_NOTEBOOK_ID",
+      "workspace_id": "REPLACE_WITH_WORKSPACE_ID",
+      "roles": [
+        "ingest"
+      ],
+      "workers": 12
+    },
+    {
+      "name": "REPLACE_WITH_REVIEW_CPU_NAME",
+      "notebook_id": "REPLACE_WITH_ACCEPTED_REVIEW_NOTEBOOK_ID",
+      "workspace_id": "REPLACE_WITH_WORKSPACE_ID",
+      "roles": [
+        "ingest",
+        "review"
+      ],
+      "workers": 12
+    }
+  ],
+  "source_plans": {
+    "OpenUni": "/REPLACE_WITH_PLANS/OpenUni/PLAN.json",
+    "ScaleCap450k_image": "/REPLACE_WITH_PLANS/ScaleCap450k_image/PLAN.json",
+    "DenseFusion-1M": "/REPLACE_WITH_PLANS/DenseFusion-1M/PLAN.json",
+    "pixmo-ask-model-anything": "/REPLACE_WITH_PLANS/pixmo-ask-model-anything/PLAN.json",
+    "FineVision": "/REPLACE_WITH_PLANS/FineVision/PLAN.json",
+    "BLIP3o-Pretrain-Long-Caption": "/REPLACE_WITH_PLANS/BLIP3o-Pretrain-Long-Caption/PLAN.json",
+    "DenseFusion-4V-100k": "/REPLACE_WITH_PLANS/DenseFusion-4V-100k/PLAN.json"
+  }
+}

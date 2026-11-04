@@ -1,0 +1,48 @@
+{
+  "adapter": "corpus_pipeline.resource_manager.inspire_adapter:InspireAdapter",
+  "state_dir": "/srv/example-resource-manager/serving-v1/controller",
+  "workload": {
+    "scope": "example-serving-v1",
+    "profile": "example-ascend-serving",
+    "max_cards": 16,
+    "command": [
+      "/opt/example/venv/bin/python",
+      "/opt/example/model_server.py",
+      "--model",
+      "/models/example-model",
+      "--tensor-parallel-size",
+      "8",
+      "--port",
+      "8000"
+    ],
+    "allowed_cards": [8],
+    "replica_cards": 8,
+    "migration_policy": "disabled",
+    "workload_kind": "service",
+    "min_ready_replicas": 1,
+    "readiness_command": [
+      "/opt/example/venv/bin/python",
+      "/opt/example/check_ready.py",
+      "--port",
+      "8000"
+    ],
+    "drain_command": null,
+    "completion_command": null,
+    "poll_seconds": 10
+  },
+  "adapter_config": {
+    "backend": "serving",
+    "account": "REPLACE_WITH_ACCOUNT_NAME",
+    "workspace": "REPLACE_WITH_WORKSPACE_NAME",
+    "project": "REPLACE_WITH_PROJECT_NAME",
+    "group": "REPLACE_WITH_COMPUTE_GROUP_NAME",
+    "image": "REPLACE_WITH_READY_IMAGE_NAME",
+    "priority": 3,
+    "global_max_cards": 256,
+    "registry_dir": "/srv/example-resource-manager/serving-v1/adapter",
+    "model": "REPLACE_WITH_REGISTERED_MODEL_NAME",
+    "model_version": 1,
+    "port": 8000,
+    "shm_gib": 128
+  }
+}

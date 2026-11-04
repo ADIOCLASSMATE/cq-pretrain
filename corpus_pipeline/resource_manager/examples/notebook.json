@@ -1,0 +1,46 @@
+{
+  "adapter": "corpus_pipeline.resource_manager.inspire_adapter:InspireAdapter",
+  "state_dir": "/srv/example-resource-manager/batch-v1/controller",
+  "workload": {
+    "scope": "example-batch-v1",
+    "profile": "example-ascend-notebook",
+    "max_cards": 48,
+    "command": [
+      "/opt/example/venv/bin/python",
+      "/workspace/example/worker.py",
+      "--config",
+      "/workspace/example/workload.json"
+    ],
+    "allowed_cards": [1, 2, 4, 8, 16],
+    "replica_cards": null,
+    "migration_policy": "restartable",
+    "workload_kind": "batch",
+    "min_ready_replicas": 0,
+    "readiness_command": null,
+    "drain_command": null,
+    "completion_command": [
+      "/opt/example/venv/bin/python",
+      "/workspace/example/is_complete.py",
+      "--config",
+      "/workspace/example/workload.json"
+    ],
+    "poll_seconds": 10
+  },
+  "adapter_config": {
+    "backend": "notebook",
+    "account": "REPLACE_WITH_ACCOUNT_NAME",
+    "workspace": "REPLACE_WITH_WORKSPACE_NAME",
+    "project": "REPLACE_WITH_PROJECT_NAME",
+    "group": "REPLACE_WITH_COMPUTE_GROUP_NAME",
+    "image": "REPLACE_WITH_READY_IMAGE_NAME",
+    "priority": 3,
+    "global_max_cards": 256,
+    "registry_dir": "/srv/example-resource-manager/batch-v1/adapter",
+    "repository": "/workspace/example/pipeline-repository",
+    "remote_python": "/opt/example/venv/bin/python",
+    "worker_state_dir": "/workspace/example/resource-manager-workers",
+    "gpu_type": "ASCEND_910B_64G",
+    "excluded_nodes": [],
+    "shm_gib": 128
+  }
+}
