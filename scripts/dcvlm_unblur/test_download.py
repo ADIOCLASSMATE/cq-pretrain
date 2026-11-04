@@ -38,7 +38,7 @@ def main():
                sha256=hashlib.sha256(data).hexdigest())
     with tempfile.TemporaryDirectory(dir=worker.RUN) as folder:
         directory = Path(folder)
-        with patch.object(worker, 'session', return_value=Session()), patch.object(worker.time, 'sleep'), ThreadPoolExecutor(2) as pool:
+        with patch.object(worker, 'session', return_value=Session()), patch.object(worker, 'source_url', return_value='https://test.invalid/fixture'), patch.object(worker.time, 'sleep'), ThreadPoolExecutor(2) as pool:
             result = worker.download_tar(job, directory, pool)
             assert result.read_bytes() == data
             assert ranges == [(0, 131071), (65536, 131071)], ranges

@@ -50,7 +50,9 @@
   本次恢复任务允许修改 TAR，覆盖上文及旧索引合同中针对此任务的原始只读限制。
   控制目录为 `.../datasets/_repairs/dcvlm_datacomp_unblur_20261104/`，实现位于
   `scripts/dcvlm_unblur/`；CPU 实例前缀 `dcvlm-unblur-cpu-1104-`，限定本项目昇腾空间，
-  32 个槽位，每个 0 GPU / 8 CPU / 128 GiB。只替换与上游原图 SHA256 完全一致的下载；
+  申请最多 256 个槽位，每个 0 GPU / 8 CPU / 128 GiB，故障节点上的槽位排除。
+  用户已明确改为完整恢复优先，允许超过 1 小时，不再按时限截断。
+  只替换与上游原图 SHA256 完全一致的下载；
   网络失败或哈希不符不计为恢复，也不默认删除样本。`STATUS.json` 跟踪阶段；
   `APPLIED.json` 表示可恢复项已写回，只有 `all_datacomp_blur_removed=true` 才表示无待处理项。
   新索引在该控制目录的 `native/`；旧索引、图像特征和上传清单在写回时失效，不能沿用。

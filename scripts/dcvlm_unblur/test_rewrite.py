@@ -38,6 +38,7 @@ def main():
         rows[1]['source_key'] = 'unchanged'
         rows[1]['sample_id'] = 'unchanged_id'
         rows[1]['source'] = 'control_source'
+        rows[1]['adapter_metadata_json'] = canonical(dict(json.loads(rows[1]['adapter_metadata_json']), prepared_adapter_status='quarantine'))
         archive = root / 'fixture.tar'
         with tarfile.open(archive, 'w', format=tarfile.PAX_FORMAT) as target:
             for r in rows:
@@ -62,6 +63,13 @@ def main():
         fixture = dict(source_shard='fixture.tar', path='data.parquet', rows=2,
                        sha256=file_sha(native / 'data.parquet'))
         original_sha = file_sha(archive)
+        unchanged_run = Path(folder) / 'unchanged_run'
+        unchanged_run.mkdir()
+        before_stat = archive.stat()
+        unchanged = rewrite(fixture, {}, root=root, native=native, run=unchanged_run)
+        assert unchanged['unchanged'] and unchanged['new_sha256'] == original_sha
+        assert unchanged['index'] == str(native / 'data.parquet')
+        assert archive.stat().st_ino == before_stat.st_ino and archive.stat().st_mtime_ns == before_stat.st_mtime_ns
         bad = dict(replacement, sha256='0' * 64)
         try:
             rewrite(fixture, {row['source_key']: bad}, root=root, native=native, run=run)
@@ -100,6 +108,7 @@ def main():
         assert final['restored_records'] == 1 and final['all_datacomp_blur_removed']
         complete = json.loads((run / 'native/COMPLETE.json').read_text())
         assert complete['statistics']['samples'] == 2 and complete['statistics']['image_slots'] == 2
+        assert complete['statistics']['adapter_statuses'] == {'ready': 1, 'quarantine': 1}
     print('PASS: rejection, exact restored bytes, unchanged members, all locator offsets, backup, restart, idempotence and native reader publication')
 
 

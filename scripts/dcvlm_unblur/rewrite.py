@@ -38,7 +38,10 @@ def rewrite(entry, replacements, *, root=ROOT, native=NATIVE, run=RUN):
     source = root / relative
     staged = source.with_suffix('.tar.unblur.tmp')
     with (directory / 'lock').open('w') as lock:
-        fcntl.lockf(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
         if (directory / 'APPLIED.json').exists():
             return json.loads((directory / 'APPLIED.json').read_text())
         # A journal written before rename also handles a process killed after rename.
@@ -58,9 +61,22 @@ def rewrite(entry, replacements, *, root=ROOT, native=NATIVE, run=RUN):
         table = pq.read_table(native / entry['path'])
         rows = table.to_pylist()
         assert len(rows) == entry['rows']
+        statistics = dict(source_counts=dict(Counter(f"{r['collection']}:{r['source']}" for r in rows)),
+            format_counts=dict(Counter(r['format'] for r in rows)),
+            adapter_statuses=dict(Counter(json.loads(r['adapter_metadata_json']).get('prepared_adapter_status', 'unknown') for r in rows)),
+            image_slots=sum(r['image_count'] for r in rows))
         original = json.loads(rows[0]['original_locator_json'])
         old_sha = original['archive_sha256']
         assert source.stat().st_size == original['archive_size']
+        if not replacements:
+            # Reuse the verified original index and TAR without changing either identity.
+            plan = dict(source_shard=relative, old_sha256=old_sha, new_sha256=old_sha,
+                new_size=original['archive_size'], changed_images=0, records=len(rows),
+                index=str(native / entry['path']), index_sha256=entry['sha256'],
+                dataset_id=original['dataset_id'], unchanged=True,
+                validation='original_frozen_index_hash_and_archive_size', prepared=time.time(), **statistics)
+            save(directory / 'APPLIED.json', plan)
+            return plan
         assert file_sha(source) == old_sha, 'Original TAR hash changed'
         expected, replace_members = {}, {}
         for row in rows:
@@ -142,10 +158,7 @@ def rewrite(entry, replacements, *, root=ROOT, native=NATIVE, run=RUN):
         plan = dict(source_shard=relative, old_sha256=old_sha, new_sha256=new_sha, new_size=new_size,
                     changed_images=len(replace_members), records=len(rows), index=str(index),
                     index_sha256=file_sha(index), dataset_id=DATASET_ID, prepared=time.time(),
-                    replacements=replacements, backup=str(backup),
-                    source_counts=dict(Counter(r['source'] for r in rows)),
-                    format_counts=dict(Counter(r['format'] for r in rows)),
-                    image_slots=sum(r['image_count'] for r in rows))
+                    replacements=replacements, backup=str(backup), **statistics)
         save(journal, plan)
         os.replace(staged, source)
         directory_fd = os.open(source.parent, os.O_RDONLY | os.O_DIRECTORY)
