@@ -1,0 +1,78 @@
+# Initial trial on the 3,020 cached OpenVidHD clips; not a tuned quality budget.
+# From the repository root:
+#   bash scripts/train.sh --config configs/openvid81_832x480_trial.yaml
+# Add --auto-resume to resume this same experiment after interruption.
+# For an independent two-step check, also pass:
+#   --set training.exp_id=openvid81_832x480_smoke --set training.max_train_steps=2
+#   --set training.gradient_accumulation_steps=2
+#   --set optimizer.warmup_steps=0 --set optimizer.decay_steps=0
+distributed:
+  backend: mindspeed
+  num_processes: 4
+  overlap_grad_reduce: true
+  overlap_param_gather: true
+
+model:
+  qwen_path: /inspire/sj-ssd3/project/high-dimensionaldata/public/models/Qwen3.5-2B
+  wan_path: /inspire/sj-ssd3/project/high-dimensionaldata/public/models/Wan2.1-T2V-1.3B
+  qwen_gdn_backend: mindspeed
+  wan_attention_backend: npu
+  gradient_checkpointing: true
+  freeze_vision: true
+  train_language: true
+  train_wan: true
+  train_condition_proj: true
+  lambda_text: 0.05
+  lambda_video: 1.0
+  video_uncond_prob: 0.1
+
+data:
+  sources:
+    - name: openvid81_t2v
+      path: /inspire/sj-ssd3/project/high-dimensionaldata/public/datasets/openvidhd_selected_81frame/832x480/samples.jsonl
+      task: t2v
+    - name: openvid81_v2t
+      path: /inspire/sj-ssd3/project/high-dimensionaldata/public/datasets/openvidhd_selected_81frame/832x480/samples.jsonl
+      task: v2t
+  validation_sources: []
+  mixing: balanced
+  task_weights: {t2v: 1, v2t: 1}
+  representations: {qwen: cache, wan: cache}
+  max_seq_length: 8192
+  # data.video is inferred from the manifest's latent_profile. Do not replace
+  # it with the fixed 9-frame settings used by configs/tests/ascend_smoke.yaml.
+
+training:
+  exp_id: openvid81_832x480_trial
+  device: npu
+  mixed_precision: bf16
+  seed: 42
+  # DP4 * batch 1 * accumulation 8 = 32 samples/update, 16 per task.
+  # 200 updates = 3,200 exposures per task, about 1.06 passes over 3,020 clips.
+  max_train_steps: 200
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  max_grad_norm: 1.0
+  use_ema: false
+  dataloader_workers: 0
+  save_every: 50
+  keep_checkpoints: 3
+  log_every: 1
+  val_every: 0
+
+optimizer:
+  backbone_lr: 1.0e-5
+  embedding_lr: 1.0e-5
+  generator_lr: 1.0e-4
+  projector_lr: 1.0e-4
+  weight_decay: 0.1
+  generator_weight_decay: 0.0
+  betas: [0.9, 0.95]
+  eps: 1.0e-6
+  # Short trial schedule; warmup + decay must fit max_train_steps.
+  warmup_steps: 10
+  decay_steps: 40
+  min_lr_ratio: 0.1
+
+flow:
+  repeats: 1
