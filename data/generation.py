@@ -1,4 +1,5 @@
 """Aspect-preserving targets and CPU-built ragged MOSS generation geometry."""
+from ops.wan_layout import WanLayout, wan_rope, patch_latent, unpatch_latent
 from dataclasses import dataclass, fields
 import math
 from types import SimpleNamespace
@@ -186,24 +187,6 @@ class GenerationSlice:
                                noise=batch.noise[lo:hi],times=batch.times[a:b])
 
 
-def wan_rope(grid,head_dim):
-    coordinates=torch.stack(torch.meshgrid(*(torch.arange(n,dtype=torch.float64) for n in grid),indexing='ij'),-1).reshape(-1,3)
-    widths=(head_dim-4*(head_dim//6),2*(head_dim//6),2*(head_dim//6))
-    angles=torch.cat([coordinates[:,i,None]*10000**(-torch.arange(0,d,2,dtype=torch.float64)/d)
-                      for i,d in enumerate(widths)],-1)
-    return angles.cos().float()[:,None],angles.sin().float()[:,None]
-
-
-def patch_latent(z):
-    c,t,h,w=z.shape
-    return z.reshape(c,t,h//2,2,w//2,2).permute(1,2,4,0,3,5).reshape(-1,c*4)
-
-
-def unpatch_latent(patches,grid,channels=16):
-    t,h,w=grid
-    return patches.reshape(t,h,w,channels,2,2).permute(3,0,1,4,2,5).reshape(channels,t,h*2,w*2)
-
-
 @dataclass
 class WanGenerationInputs:
     pixels: tuple
@@ -244,14 +227,11 @@ class WanGenerationInputs:
         if any((x.shape[0]-1)%4 or x.shape[1]%16 or x.shape[2]%16 for x in arrays):
             raise ValueError('Wan targets require 4k+1 frames and spatial multiples of 16')
         counts=tuple([queries]*len(images) if isinstance(queries,int) else queries)
-        lengths=tuple(math.prod(g) for g in grids)
-        ends=tuple(np.cumsum(lengths).tolist());text_ends=tuple(np.cumsum(counts).tolist())
-        samples=torch.repeat_interleave(torch.arange(len(images)),torch.tensor(lengths))
-        condition=torch.cat([torch.arange(q)+i*max(counts) for i,q in enumerate(counts)])
+        geometry=WanLayout.prepare(grids,counts,head_dim)
+        lengths=geometry.lengths
         weights=torch.cat([torch.full((n,),1/(len(images)*n)) for n in lengths])
-        cos,sin=zip(*(wan_rope(g,head_dim) for g in grids))
-        out=cls(pixels,grids,lengths,counts,ends,text_ends,samples,condition,weights,
-                torch.cat(cos),torch.cat(sin),torch.empty(0),tuple(cached_latents))
+        out=cls(pixels=pixels,loss_weights=weights,time_features=torch.empty(0),
+                cached_latents=tuple(cached_latents),**vars(geometry))
         ranges=[];start=used=0
         for i,n in enumerate(lengths):
             if token_budget and n>token_budget:raise ValueError(f'Visual target needs {n} Wan tokens, above budget {token_budget}')

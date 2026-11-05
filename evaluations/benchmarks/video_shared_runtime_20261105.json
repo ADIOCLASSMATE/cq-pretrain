@@ -1,0 +1,272 @@
+{
+  "completed_utc": "2026-11-05T20:10:04+00:00",
+  "shared_files": [
+    {
+      "main": "ops/__init__.py",
+      "video": "ops/__init__.py",
+      "sha256": "cd200ae2676b2404512c4f3dcfb84c56b1128a6d03682fbe7c103f78a072da5c"
+    },
+    {
+      "main": "ops/attention.py",
+      "video": "ops/attention.py",
+      "sha256": "e73189ea115a166ff6bb36c347b7dc5af925d645e2466bb8bf73b9ad75f06fe3"
+    },
+    {
+      "main": "ops/attention_layout.py",
+      "video": "ops/attention_layout.py",
+      "sha256": "4032440e19d044998b5aaa88f6db01f90aa1320729dc61d85eeec3a7d0241d17"
+    },
+    {
+      "main": "ops/cross_entropy.py",
+      "video": "ops/cross_entropy.py",
+      "sha256": "1bbc5ff2b804db03934ebf1206783784c7d936f9dd2fe2409e8c985a67c4f656"
+    },
+    {
+      "main": "ops/functional.py",
+      "video": "ops/functional.py",
+      "sha256": "59cb08ce5154e3a9e3e2e013b7a0f309fcfc62fed61dad2005c5f018b95288a3"
+    },
+    {
+      "main": "ops/gated_delta_layout.py",
+      "video": "ops/gated_delta_layout.py",
+      "sha256": "a20bf81bcdc48a3ae9ea3f41028f7ebda1e66a0cf90c03f390aaf90e7eaca8d9"
+    },
+    {
+      "main": "ops/gated_delta_net.py",
+      "video": "ops/gated_delta_net.py",
+      "sha256": "108e19d20af9bf7aec7b3dba958d60c836403c8579fc68d6e01c4896a5a982fa"
+    },
+    {
+      "main": "ops/torchair.py",
+      "video": "ops/torchair.py",
+      "sha256": "1440688ce73c55a7108132e00dec318aedaeb06502662f21d4ed4ddcb7088c18"
+    },
+    {
+      "main": "ops/wan_layout.py",
+      "video": "ops/wan_layout.py",
+      "sha256": "851398cf49fd00fd09ceda1d83770c6a6b180d310f6355828c8f32681e6a942b"
+    },
+    {
+      "main": "distributed/__init__.py",
+      "video": "distributed/__init__.py",
+      "sha256": "77a7ad1384242bd8b7ed55971dfee7f50e71d25d111519d6bb82f4e85c9df8e6"
+    },
+    {
+      "main": "distributed/communication.py",
+      "video": "distributed/communication.py",
+      "sha256": "6ace31c25e6ebbff72dc9578c70a1977231217dc13d6a6891b32532aa573c78c"
+    },
+    {
+      "main": "distributed/mc2.py",
+      "video": "distributed/mc2.py",
+      "sha256": "e6950c41a18f7bad1bb356dfdf9173183d7d127e5eea5f690fb9192cf9ab05a0"
+    },
+    {
+      "main": "distributed/megatron.py",
+      "video": "distributed/megatron.py",
+      "sha256": "bfc9fe3477d5462ceda078b8232c56a9cd98103e50fda71fb667ff58c9a80f40"
+    },
+    {
+      "main": "models/backbone_qwen35.py",
+      "video": "models/qwen35_layers.py",
+      "sha256": "c4ee65d8eb39cceb402b986e6120d6587e09a474c760431093f321fbe488ad1a"
+    },
+    {
+      "main": "models/generator_wan21.py",
+      "video": "models/wan_layers.py",
+      "sha256": "691709ee471bc52e6f5814e9c8ec53f8bfea1dca122039297122aa329fdca196"
+    },
+    {
+      "main": "models/cq_layout.py",
+      "video": "models/cq_layout.py",
+      "sha256": "b764b655665c7414aba4a559f142cdb26f61784a230747a924f12f7c5415e3ec"
+    }
+  ],
+  "cpu": {
+    "main": {
+      "passed": 157,
+      "subtests": 51,
+      "seconds": 45.77
+    },
+    "video": {
+      "passed": 270,
+      "device_tests_skipped": 18,
+      "seconds": 149.66
+    },
+    "shell_after_cache_change": {
+      "passed": 13
+    }
+  },
+  "npu": {
+    "device": "Ascend 910B2C",
+    "node": "infra-gpu-npu-224.host.shzhisuan.com",
+    "world_size": 16,
+    "numerical": {
+      "passed": 224,
+      "failed": 0,
+      "skipped": 0,
+      "backends": [
+        "ascendc",
+        "mindspeed"
+      ],
+      "job": "cq-video-shared16-1106-r2"
+    },
+    "transport": {
+      "ranks": 16,
+      "updates": 3,
+      "replicas_equal": true,
+      "exact_optimizer_restore": true,
+      "max_abs_global_batch_reference": 1.4901161193847656e-08
+    },
+    "deterministic_collectives": {
+      "dtypes": [
+        "int64",
+        "float32",
+        "bfloat16"
+      ],
+      "ranks": 16
+    },
+    "tiny_joint_training": {
+      "ranks": 16,
+      "gradient_accumulation": 2,
+      "reentrant_checkpointing": true,
+      "exact_continuous_resume_model_and_optimizer": true,
+      "rank0_updates": [
+        {
+          "step": 1,
+          "losses": [
+            1.1700127124786377,
+            2.4938149452209473
+          ],
+          "seconds": 8.94990884885192,
+          "grad_norm": 0.9427641034126282,
+          "absent": 0,
+          "memory_gib": 0.09694242477416992
+        },
+        {
+          "step": 2,
+          "losses": [
+            2.637904405593872,
+            0.10686051845550537
+          ],
+          "seconds": 0.1835840716958046,
+          "grad_norm": 0.9457482099533081,
+          "absent": 61,
+          "memory_gib": 0.09712743759155273
+        },
+        {
+          "step": 2,
+          "losses": [
+            2.637904405593872,
+            0.10686051845550537
+          ],
+          "seconds": 0.15524758771061897,
+          "grad_norm": 0.9457482099533081,
+          "absent": 61,
+          "memory_gib": 0.09712743759155273
+        }
+      ]
+    },
+    "pretrained_joint_training": {
+      "ranks": 16,
+      "models": [
+        "Qwen3.5-2B",
+        "Wan2.1-T2V-1.3B"
+      ],
+      "gradient_accumulation": 2,
+      "optimizer_updates": 2,
+      "all_losses_and_parameters_finite": true,
+      "selected_replica_parameters_equal": true,
+      "peak_memory_gib": 26.31277894973755,
+      "rank0_updates": [
+        {
+          "step": 1,
+          "losses": [
+            1.1626421213150024,
+            2.1436526775360107
+          ],
+          "seconds": 5.1433989852666855,
+          "grad_norm": 60.749839782714844,
+          "absent": 0,
+          "memory_gib": 26.31277894973755
+        },
+        {
+          "step": 2,
+          "losses": [
+            2.0568771362304688,
+            0.047593582421541214
+          ],
+          "seconds": 1.4075052328407764,
+          "grad_norm": 12.101766586303711,
+          "absent": 705,
+          "memory_gib": 26.31277894973755
+        }
+      ]
+    },
+    "main_wan_tp2": {
+      "ranks": 16,
+      "passed": true,
+      "forward_rms": 0.002789255464449525,
+      "input_gradient_rms": 0.0036913047078996897,
+      "condition_gradient_rms": 0.008903655223548412,
+      "max_parameter_gradient_rms": 0.012503041885793209
+    },
+    "joint_job": "cq-video-shared16-1106-r7",
+    "gdn": {
+      "backend": "ascendc",
+      "provider": "AscendC",
+      "source_sha256": "c4ee65d8eb39cceb402b986e6120d6587e09a474c760431093f321fbe488ad1a",
+      "kernels": {
+        "mode": "fused",
+        "pointwise": true,
+        "l2norm": "fla_native_ub_tiled",
+        "triton_all_blocks_parallel": "0",
+        "dispatch": {
+          "npu_causal_conv1d_fn": "stable",
+          "npu_chunk_gated_delta_rule_fwd": "stable",
+          "npu_recompute_w_u_fwd": "stable",
+          "npu_chunk_gated_delta_rule_fwd_h": "stable",
+          "npu_chunk_bwd_dv_local": "stable",
+          "npu_chunk_gated_delta_rule_bwd_dhu": "stable",
+          "npu_chunk_bwd_dqkwg": "stable",
+          "npu_prepare_wy_repr_bwd_da": "stable",
+          "npu_prepare_wy_repr_bwd_full": "stable",
+          "npu_chunk_local_cumsum": "stable",
+          "npu_causal_conv1d_bwd": "stable"
+        },
+        "fallback": {},
+        "sha256": {
+          "libfla_npu_stable.so": "f39e14115013ef80a49e58e80b2e9fc9d2d963f82ff2d04c911163bba80c5f2e",
+          "opp/vendors/fla_npu_transformer/op_api/lib/libcust_opapi.so": "f5f316307fcac13c0f83ea7311f9e1181fadb791fb7910c8acb7eb0bcc8a7aae"
+        }
+      }
+    }
+  },
+  "validation_scope": [
+    "Full native initial weights with short synthetic video layouts and VAE latents; online ViT and cached post-merger features are both exercised.",
+    "No real-data I/O, VAE encoding, full-resolution long-video benchmark or video-quality evaluation. Recorded step times include validation checks.",
+    "Video training remains DP with TP=PP=CP=1. The separate TP2 test validates shared Wan layers in main.",
+    "Video text generation retains its prefix interface; main incremental text KV/GDN decoding is not ported. Wan condition KV caching is ported."
+  ],
+  "fixes": [
+    "Native MindSpeed test calls use the same explicit Q/K L2 normalization as their reference; numerical thresholds unchanged.",
+    "Video feature injection uses one out-of-place index_copy for all visual slots, preserving Megatron custom-autograd embedding views.",
+    "Checkpoint readiness persists the first update golden counts for exact restart.",
+    "Persistent Triton and torch extension cache paths follow main."
+  ],
+  "unsuccessful_attempts": {
+    "r1": "Independent test helper omitted Q/K normalization; fixed test configuration and passed r2.",
+    "r2_joint": "Embedding custom-autograd view mutation rejected; fixed and passed r7.",
+    "r3": "All 16 ranks waited at the pre-forward loss-count collective on node 203; captured stacks, stopped; not counted as a pass.",
+    "r4": "Diagnostic probe timeout was below CANN minimum; corrected to supported values.",
+    "r5_r6": "Nodes 469 and 428 did not expose 16 NPUs in the job container; rejected before model validation."
+  },
+  "evidence": {
+    "main_relative_root": ".runs/video-shared-20261106",
+    "numerical": "r2/numerical",
+    "transport": "r2/transport",
+    "joint": "r7",
+    "main_cpu": ".runs/naming-20261106/main-final-tests.log",
+    "video_cpu": ".cache/shared-release-cpu-tests.log"
+  }
+}

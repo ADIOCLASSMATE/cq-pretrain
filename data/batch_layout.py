@@ -4,7 +4,7 @@ from dataclasses import replace
 import math
 import os
 import torch
-from ops.attention_layout import plan_attention
+from ops.attention_layout import plan_attention, document_cq_mask
 from models.cq_layout import MainlinePlan
 from ops.gated_delta_layout import build_delta_plan, rope_tables
 
@@ -22,41 +22,6 @@ def safe_mask(allowed):
     mask[:, :, 0] &= valid
     return mask[:, None].contiguous(), valid
 
-
-def document_cq_mask(batch, query_positions, query_unconditional=None):
-    """Exact CQ masks; compare sigma only inside each independent document.
-
-    The current NPU attention adapter still consumes a dense Boolean mask,
-    but constructing full-pack int64 comparison grids needlessly costs CPU
-    time and several extra full-size temporary masks at an 8K pack length.
-    """
-    s = batch.ids.shape[1]
-    segments = batch.segments[0]
-    sigma = batch.sigma[0]
-    query_segments = segments[query_positions]
-    mask = torch.ones(s + len(query_positions), s, dtype=torch.bool)
-    valid = torch.zeros(s + len(query_positions), dtype=torch.bool)
-    for segment in segments.unique().tolist():
-        if segment < 0:
-            continue
-        positions = (segments == segment).nonzero().flatten()
-        start, stop = int(positions[0]), int(positions[-1]) + 1
-        if stop - start != len(positions):
-            raise ValueError("A packed document must occupy contiguous content positions")
-        sigmas = sigma[start:stop]
-        mask[start:stop, start:stop] = sigmas[None, :] > sigmas[:, None]
-        valid[start:stop] = True
-        rows = (query_segments == segment).nonzero().flatten()
-        qsigmas = sigma[query_positions[rows]]
-        mask[s + rows, start:stop] = sigmas[None, :] >= qsigmas[:, None]
-        valid[s + rows] = qsigmas > sigmas.min()
-    if query_unconditional is not None:
-        rows = s + query_unconditional.nonzero().flatten()
-        mask[rows] = True
-        valid[rows] = False
-    # Same finite sentinel as safe_mask; invalid rows are zeroed after FA.
-    mask[~valid, 0] = False
-    return mask[None, None], valid[None]
 
 
 def finalize_plan(batch, cfg, plan):

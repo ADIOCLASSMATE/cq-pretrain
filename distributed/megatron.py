@@ -14,16 +14,11 @@ _config = None
 _optimizer_instances = 1
 
 
-# Allow enough time for every process to load weights before rendezvous.
-def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, initialize_weights=True):
-    global _active, _config, _optimizer_instances
-    _optimizer_instances = optimizer_instances
+def prepare_npu():
+    """Select the NPU kernel/transport stack for training or inference."""
     import torch_npu  # noqa: F401
 
     torch.npu.set_device(int(os.environ.get("LOCAL_RANK", 0)))
-    local_heads = (model_config.linear_value_heads or model_config.linear_heads) // tp
-    if model_config.linear_head_dim != 128 or local_heads not in (4, 8, 16, 32):
-        raise ValueError("AscendC requires 128-dimensional GDN heads with a supported local head count")
     # Capture the native AscendC/Triton callables before MindSpeed patches FLA.
     import ops.gated_delta_net as delta_ascendc
 
@@ -52,6 +47,16 @@ def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, init
     from ops.functional import fused_wgrad
 
     fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32 = fused_wgrad
+
+
+# Allow enough time for every process to load weights before rendezvous.
+def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, initialize_weights=True):
+    global _active, _config, _optimizer_instances
+    _optimizer_instances = optimizer_instances
+    local_heads = (model_config.linear_value_heads or model_config.linear_heads) // tp
+    if model_config.linear_head_dim != 128 or local_heads not in (4, 8, 16, 32):
+        raise ValueError("AscendC requires 128-dimensional GDN heads with a supported local head count")
+    prepare_npu()
     logging.getLogger("megatron.core.optimizer").setLevel(logging.WARNING)
     from megatron.core import parallel_state as ps
     from megatron.core.transformer.transformer_config import TransformerConfig
@@ -202,20 +207,21 @@ def make_embedding(vocab, width):
     return embedding
 
 
-def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_param_gather=True):
+def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_param_gather=True,
+                   *, optimizer_config=None, config_overrides=None, overlap_grad_reduce=True):
     from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig
     from megatron.core.optimizer import get_megatron_optimizer, AdamOptimizerConfig as OptimizerConfig
 
     ddp_cfg = DistributedDataParallelConfig(
         grad_reduce_in_fp32=True,
-        overlap_grad_reduce=True,
+        overlap_grad_reduce=overlap_grad_reduce,
         overlap_param_gather=overlap_param_gather,
         use_distributed_optimizer=True,
         bucket_size=bucket_size,
         num_distributed_optimizer_instances=_optimizer_instances,
     )
     wrapped = DistributedDataParallel(_config, ddp_cfg, model)
-    optimizer_cfg = OptimizerConfig(
+    optimizer_cfg = optimizer_config or OptimizerConfig(
         optimizer="adam",
         lr=lr,
         min_lr=lr * 0.1,
@@ -229,7 +235,8 @@ def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_
     )
     # Our checkpoint protocol writes local shards and uses HCCL broadcasts;
     # MCore's optional CPU/Gloo checkpoint groups are unnecessary.
-    optimizer = get_megatron_optimizer(optimizer_cfg, [wrapped], use_gloo_process_groups=False)
+    optimizer = get_megatron_optimizer(optimizer_cfg, [wrapped], config_overrides=config_overrides,
+                                        use_gloo_process_groups=False)
     return wrapped, optimizer
 
 

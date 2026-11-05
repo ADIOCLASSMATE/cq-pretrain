@@ -17,6 +17,7 @@ class OrderedParameterGathers:
     overlap and MCore's normal wait/copy hooks.
     """
     def __init__(self, wrapped):
+        self.wrapped = wrapped
         self.groups = list(reversed(wrapped.bucket_groups + wrapped.expert_parallel_bucket_groups))
         self.original = [g.start_param_sync for g in self.groups]
         for index, group in enumerate(self.groups):
@@ -35,6 +36,9 @@ class OrderedParameterGathers:
             group=self.groups[i]
             if not group.param_gather_dispatched:
                 self.original[i](force_sync=False)
+
+    def finish(self):
+        finish_parameter_gathers(self.wrapped)
 
 
 class OrderedGradientBuckets:
@@ -81,13 +85,25 @@ class OrderedGradientBuckets:
                 group=self.wrapped.param_to_bucket_group.get(parameter)
                 if group is not None:group.register_grad_ready(parameter,self.wrapped.force_all_reduce)
 
+    def finish_backward(self):
+        """Register skipped branches after backward, allowing reentrant hooks."""
+        missing = 0
+        for group in self.groups:
+            if group.ddp_config.overlap_grad_reduce:
+                for parameter in group.params:
+                    if group.per_param_grad_ready_counts.get(parameter, 0) == 0:
+                        group.register_grad_ready(parameter, self.wrapped.force_all_reduce)
+                        missing += 1
+        self.finish()
+        return missing
+
     def finish(self):
         # The first batch learns golden hook counts. MCore normally dispatches
         # these inside finish_grad_sync; queue every group before waiting so
         # variable branch order cannot create an inter-rank collective mismatch.
         for index, group in enumerate(self.groups):
             counts = group.per_param_grad_ready_counts
-            if len(counts) != len(group.params):
+            if group.ddp_config.overlap_grad_reduce and len(counts) != len(group.params):
                 raise RuntimeError('A trainable parameter has no real or explicitly absent gradient')
             self.request(index, self.wrapped.force_all_reduce)
 

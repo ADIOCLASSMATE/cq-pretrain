@@ -239,7 +239,7 @@ class GatedDelta(nn.Module):
                 )[0]
         else:
             y = recurrent_delta(q, k, v, g, beta, plan.event_bounds)
-        selected = y[0].index_select(0, plan.hidden_event)
+        selected = y[0].index_select(0, plan.hidden_event).to(x.dtype)
         if plan.padding_hidden.numel():
             selected.index_fill_(0, plan.padding_hidden, 0)
         z = z.reshape(-1, h, d)
@@ -351,11 +351,10 @@ def cast_for_training(model, device="cpu"):
         name: p.detach().clone()
         for name, p in model.named_parameters()
         if name.endswith((".linear_attn.A_log", ".linear_attn.norm.weight"))
-        or (
-            model.cfg.renderer == "wan"
-            and name.startswith(("renderer.time_embedding.", "renderer.time_projection."))
-        )
     }
+    for name, module in model.named_modules():
+        if getattr(module, "keep_fp32", False):
+            keep.update({f"{name}.{key}": p.detach().clone() for key, p in module.named_parameters()})
     rope_bands = {
         name: b.detach().clone() for name, b in model.named_buffers() if name.endswith(".rope.bands")
     }

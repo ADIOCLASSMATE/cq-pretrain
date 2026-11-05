@@ -20,6 +20,8 @@ def linear(layer, x):
 
 
 class FP32Linear(nn.Linear):
+    keep_fp32 = True
+
     def forward(self, x):
         with torch.autocast(x.device.type, enabled=False):
             return F.linear(x.float(), self.weight.float(), self.bias.float())
