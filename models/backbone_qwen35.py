@@ -5,9 +5,9 @@ from utils.assets import asset_path, asset_manifest
 import torch
 from torch import nn
 from torch.nn import functional as F
-import infra.kernels as K
-import infra.parallel as P
-from infra.attention import attend
+import ops.functional as K
+import distributed.megatron as P
+from ops.attention import attend
 
 
 class RMSNorm(nn.Module):
@@ -80,7 +80,7 @@ class CausalConv(nn.Module):
 
     def forward(self, x, plan):
         if x.device.type == "npu":
-            import infra.delta_ascendc as delta_ascendc
+            import ops.gated_delta_net as delta_ascendc
 
             return delta_ascendc.conv(
                 x,
@@ -106,7 +106,7 @@ class GatedNorm(nn.Module):
 
     def forward(self, x, z):
         if x.device.type == "npu":
-            from infra.delta_ascendc import gated_norm
+            from ops.gated_delta_net import gated_norm
 
             return gated_norm(x, z, self.weight)
         compute = x if x.dtype == torch.float64 else x.float()
@@ -196,7 +196,7 @@ class GatedDelta(nn.Module):
             if torch.is_grad_enabled():
                 raise ValueError("CQ state caching is inference-only")
             if x.device.type == "npu":
-                from infra.delta_ascendc import prefill
+                from ops.gated_delta_net import prefill
 
                 y, state = prefill(q, k, v, g, beta, plan.event_bounds)
             else:
@@ -210,7 +210,7 @@ class GatedDelta(nn.Module):
                 history[0, -len(tail) :].copy_(tail)
             cache["conv"] = history
         elif x.device.type == "npu":
-            import infra.delta_ascendc as delta_ascendc
+            import ops.gated_delta_net as delta_ascendc
 
             if cfg.gdn_backend == "mindspeed":
                 from mindspeed.core.ssm.npu_chunk_gated_delta_rule import chunk_gated_delta_rule

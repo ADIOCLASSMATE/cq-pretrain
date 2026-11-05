@@ -168,7 +168,7 @@ class CrossAttentionControl(unittest.TestCase):
         """TP4 must partition one draw, including the strided K/V projection."""
         from unittest.mock import patch
         from types import SimpleNamespace
-        import infra.parallel as P
+        import distributed.megatron as P
         cfg=small_cfg(True)
         full=MOSSRenderer(cfg)
         torch.manual_seed(101)

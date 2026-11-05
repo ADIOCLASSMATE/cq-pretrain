@@ -9,7 +9,7 @@ from configs.config import RunConfig
 from models.generator_wan21 import Wan21Generator, FP32Linear
 from data.generation import WanGenerationInputs
 from scripts.validation.validate_wan import rms
-import infra.parallel as P
+import distributed.megatron as P
 
 
 def main():

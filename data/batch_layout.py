@@ -4,9 +4,9 @@ from dataclasses import replace
 import math
 import os
 import torch
-from infra.attention_plan import plan_attention
-from infra.plans import MainlinePlan
-from infra.layout import build_delta_plan, rope_tables
+from ops.attention_layout import plan_attention
+from models.cq_layout import MainlinePlan
+from ops.gated_delta_layout import build_delta_plan, rope_tables
 
 
 def content_view(batch, cfg):

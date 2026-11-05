@@ -18,7 +18,7 @@ from safetensors.torch import save_file
 
 from utils.assets import MODEL_ID, REVISION, asset_path, vision_config
 
-from models.vision import QwenVisionTower
+from models.vision_encoder import QwenVisionTower
 
 
 def sha256(path):

@@ -7,7 +7,7 @@ import logging
 import torch
 from torch import nn
 import torch.distributed as dist
-import utils.stack as stack
+import utils.dependencies as stack
 
 _active = False
 _config = None
@@ -25,7 +25,7 @@ def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, init
     if model_config.linear_head_dim != 128 or local_heads not in (4, 8, 16, 32):
         raise ValueError("AscendC requires 128-dimensional GDN heads with a supported local head count")
     # Capture the native AscendC/Triton callables before MindSpeed patches FLA.
-    import infra.delta_ascendc as delta_ascendc
+    import ops.gated_delta_net as delta_ascendc
 
     delta_ascendc.initialize()
     for path in stack.source_directories():
@@ -49,7 +49,7 @@ def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, init
     torch.compile = compile_function
     # Native ATB accumulates directly into FP32, validated at vocabulary size.
     import fused_weight_gradient_mlp_cuda
-    from infra.kernels import fused_wgrad
+    from ops.functional import fused_wgrad
 
     fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32 = fused_wgrad
     logging.getLogger("megatron.core.optimizer").setLevel(logging.WARNING)
@@ -63,7 +63,7 @@ def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, init
         create_gloo_process_groups=False,
         num_distributed_optimizer_instances=optimizer_instances,
     )
-    from infra.mc2 import configure_mc2
+    from distributed.mc2 import configure_mc2
 
     configure_mc2(tp)
     _config = TransformerConfig(
@@ -170,7 +170,7 @@ class RowLinear(nn.Module):
                 if tp_size() not in (2, 4, 8):
                     raise ValueError("MC2 rows require TP2/4/8")
                 from types import MethodType
-                from infra.mc2 import row_forward
+                from distributed.mc2 import row_forward
 
                 # Invoke the original submodule so DDP parameter pre-hooks
                 # still gather its current weight before the fused operation.

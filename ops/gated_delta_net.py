@@ -69,7 +69,7 @@ def gated_norm(y, z, weight):
     # but loses at 2K. Keep the faster small-shape implementation.
     if POINTWISE and y.numel() // y.shape[-1] >= 131072:
         return call("rms_norm_gated", y, z, weight, None, eps=1e-6)
-    from infra.kernels import rms_norm
+    from ops.functional import rms_norm
 
     return (rms_norm(y, weight, 1e-6).float() * F.silu(z.float())).to(y.dtype)
 

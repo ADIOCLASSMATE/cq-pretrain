@@ -4,11 +4,11 @@ import json
 from pathlib import Path
 import time
 import torch
-from infra.attention_plan import plan_attention
-from infra.attention import tiled_attention
+from ops.attention_layout import plan_attention
+from ops.attention import tiled_attention
 from configs.config import RunConfig
 from data.batch import fake_batch
-from infra.kernels import attention
+from ops.functional import attention
 
 
 def cpu_checks():

@@ -10,7 +10,7 @@ import torch_npu
 from configs.config import RunConfig
 from data.batch import fake_batch
 from models.backbone_qwen35 import GatedDelta
-from models import delta_ascendc
+from ops import gated_delta_net as delta_ascendc
 
 
 def main():
@@ -21,7 +21,7 @@ def main():
     args=p.parse_args()
     torch.npu.set_device(0); torch.manual_seed(872)
     delta_ascendc.initialize()
-    from utils.stack import source_directories
+    from utils.dependencies import source_directories
     for path in source_directories():sys.path.insert(0,str(path))
     # Match the training stack without changing tensor-parallel math for this layer benchmark.
     previous=sys.argv; sys.argv=[previous[0],"--optimization-level","0"]

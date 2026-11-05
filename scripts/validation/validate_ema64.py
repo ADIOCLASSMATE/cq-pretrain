@@ -10,7 +10,7 @@ import torch
 from torch import nn
 import torch.distributed as dist
 
-import infra.parallel as P
+import distributed.megatron as P
 import utils.checkpoint as checkpoint_io
 from utils.checkpoint_catalog import latest, prune
 from scripts.validation.compare_data_restart import equal

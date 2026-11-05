@@ -13,7 +13,7 @@ import tests.test_qwen35_vision as fixtures
 from data.generation import GenerationInputs
 from data.packing import Packer, ConsumedLoader
 from models.modeling_umm import JointModel
-from data.planning import build_plan
+from data.batch_layout import build_plan
 from training.renderer_schedule import backward_deferred_renderer, suspend_gradient_readiness
 
 

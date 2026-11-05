@@ -8,10 +8,10 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-import infra.parallel as P
-import infra.kernels as K
-from infra.attention_plan import plan_attention
-from infra.attention import tiled_attention
+import distributed.megatron as P
+import ops.functional as K
+from ops.attention_layout import plan_attention
+from ops.attention import tiled_attention
 
 
 class Norm(nn.Module):

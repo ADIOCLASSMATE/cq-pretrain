@@ -2,8 +2,8 @@ import numpy as np
 import pytest
 import torch
 from evaluations.sampling import make_batch
-from models.cq import backbone
-from models.inference import CQDecoder
+from models.cq_backbone import backbone
+from models.decoding import CQDecoder
 from models.modeling_umm import JointModel
 from data.vision import NativeImageProcessor
 from tests import test_qwen35_vision as vision_fixture

@@ -8,8 +8,8 @@ gradient hooks, tied embeddings, accumulation and distributed optimizer.
 import os
 import torch
 import torch.distributed as dist
-import infra.parallel as parallel
-from infra.kernels import fused_wgrad
+import distributed.megatron as parallel
+from ops.functional import fused_wgrad
 
 _FUSED_CE = os.environ.get("PRETRAIN_FUSED_CE", "1") == "1"
 

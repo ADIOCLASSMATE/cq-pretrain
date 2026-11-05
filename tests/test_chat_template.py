@@ -197,7 +197,7 @@ class QueryPruning(unittest.TestCase):
         import torch
         from configs.config import tiny_config
         from data.batch import fake_batch
-        from data.planning import build_plan
+        from data.batch_layout import build_plan
         cfg = tiny_config()
         batch = fake_batch(cfg, 64, 1, 1)
         if supervised is not None:

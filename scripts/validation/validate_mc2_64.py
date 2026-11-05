@@ -7,9 +7,9 @@ import statistics
 import torch
 import torch.distributed as dist
 import torch_npu
-import infra.parallel as P
+import distributed.megatron as P
 from configs.config import RunConfig
-from infra.mc2 import _RowAllReduce
+from distributed.mc2 import _RowAllReduce
 
 
 def relative(a,b):

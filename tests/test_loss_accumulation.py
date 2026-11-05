@@ -1,7 +1,7 @@
 """Direct optimizer-buffer accumulation must match dense CE over all chunks."""
 import unittest
 import torch
-from infra.cross_entropy import linear_cross_entropy
+from ops.cross_entropy import linear_cross_entropy
 
 
 class DirectCEAccumulation(unittest.TestCase):

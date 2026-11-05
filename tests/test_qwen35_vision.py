@@ -17,7 +17,7 @@ from data.packing import Packer
 from data.runtime import empty_batch
 from models.modeling_umm import JointModel
 from data.vision import NativeImageProcessor, VisionInputs
-from models.vision import QwenVisionTower
+from models.vision_encoder import QwenVisionTower
 from utils.assets import asset_path, vision_config
 
 
@@ -209,7 +209,7 @@ class NativeVisionContracts(unittest.TestCase):
         # Optional visual/renderer modules stay under patch_embed/renderer, so
         # the existing ordered DDP buckets can mark all their absent grads ready.
         from types import SimpleNamespace
-        from training.mcore_parallel import OrderedGradientBuckets
+        from distributed.communication import OrderedGradientBuckets
         ready=set()
         group=SimpleNamespace(register_grad_ready=lambda p,force:ready.add(id(p)))
         wrapped=SimpleNamespace(module=model,param_to_bucket_group={p:group for p in model.parameters()},force_all_reduce=False)
@@ -237,7 +237,7 @@ class NativeVisionContracts(unittest.TestCase):
                 self.assertFalse(model.patch_embed.visual.blocks.training)
                 self.assertFalse(model.patch_embed.visual.recompute)
                 self.assertEqual(model.patch_embed.visual.merger.training,not freeze_merger)
-                with patch('models.vision.checkpoint',side_effect=AssertionError('Frozen encoder recomputed')):
+                with patch('models.vision_encoder.checkpoint',side_effect=AssertionError('Frozen encoder recomputed')):
                     actual=compose_losses(model(batch), model.cfg)
                     actual['loss'].backward()
                 expected=compose_losses(reference(reference_batch), reference.cfg);expected['loss'].backward()
@@ -261,7 +261,7 @@ class NativeVisionContracts(unittest.TestCase):
                 # Pure-text ranks may skip both optional modules. Frozen
                 # parameters have no DDP buckets and must never be marked ready.
                 from types import SimpleNamespace
-                from training.mcore_parallel import OrderedGradientBuckets
+                from distributed.communication import OrderedGradientBuckets
                 ready=set();group=SimpleNamespace(register_grad_ready=lambda p,force:ready.add(id(p)))
                 wrapped=SimpleNamespace(module=model,param_to_bucket_group={p:group for p in trainable},force_all_reduce=False)
                 OrderedGradientBuckets.absent_images(SimpleNamespace(wrapped=wrapped))

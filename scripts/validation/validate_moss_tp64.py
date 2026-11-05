@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.distributed as dist
-import infra.parallel as P
+import distributed.megatron as P
 from configs.config import tiny_config
 from data.batch import fake_batch
 from data.generation import GenerationInputs
@@ -16,7 +16,7 @@ from models.backbone_qwen35 import cast_for_training, unfused_parameters
 
 
 def ce_check(device):
-    from infra.cross_entropy import linear_cross_entropy
+    from ops.cross_entropy import linear_cross_entropy
     torch.manual_seed(77+P.dp_rank())
     full=torch.randn(4096,128,dtype=torch.bfloat16,device=device).requires_grad_()
     weight=torch.nn.Parameter(full.detach().chunk(P.tp_size())[P.state().get_tensor_model_parallel_rank()].clone())
@@ -43,7 +43,7 @@ def ce_check(device):
 
 
 def vision_check(device,freeze_encoder=False):
-    from models.vision import QwenVisionTower
+    from models.vision_encoder import QwenVisionTower
     from data.vision import VisionInputs
     vc=dict(depth=2,hidden_act='gelu_pytorch_tanh',hidden_size=128,intermediate_size=256,
         in_channels=3,num_heads=4,num_position_embeddings=64,out_hidden_size=128,

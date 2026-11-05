@@ -1,7 +1,7 @@
 """Optional branches must enqueue identical collective sequences on every rank."""
 from types import SimpleNamespace
 import unittest
-from training.mcore_parallel import OrderedParameterGathers
+from distributed.communication import OrderedParameterGathers
 
 
 class CollectiveOrderTests(unittest.TestCase):

@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from data.batch import Batch
-from data.planning import build_plan
+from data.batch_layout import build_plan
 from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed
 
 

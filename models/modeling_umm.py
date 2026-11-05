@@ -1,13 +1,13 @@
 """Qwen CQ backbone and image/video flow renderer."""
 
 from torch import nn
-import infra.parallel as P
-from infra.cross_entropy import linear_cross_entropy
+import distributed.megatron as P
+from ops.cross_entropy import linear_cross_entropy
 from models.legacy import RGBPatchLinear, FlowRenderer
 from models.backbone_qwen35 import QwenBlock, RMSNorm
-from models.cq import backbone
+from models.cq_backbone import backbone
 from models.generator_wan21 import Wan21Generator
-from models.vision import QwenVisionInput
+from models.vision_encoder import QwenVisionInput
 
 
 class OutputHead(nn.Module):

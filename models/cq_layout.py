@@ -3,8 +3,8 @@
 import copy
 from dataclasses import dataclass, fields, replace
 import torch
-from infra.attention_plan import AttentionPlan
-from infra.layout import DeltaPlan
+from ops.attention_layout import AttentionPlan
+from ops.gated_delta_layout import DeltaPlan
 
 
 @dataclass

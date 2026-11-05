@@ -12,8 +12,8 @@ from data.codec import DevicePreparer
 from data.packing import Packer, sample_objective
 from data.stream import DocumentStream
 from evaluations.sampling import make_batch, make_null_batch
-from models.cq import backbone
-from data.planning import build_plan
+from models.cq_backbone import backbone
+from data.batch_layout import build_plan
 from models.modeling_umm import JointModel
 from data.vision import NativeImageProcessor
 from tests import test_qwen35_vision as fixtures

@@ -16,7 +16,7 @@ from configs.config import RunConfig, tiny_config
 ROOT=Path(__file__).resolve().parents[1]
 
 from data.batch import fake_batch
-import infra.parallel as P
+import distributed.megatron as P
 import utils.checkpoint as checkpoint_io
 from training.loss import compose_losses
 from training.renderer_schedule import backward_deferred_renderer
@@ -347,8 +347,8 @@ def main():
     training_state['initialization_checkpoint']=str(args.init_checkpoint) if args.init_checkpoint else None
     training_state['deterministic']=args.deterministic
     training_state['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
-    from infra.kernels import _ATTENTION_LAYOUT, _COMPILE_MODULATION
-    from infra.cross_entropy import _FUSED_CE
+    from ops.functional import _ATTENTION_LAYOUT, _COMPILE_MODULATION
+    from ops.cross_entropy import _FUSED_CE
     training_state['kernel_options'] = dict(fused_ce=_FUSED_CE,
         compile_modulation=_COMPILE_MODULATION,
         attention_tile=os.environ.get('PRETRAIN_ATTENTION_TILE','0'),
@@ -372,13 +372,13 @@ def main():
         training_state['moss_pointwise'] = os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
     training_state['backbone_adapter_sha256']=hashlib.sha256(b''.join(
         (ROOT/name).read_bytes() for name in
-        ('models/backbone_qwen35.py','infra/layout.py','models/cq.py','infra/delta_ascendc.py',
-         'models/modeling_umm.py','data/planning.py','infra/plans.py','infra/attention.py',
-         'infra/attention_plan.py','infra/compiled.py','training/renderer_schedule.py','training/loss.py','infra/cross_entropy.py','infra/kernels.py','infra/parallel.py','infra/mc2.py'))).hexdigest()
+        ('models/backbone_qwen35.py','ops/gated_delta_layout.py','models/cq_backbone.py','ops/gated_delta_net.py',
+         'models/modeling_umm.py','data/batch_layout.py','models/cq_layout.py','ops/attention.py',
+         'ops/attention_layout.py','ops/torchair.py','training/renderer_schedule.py','training/loss.py','ops/cross_entropy.py','ops/functional.py','distributed/megatron.py','distributed/mc2.py'))).hexdigest()
     if vision_manifest is not None:
         training_state['vision_assets']=vision_manifest
         training_state['vision_adapter_sha256']=hashlib.sha256(
-            (ROOT/'models/vision.py').read_bytes()+(ROOT/'models/cq.py').read_bytes()).hexdigest()
+            (ROOT/'models/vision_encoder.py').read_bytes()+(ROOT/'models/cq_backbone.py').read_bytes()).hexdigest()
     resumed_data = {} if args.data_snapshot else None
     if args.data_snapshot:
         from data.tokenizer import tokenizer_metadata
@@ -419,7 +419,7 @@ def main():
         from data.packing import Packer, ConsumedLoader
         from data.codec import DevicePreparer
         from data.device import DeviceLoader
-        from training.mcore_parallel import OrderedGradientBuckets, OrderedParameterGathers, finish_parameter_gathers
+        from distributed.communication import OrderedGradientBuckets, OrderedParameterGathers, finish_parameter_gathers
         # Spawned CPU workers must not autoload the NPU backend on import.
         os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD']='0'
         docs = DocumentStream(args.data_snapshot, args.data_mode, P.dp_rank(), dp, args.seed,
@@ -472,7 +472,7 @@ def main():
             local_trainable_parameters=sum(p.numel() for p in model.parameters() if p.requires_grad))
     from utils.experiment import source_hashes
     environment['source_sha256'] = source_hashes()
-    import utils.stack as stack
+    import utils.dependencies as stack
     environment['stack'] = stack.name()
     environment['dependencies'] = json.loads(stack.lock_path().read_text())
     host = dict(rank=rank, local_rank=int(os.environ.get('LOCAL_RANK', 0)),
@@ -568,7 +568,7 @@ def main():
         event['step']=step
         validation_events.append(event)
         if rank==0:
-            from utils.distributed import atomic_json
+            from utils.file_sync import atomic_json
             result_path=output/'validation'/f'step_{step:07d}'/'results.json'
             result=json.loads(result_path.read_text());result['end_to_end_seconds']=event['seconds']
             atomic_json(result_path,result)
@@ -859,7 +859,7 @@ def main():
                    packing_stats=packer.stats,preparer_stats=preparer.stats,
                    device_stats=loader.stats,image_stats=docs.image_reader.stats() if docs.image_reader else {})
         (output/f'data_rank_{rank:05d}.json').write_text(json.dumps(stats))
-    from infra.delta_ascendc import provenance
+    from ops.gated_delta_net import provenance
     (output/f'backend_rank_{rank:05d}.json').write_text(json.dumps(provenance(),indent=2))
     dist.barrier()
     dist.destroy_process_group()

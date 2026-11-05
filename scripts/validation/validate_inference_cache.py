@@ -9,12 +9,12 @@ import torch.distributed as dist
 from configs.config import RunConfig
 from evaluations.sampling import make_batch
 from models.backbone_qwen35 import cast_for_training
-from models.cq import backbone
-from models.inference import CQDecoder
+from models.cq_backbone import backbone
+from models.decoding import CQDecoder
 from data.vision import NativeImageProcessor
 from scripts.benchmark_backbones import Model
 from data.generation import WanGenerationInputs
-import infra.parallel as P
+import distributed.megatron as P
 
 
 def maximum(values):

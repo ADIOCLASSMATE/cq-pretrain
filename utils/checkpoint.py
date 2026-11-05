@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import torch
 import torch.distributed as dist
-import infra.parallel as P
+import distributed.megatron as P
 from utils.checkpoint_catalog import SCHEMA, durable_json, fsync_directory, shard_names
 
 

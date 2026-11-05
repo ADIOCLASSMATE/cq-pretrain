@@ -186,7 +186,7 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.zeros(dim))
 
     def forward(self, x):
-        from infra.kernels import rms_norm
+        from ops.functional import rms_norm
         return rms_norm(x, (1 + self.weight.float()).to(x.dtype), 1e-6)
 
 
@@ -206,7 +206,7 @@ class GatedNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(128))
 
     def forward(self, y, z):
-        from infra.kernels import rms_norm
+        from ops.functional import rms_norm
         return rms_norm(y, self.weight, 1e-6) * F.silu(z.float()).to(y.dtype)
 
 
@@ -299,7 +299,7 @@ class Block(nn.Module):
 class DecoderProbe(nn.Module):
     def __init__(self, layers=24, hybrid=True, recompute=True):
         super().__init__()
-        import infra.parallel as P
+        import distributed.megatron as P
         self.config = P._config
         self.layers = nn.ModuleList(Block(hybrid and i % 4 != 3) for i in range(layers))
         self.norm = RMSNorm(1024)
@@ -326,7 +326,7 @@ def reduce_scalar(value, op=dist.ReduceOp.MAX):
 
 
 def distributed_oracle(output):
-    import infra.parallel as P
+    import distributed.megatron as P
     from utils.checkpoint import _optimizers
     rank, world = dist.get_rank(), dist.get_world_size()
     torch.manual_seed(410)
@@ -395,7 +395,7 @@ def distributed_oracle(output):
 
 
 def benchmark(output, lengths, layers, warmup, steps, ga):
-    import infra.parallel as P
+    import distributed.megatron as P
     rank, world = dist.get_rank(), dist.get_world_size()
     results = []
     for hybrid in (False, True):
@@ -484,7 +484,7 @@ def main():
         kernel_provenance(args.output, 'after_primitive')
         log('primitive_passed')
         return
-    import infra.parallel as P
+    import distributed.megatron as P
     cfg = SimpleNamespace(layers=args.layers, width=1024, heads=8, kv_heads=2, head_dim=256, ffn=3584)
     P.initialize(1, cfg, timeout_minutes=20)
     assert dist.get_world_size() == args.expected_world

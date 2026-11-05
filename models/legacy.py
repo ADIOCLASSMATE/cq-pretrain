@@ -4,8 +4,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-import infra.kernels as K
-import infra.parallel as P
+import ops.functional as K
+import distributed.megatron as P
 
 
 class RGBPatchLinear(nn.Module):

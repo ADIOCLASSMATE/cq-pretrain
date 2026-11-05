@@ -7,7 +7,7 @@ import socket
 import sys
 
 from utils.network import rendezvous_interface
-from utils.distributed import atomic_json, wait_files
+from utils.file_sync import atomic_json, wait_files
 
 ROOT = Path(__file__).resolve().parent
 

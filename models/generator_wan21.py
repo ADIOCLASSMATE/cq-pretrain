@@ -11,8 +11,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-import infra.parallel as P
-import infra.kernels as K
+import distributed.megatron as P
+import ops.functional as K
 
 
 def linear(layer, x):

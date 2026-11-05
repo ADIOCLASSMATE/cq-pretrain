@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 
 from utils.checkpoint import _optimizers
-import infra.parallel as P
+import distributed.megatron as P
 
 
 class RendererEMA:

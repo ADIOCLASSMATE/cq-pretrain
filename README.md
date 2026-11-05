@@ -14,7 +14,8 @@
 | 目录 | 职责 |
 |---|---|
 | `models/` | Qwen、视觉编码、CQ、统一 Wan 与推理缓存 |
-| `infra/` | attention/GDN/CE 算子、TP/MC2、CPU 事件规划和设备布局契约 |
+| `ops/` | attention/GDN/CE 算子、算子布局与 TorchAIR 编译 |
+| `distributed/` | Megatron 运行时、TP、MC2、参数聚合与梯度同步 |
 | `data/` | Parquet/JSONL 来源、时间戳、packing、视觉预处理、CQ 规划、缓存和异步设备预处理 |
 | `training/` | 目标加权与 DP 归一化、DiT 分块反向、梯度调度、EMA 与训练循环 |
 | `configs/` | 模型／训练／运行环境 YAML 与依赖锁 |
@@ -23,9 +24,16 @@
 | `scripts/` | 启动、依赖准备、缓存准备与验证命令 |
 | `tests/` | CPU 数值、语义、packing 和断点回归 |
 
+核心模块按职责命名：
+
+- `models/cq_backbone.py`、`models/cq_layout.py`、`models/vision_encoder.py`、`models/decoding.py` 分别负责 CQ 执行、布局定义、视觉编码与增量解码。
+- `ops/functional.py`、`ops/attention.py`、`ops/gated_delta_net.py`、`ops/cross_entropy.py` 放算子；`attention_layout.py`、`gated_delta_layout.py` 放对应布局，`torchair.py` 放编译实现。
+- `distributed/megatron.py`、`distributed/communication.py`、`distributed/mc2.py` 分别负责 Megatron 接入、通信调度与计算通信融合。
+- `utils/dependencies.py` 管理依赖环境，`utils/file_sync.py` 管理文件同步。
+
 `configs/legacy/` 与 MOSS 参考模块仅保留旧实验的数值回归；新生产入口使用 Wan 配置。9B/MOSS checkpoint 与此架构不兼容，需新开训练阶段。
 
-`JointModel.forward` 返回未加权的 `text_loss`、可选 `image_loss`；`compute_image_loss=False` 返回公开的 `image_conditions`。`training.loss.compose_losses` 组合目标，`training.renderer_schedule` 调度分块反向；模型不读取任务采样概率、loss 权重或 DP 缩放值。共享 `infra` 不导入 `data`、`models` 或 `training`，模型也不导入数据／训练模块。
+`JointModel.forward` 返回未加权的 `text_loss`、可选 `image_loss`；`compute_image_loss=False` 返回公开的 `image_conditions`。`training.loss.compose_losses` 组合目标，`training.renderer_schedule` 调度分块反向；模型不读取任务采样概率、loss 权重或 DP 缩放值。`ops/` 和 `distributed/` 不导入数据、模型或训练循环；模型也不导入数据／训练模块。CQ 布局定义在 `models/cq_layout.py`，CPU 批次布局由 `data/batch_layout.py` 构建。
 
 ## 环境与启动
 
@@ -108,22 +116,22 @@ query 数量和空条件策略本身不改变参数形状；本次两层 adapter
 
 每 1000 个绝对更新默认保存独立推理快照（`--eval-snapshot-every`）；训练恢复 checkpoint 的频率、保留策略和完整性校验独立管理。`--eval-snapshot-dir` 指定持久评估权重目录，零间隔关闭快照。
 
-## 将计算 infra 移植到 video
+## 将算子与分布式优化移植到 video
 
 2026-11-05 对照已 fetch 的 video `62e8253b4be3ac5417718efc4647e9273d50056a`。以下是迁移审查，尚未修改 video。范围为模型计算、算子和推理缓存；保留 video 的训练循环、数据、任务比例、序列化、评估和实验管理。
 
 | main 中的优化 | video 中的变化 | 必需适配 |
 |---|---|---|
-| `infra/delta_ascendc.py` 的 GDN 前后向、卷积和归一化 | video 正式 YAML 使用 MindSpeed GDN，可增加已测试的 AscendC 路径 | 固定 FLA/AscendC ABI；匹配头数、128 维 head、FP32 衰减、外部 L2、输出轴序；在 MindSpeed patch 之前绑定算子，并扩展 video 的 backend 身份校验 |
+| `ops/gated_delta_net.py` 的 GDN 前后向、卷积和归一化 | video 正式 YAML 使用 MindSpeed GDN，可增加已测试的 AscendC 路径 | 固定 FLA/AscendC ABI；匹配头数、128 维 head、FP32 衰减、外部 L2、输出轴序；在 MindSpeed patch 之前绑定算子，并扩展 video 的 backend 身份校验 |
 | `models/backbone_qwen35.py` 的 Q 卷积加权求和、只计算必要的 Q、合并投影 | 去掉 video 的 `[Q, K, D]` 卷积窗口；理解任务可省视觉 Q；减少 GEMM 次数 | 保持 video 的 `[B,L,D]` 对外接口，紧凑计算后恢复索引；融合权重需要导入/导出映射，旧 Adam 状态也需转换后验证 |
-| `infra/kernels.py`、`infra/attention.py` 的 attention 执行部分 | 复用 SBH FlashAttention、Q/K norm 修复、预计算分块和 FP32 K/V 梯度累加 | 只移模型计算规划逻辑，保留 video 自己的 mask、RoPE 和文档边界；CPU 长度元数据需要模型 adapter 接口，不能每层从 NPU 同步回来 |
+| `ops/functional.py`、`ops/attention.py` 的 attention 执行部分 | 复用 SBH FlashAttention、Q/K norm 修复、预计算分块和 FP32 K/V 梯度累加 | 只移模型计算规划逻辑，保留 video 自己的 mask、RoPE 和文档边界；CPU 长度元数据需要模型 adapter 接口，不能每层从 NPU 同步回来 |
 | `models/generator_wan21.py` 的紧凑 TND attention | 去掉 video NPU attention 的全尺寸 padding mask，支持不同视频/query 长度 | 在 generator 入口将 video 的 list/padded 输入转换一次，保留原 forward/sample API；Wan Q/K norm 跨整个投影宽度，不能改成逐 head 归一化；时间层继续 FP32 |
-| `infra/cross_entropy.py` 的分块 linear CE | 避免完整 `[监督 token, vocab]` logits，直接累积 FP32 权重梯度 | 只接入 CE 算子，保留 video 的标签、loss 归一化和全局目标计数；核对 tied embedding 与梯度 readiness hooks |
-| `models/inference.py`、Wan 条件 K/V 缓存 | video 目前拒绝 CQ cache；可改成一次 prefill + 增量 C 写入/Q 读取，固定条件 K/V 不随扩散步重算 | 适配 video 的生成入口、native 位置和时间戳；FP32 GDN 状态使用已验证的 recurrent 路径，不用仅接受 BF16 状态的当前 AscendC recurrent op；保留 video 的 Euler/Heun 采样选择 |
-| `infra/parallel.py`、`infra/mc2.py` 的 TP/融合梯度 | video 当前只允许 TP=PP=CP=1；TP2/4 可分摊权重及矩阵计算，MC2 可合并部分通信 | 这需要分布式 runtime 的初始化、参数分片、checkpoint 和重算 hooks 适配，无法靠复制模型文件完成；MC2 只在完整 HCCS TP 组启用，碎卡 PHB 组合保持普通 collectives |
+| `ops/cross_entropy.py` 的分块 linear CE | 避免完整 `[监督 token, vocab]` logits，直接累积 FP32 权重梯度 | 只接入 CE 算子，保留 video 的标签、loss 归一化和全局目标计数；核对 tied embedding 与梯度 readiness hooks |
+| `models/decoding.py`、Wan 条件 K/V 缓存 | video 目前拒绝 CQ cache；可改成一次 prefill + 增量 C 写入/Q 读取，固定条件 K/V 不随扩散步重算 | 适配 video 的生成入口、native 位置和时间戳；FP32 GDN 状态使用已验证的 recurrent 路径，不用仅接受 BF16 状态的当前 AscendC recurrent op；保留 video 的 Euler/Heun 采样选择 |
+| `distributed/megatron.py`、`distributed/mc2.py` 的 TP/融合梯度 | video 当前只允许 TP=PP=CP=1；TP2/4 可分摊权重及矩阵计算，MC2 可合并部分通信 | 这需要分布式 runtime 的初始化、参数分片、checkpoint 和重算 hooks 适配，无法靠复制模型文件完成；MC2 只在完整 HCCS TP 组启用，碎卡 PHB 组合保持普通 collectives |
 
 已确认迁移时可让 video 的 backbone 使用图像组／原生视频时间块内双向、块间 causal，同时保留逐 token causal 接口。main 现已提供这两个选项，仍需分别验证；Wan DiT 的 clip 内双向不受该选项影响。video 使用 non-reentrant checkpoint，main 的融合 `main_grad` 路径依赖重算和梯度 hook 的配合，也不能直接切换选项。两边的生成 Q 都在完整目标视觉组写入之前读取，空条件都禁止读取 C。
 
-建议先在 video 的 TP1 结构内迁移 Q 卷积、GDN 算子、attention、Wan TND 和分块 CE，保持其数据和训练循环；随后单独接入缓存及 TP/MC2。DiT 分块反向、数据预取/packing、任务 loss 策略和缓存文件协议不在这次“只迁移 infra”的复制范围内。
+建议先在 video 的 TP1 结构内迁移 Q 卷积、GDN 算子、attention、Wan TND 和分块 CE，保持其数据和训练循环；随后单独接入缓存及 TP/MC2。DiT 分块反向、数据预取/packing、任务 loss 策略和缓存文件协议不在这次“只迁移算子与分布式优化”的复制范围内。
 
 重构前的优化报告见 `evaluations/benchmarks/infra_efficiency_16card_20261105.json`。本次重构后的 dynamic query 与两层 adapter 结果见 `evaluations/benchmarks/main_infra_refactor_20261105.json`：8K 训练速度基本持平，约 2K 前缀的 CQ 缓存解码 1.75×、最大相对 RMS 1.86%，Wan 条件 K/V 缓存 1.15×且输出逐位一致。这些是 main 上的固定形状测试；BF16 CQ 缓存解码不是逐位相等。移植后仍需在 video 原生帧数/分辨率上检查 forward、梯度、续训和端到端吞吐。

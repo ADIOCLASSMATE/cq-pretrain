@@ -9,7 +9,7 @@ import torch
 import torch.distributed as dist
 
 import scripts.validation.delta64_probe as p
-import infra.parallel as P
+import distributed.megatron as P
 
 
 def describe(x):

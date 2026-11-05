@@ -127,7 +127,7 @@ def test_cache_identity_atomic_resume_and_tamper(tmp_path):
 @pytest.mark.parametrize("visibility", ["visual_block", "causal"])
 def test_video_blocks_and_understanding_queries(visibility):
     from data.batch import Batch
-    from data.planning import build_visual_plan
+    from data.batch_layout import build_visual_plan
     from types import SimpleNamespace
     cfg=small_config(visual_query_mode='native',content_visibility=visibility)
     s=16; spans=torch.tensor([[2,3,4,5,7,8,9,10],[12,13,-1,-1,-1,-1,-1,-1]])
@@ -237,7 +237,7 @@ def test_native_video_serialization_and_mixed_source_resume(tmp_path):
         assert batch.mainline.query_image.sum()==14
         assert sorted(batch.generation.grids)==[(1,4,6),(2,4,6)]
         assert len(batch.vision.ends)==5 # 2 + 2 native video blocks, one image.
-        from data.planning import build_visual_plan
+        from data.batch_layout import build_visual_plan
         native=build_visual_plan(batch,replace(cfg,visual_query_mode='native'))
         expected=torch.cat([batch.row_col[:,batch.image_indices[i][batch.image_indices[i]>=0]]
                             for i in batch.generation_image_indices.tolist()],1)

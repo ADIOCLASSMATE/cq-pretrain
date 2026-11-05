@@ -8,7 +8,7 @@ from data.cache import caches
 from data.stream import DocumentStream
 from data.packing import Packer, token_contract
 from data.generation import patch_latent
-from models.vision import QwenVisionInput
+from models.vision_encoder import QwenVisionInput
 
 
 @torch.no_grad()

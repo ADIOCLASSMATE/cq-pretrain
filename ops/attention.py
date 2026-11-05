@@ -1,7 +1,7 @@
 """Exact tiled attention with one output buffer and FP32 K/V accumulation."""
 
 import torch
-from infra import kernels as K
+from ops import functional as K
 
 
 def attend(q, k, v, mask, valid, plan, fused):

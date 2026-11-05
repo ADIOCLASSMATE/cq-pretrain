@@ -8,7 +8,7 @@ import torch
 import tests.test_qwen35_vision as fixtures
 import data.chat as chat
 from data.packing import Packer
-from models.cq import backbone
+from models.cq_backbone import backbone
 from models.modeling_umm import JointModel
 from evaluations.sampling import OneDocument, make_batch, make_null_batch
 from data.vision import NativeImageProcessor

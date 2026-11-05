@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import torch
 import torch_npu
-from infra.kernels import rms_norm
+from ops.functional import rms_norm
 
 
 def main():

@@ -6,7 +6,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-import infra.parallel as P
+import distributed.megatron as P
 from utils.assets import asset_path, asset_manifest, vision_config
 
 

@@ -18,7 +18,7 @@ import sys
 import time
 import uuid
 
-from utils.distributed import atomic_json
+from utils.file_sync import atomic_json
 from utils.checkpoint_catalog import durable_json
 
 ROOT = Path(__file__).resolve().parent

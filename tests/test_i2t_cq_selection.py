@@ -6,7 +6,7 @@ import unittest
 import torch
 
 from data.batch import fake_batch
-from data.planning import build_plan
+from data.batch_layout import build_plan
 from models.modeling_umm import JointModel
 import tests.test_qwen35_vision as vision_tests
 

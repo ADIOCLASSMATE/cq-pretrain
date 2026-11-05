@@ -13,7 +13,7 @@ import torch
 import torch.distributed as dist
 
 import scripts.validation.delta64_probe as probe
-import infra.parallel as P
+import distributed.megatron as P
 
 
 original_benchmark = probe.benchmark

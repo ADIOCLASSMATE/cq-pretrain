@@ -15,11 +15,11 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-import infra.parallel as P
+import distributed.megatron as P
 from configs.config import tiny_config
 from data.batch import fake_batch
 from data.generation import GenerationInputs, WanGenerationInputs
-from training.mcore_parallel import OrderedGradientBuckets, OrderedParameterGathers, finish_parameter_gathers
+from distributed.communication import OrderedGradientBuckets, OrderedParameterGathers, finish_parameter_gathers
 from models.modeling_umm import JointModel
 from models.backbone_qwen35 import cast_for_training
 from training.renderer_schedule import backward_deferred_renderer

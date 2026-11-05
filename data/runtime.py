@@ -1,7 +1,7 @@
 """Small real-loader runtime helpers, kept out of CPU worker imports."""
 import torch
 from data.batch import Batch
-from data.planning import build_plan
+from data.batch_layout import build_plan
 
 
 def empty_batch(cfg, tokens):

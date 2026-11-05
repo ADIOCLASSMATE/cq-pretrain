@@ -16,7 +16,7 @@ import torch
 from torch import nn
 import torch.distributed as dist
 from configs.config import RunConfig
-import infra.parallel as P
+import distributed.megatron as P
 from models.backbone_qwen35 import QwenBlock, RMSNorm, cast_for_training, unfused_parameters
 from scripts.benchmark_gemma import GemmaDecoder, SoftcapCE, attention_tiles
 
@@ -47,7 +47,7 @@ class Model(nn.Module):
                 plan.output_positions, query[:, 0])
             weight = self.decoder.embed_tokens.weight
         else:
-            from models.cq import backbone
+            from models.cq_backbone import backbone
             hidden = backbone(self, batch, vision_features=features)
             weight = self.embedding.weight
         if hasattr(self, 'renderer'):
@@ -57,7 +57,7 @@ class Model(nn.Module):
         if self.gemma:
             text_loss = SoftcapCE.apply(text, weight, labels, self.cfg.ce_chunk, self.gemma.final_logit_softcapping)
         else:
-            from infra.cross_entropy import linear_cross_entropy
+            from ops.cross_entropy import linear_cross_entropy
             text_loss = linear_cross_entropy(text, weight, labels, self.cfg.ce_chunk)
         return self.cfg.text_weight * text_loss + image_loss
 
@@ -99,7 +99,7 @@ class Model(nn.Module):
 
 def prepare(cfg, gemma, length, task):
     from data.batch import fake_batch
-    from data.planning import build_plan
+    from data.batch_layout import build_plan
     data_cfg = replace(cfg, image_size=256, vision_max_pixels=131072,
         generation_max_pixels=131072, checkpoint_backbone=True, checkpoint_dit=True)
     batch = fake_batch(data_cfg, length=length, seed=42+P.dp_rank())

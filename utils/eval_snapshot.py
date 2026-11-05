@@ -11,7 +11,7 @@ import time
 
 import torch.distributed as dist
 
-import infra.parallel as P
+import distributed.megatron as P
 from utils.checkpoint import _save_file
 from utils.checkpoint_catalog import durable_json, fsync_directory
 

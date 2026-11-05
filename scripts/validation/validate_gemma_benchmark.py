@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import torch
 from unittest.mock import patch
-import infra.parallel as P
+import distributed.megatron as P
 from configs.config import RunConfig
 from scripts.benchmark_gemma import GemmaDecoder, SoftcapCE, attention_tiles
 

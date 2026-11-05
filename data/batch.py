@@ -133,6 +133,6 @@ def fake_batch(config, length=8192, batch_size=1, images_per_sequence=2,
         row_col=positions.permute(0, 2, 1).contiguous(),
         noise=torch.randn(*noise_shape, generator=generator, dtype=dtype), times=times,
         mask=mask, valid_rows=valid)
-    from data.planning import build_plan
+    from data.batch_layout import build_plan
     result.mainline=build_plan(result,config)
     return result.to(device)

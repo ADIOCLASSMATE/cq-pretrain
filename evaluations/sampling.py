@@ -18,9 +18,9 @@ import torch.distributed as dist
 from torch.nn import functional as F
 from PIL import Image
 
-import infra.parallel as P
-from models.cq import backbone
-from data.planning import finalize_plan
+import distributed.megatron as P
+from models.cq_backbone import backbone
+from data.batch_layout import finalize_plan
 from data.packing import Packer, token_contract
 import data.chat as chat
 
@@ -147,7 +147,7 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     # Remove the unused physical tail before constructing the inference plan.
     batch.ids=batch.ids[:,:used];batch.segments=batch.segments[:,:used];batch.sigma=batch.sigma[:,:used]
     batch.image_queries=batch.image_queries[:,:used];batch.row_col=batch.row_col[:,:used]
-    from data.planning import build_plan
+    from data.batch_layout import build_plan
     batch.mainline=build_plan(batch,cfg)
     if not prune:return batch
     if task in ('T2I','T2V'):keep=batch.mainline.query_image[0]
@@ -180,7 +180,7 @@ def score_reference(model,case,tokenizer,tokens,processor,vae):
     indices=batch.text_indices
     indices=indices[(indices>batch.image_indices.max()+1)&(indices<batch.ids.shape[1]-1)]
     targets=batch.ids.flatten()[indices]
-    from infra.cross_entropy import linear_cross_entropy
+    from ops.cross_entropy import linear_cross_entropy
     weight=model.lm_head.weight if model.lm_head is not None else model.embedding.weight
     nll=linear_cross_entropy(hidden[indices],weight,targets,cfg.ce_chunk)
     if cfg.renderer=='wan':return dict(reference_text_nll=float(nll),reference_text_tokens=len(targets))
@@ -236,7 +236,7 @@ def caption(model,case,tokenizer,tokens,processor):
     stops={tokens['eos'],tokens['boi']}
     end=tokenizer.token_to_id('<|im_end|>')
     if end is not None:stops.add(end)
-    from models.inference import CQDecoder
+    from models.decoding import CQDecoder
     limit=case.get('max_new_tokens',48)
     cached=cfg.method=='CQ_IT';features=None
     if limit and cached:

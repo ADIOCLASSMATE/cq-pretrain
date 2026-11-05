@@ -7,10 +7,10 @@ Each fresh Q reads that prefix and starts from the trained text-mask embedding.
 from dataclasses import replace
 import torch
 from torch.nn import functional as F
-import infra.kernels as K
-import infra.parallel as P
-from models.cq import backbone
-from infra.layout import position_rope
+import ops.functional as K
+import distributed.megatron as P
+from models.cq_backbone import backbone
+from ops.gated_delta_layout import position_rope
 
 
 def delta_step(layer, x, cache):
@@ -58,7 +58,7 @@ def delta_step(layer, x, cache):
     beta = b[:1].sigmoid()
     state = cache["state"]
     if x.device.type == "npu":
-        from infra.delta_ascendc import call, recurrent
+        from ops.gated_delta_net import call, recurrent
 
         q = call("l2_fwd", q.contiguous())[0]
         k = call("l2_fwd", k.contiguous())[0]

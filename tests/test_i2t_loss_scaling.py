@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import torch
 
-from training.mcore_parallel import OrderedGradientBuckets
+from distributed.communication import OrderedGradientBuckets
 from training.train import data_loss_scales, parse_args
 
 

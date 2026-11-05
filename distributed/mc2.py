@@ -86,7 +86,7 @@ class _RowAllReduce(torch.autograd.Function):
                 if weight.main_grad.dtype != torch.float32:
                     raise TypeError("MC2 training requires FP32 main_grad")
                 if x.device.type == "npu":
-                    from infra.kernels import fused_wgrad
+                    from ops.functional import fused_wgrad
 
                     fused_wgrad(a, g, weight.main_grad)
                 else:
@@ -106,7 +106,7 @@ def row_forward(module, x):
     if module.sequence_parallel or not module.input_is_parallel:
         raise ValueError("MC2 row adapter requires full-sequence, sharded-feature input")
     if not hasattr(module, "_cq_hcom"):
-        import infra.parallel as P
+        import distributed.megatron as P
 
         group = P.state().get_tensor_model_parallel_group()
         module._cq_hcom = group._get_backend(torch.device("npu")).get_hccl_comm_name(dist.get_rank())
