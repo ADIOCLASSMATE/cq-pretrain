@@ -176,5 +176,7 @@ def build(row):
             return caption_spans(segments, direction, row['sample_id']), direction, True
         return natural_spans(segments), None, False
     if fmt in ('conversation', 'text_conversation'):
-        return conversation_spans(segments), None, True
+        roles = [s.get('role') or 'user' for s in segments if s['kind'] == 'image']
+        direction = ('T2I' if 'assistant' in roles else 'I2T') if roles else None
+        return conversation_spans(segments), direction, True
     return natural_spans(segments), None, False

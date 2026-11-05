@@ -8,13 +8,7 @@ import time
 import shutil
 import requests
 
-MODEL_ID = 'Qwen/Qwen3.5-2B-Base'
-REVISION = 'b1485b2fa6dfa1287294f269f5fb618e03d52d7c'
-
-
-def sha256(path):
-    with Path(path).open('rb') as f:
-        return hashlib.file_digest(f, 'sha256').hexdigest()
+from utils.assets import MODEL_ID, REVISION, sha256
 
 
 def verify_upstream(root,metadata):

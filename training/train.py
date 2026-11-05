@@ -12,12 +12,14 @@ import time
 import torch
 import torch.distributed as dist
 
-from configs.config import ModelConfig, tiny_config
+from configs.config import RunConfig, tiny_config
 ROOT=Path(__file__).resolve().parents[1]
 
 from data.batch import fake_batch
-import training.mcore as P
+import infra.parallel as P
 import utils.checkpoint as checkpoint_io
+from training.loss import compose_losses
+from training.renderer_schedule import backward_deferred_renderer
 
 
 def parse_args(argv=None):
@@ -29,9 +31,10 @@ def parse_args(argv=None):
     parser.add_argument('--tiny', action='store_true')
     parser.add_argument('--method', choices=('CQ_IT','Bi_I+CQ_T'))
     parser.add_argument('--image-condition-queries', type=int)
+    parser.add_argument('--visual-query-mode',choices=('native','fixed'))
     parser.add_argument('--i2t-image-loss-probability',type=float,
-                        help='Probability of computing null image loss for image-first I2T captions; text understanding is retained')
-    parser.add_argument('--cfg-null-condition',choices=('empty_t2i','i2t_prefix'),
+                        help='Legacy MOSS only; Wan I2T always has zero image loss')
+    parser.add_argument('--cfg-null-condition',choices=('empty','empty_t2i','i2t_prefix'),
                         help='Null template used by qualitative CFG sampling; inherits the model config')
     parser.add_argument('--tp', type=int, default=1)
     parser.add_argument('--sequence-length', type=int, default=8192)
@@ -172,12 +175,13 @@ def main():
         PathManager._input_path_common_check(str(Path(args.output).resolve()))
     if args.config and args.tiny:raise ValueError('Select either an explicit model config or the tiny validation model')
     cfg = (tiny_config(linear_heads=16,linear_head_dim=128) if args.tiny else
-           ModelConfig.load(args.config or ROOT/'configs/qwen35_2b_wan.yaml'))
+           RunConfig.load(args.config or ROOT/'configs/qwen35_2b_wan.yaml'))
     if args.vision_assets is not None:cfg.vision_assets=args.vision_assets
     if args.text_assets is not None:cfg.text_assets=args.text_assets
     if cfg.renderer=='wan' and args.latent_encoder is None:args.latent_encoder='wan'
     if args.method is not None: cfg.method=args.method
     if args.image_condition_queries is not None: cfg.image_condition_queries=args.image_condition_queries
+    if args.visual_query_mode is not None:cfg.visual_query_mode=args.visual_query_mode
     if args.i2t_image_loss_probability is not None:cfg.i2t_image_loss_probability=args.i2t_image_loss_probability
     if args.cfg_null_condition is not None:cfg.cfg_null_condition=args.cfg_null_condition
     if args.preserve_documents:cfg.preserve_documents=True
@@ -213,11 +217,12 @@ def main():
     cfg.validate(args.tp)
     if cfg.visual_cache and args.random_init:
         raise ValueError('Pretrained visual caches cannot be used with a randomly initialized encoder')
-    from models.backbone_qwen35 import asset_manifest, cast_for_training, load_pretrained
+    from utils.assets import asset_manifest
+    from models.backbone_qwen35 import cast_for_training, load_pretrained
     text_manifest=asset_manifest(cfg.text_assets) if cfg.text_assets else None
     vision_manifest=None
     if cfg.vision_encoder=='qwen35':
-        from models.vision import asset_path, vision_config
+        from utils.assets import asset_path, vision_config
         if args.micro_batch!=1:raise ValueError('Native-resolution packing requires micro_batch=1')
         vision_config(cfg.vision_assets)
         vision_manifest=json.loads((asset_path(cfg.vision_assets)/'manifest.json').read_text())
@@ -292,9 +297,6 @@ def main():
         if cfg.renderer in ('moss','wan'):
             loaded_weights=dict(backbone=loaded_weights,renderer=model.renderer.load_pretrained(
                 cfg.wan_assets if cfg.renderer=='wan' else cfg.moss_assets))
-        if cfg.renderer=='wan':
-            torch.nn.init.normal_(model.renderer.condition_proj.weight,std=.02)
-            torch.nn.init.zeros_(model.renderer.condition_proj.bias)
     # Added blocks have no pretrained source and are built under no_init_weights,
     # so they must be initialized explicitly here, outside that context. Resume
     # and init-checkpoint paths restore these tensors from the checkpoint.
@@ -345,6 +347,15 @@ def main():
     training_state['initialization_checkpoint']=str(args.init_checkpoint) if args.init_checkpoint else None
     training_state['deterministic']=args.deterministic
     training_state['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
+    from infra.kernels import _ATTENTION_LAYOUT, _COMPILE_MODULATION
+    from infra.cross_entropy import _FUSED_CE
+    training_state['kernel_options'] = dict(fused_ce=_FUSED_CE,
+        compile_modulation=_COMPILE_MODULATION,
+        attention_tile=os.environ.get('PRETRAIN_ATTENTION_TILE','0'),
+        attention_layout=_ATTENTION_LAYOUT)
+    training_state['kernel_options']['cpu_noise_cast']=os.environ.get('PRETRAIN_CPU_NOISE_CAST','1')
+    training_state['kernel_options']['moss_fused_pointwise']=os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
+    training_state['kernel_options']['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
     training_state['qwen35_assets']=text_manifest
     if ema is not None:
         training_state['renderer_ema']=dict(schema=ema.schema,module='renderer',decay=ema.decay,dtype='float32',
@@ -361,8 +372,9 @@ def main():
         training_state['moss_pointwise'] = os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
     training_state['backbone_adapter_sha256']=hashlib.sha256(b''.join(
         (ROOT/name).read_bytes() for name in
-        ('models/backbone_qwen35.py','data/layout.py','models/cq.py','models/delta_ascendc.py',
-         'models/modeling_umm.py','training/loss.py','models/kernels.py','training/mcore.py','models/mc2.py'))).hexdigest()
+        ('models/backbone_qwen35.py','infra/layout.py','models/cq.py','infra/delta_ascendc.py',
+         'models/modeling_umm.py','data/planning.py','infra/plans.py','infra/attention.py',
+         'infra/attention_plan.py','infra/compiled.py','training/renderer_schedule.py','training/loss.py','infra/cross_entropy.py','infra/kernels.py','infra/parallel.py','infra/mc2.py'))).hexdigest()
     if vision_manifest is not None:
         training_state['vision_assets']=vision_manifest
         training_state['vision_adapter_sha256']=hashlib.sha256(
@@ -447,13 +459,7 @@ def main():
     if ema is not None:
         environment['renderer_ema']=dict(**ema.metadata(),local_storage_bytes=ema.local_bytes,
                                     local_optimizer_shards=len(ema.shadows))
-    environment['kernel_options'] = dict(fused_ce=os.environ.get('PRETRAIN_FUSED_CE', '1'),
-        compile_modulation=os.environ.get('PRETRAIN_COMPILE_MODULATION', '0'),
-        attention_tile=os.environ.get('PRETRAIN_ATTENTION_TILE','0'),
-        attention_layout=os.environ.get('PRETRAIN_ATTENTION_LAYOUT', 'SBH'))
-    environment['kernel_options']['cpu_noise_cast']=os.environ.get('PRETRAIN_CPU_NOISE_CAST','1')
-    environment['kernel_options']['moss_fused_pointwise']=os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
-    environment['kernel_options']['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
+    environment['kernel_options'] = training_state['kernel_options']
     if loader:
         environment['data'] = dict(snapshot=catalog.meta, membership=membership,
             online_tokenizer=online_tokenizer,tokenizer_counting_matches_corpus=docs.counting_matches_corpus,
@@ -615,7 +621,9 @@ def main():
                     sum(x[1].get('dit_microbatches',int(bool(x[0].generation_image_count))) for x in micro_batches if x),
                     sum(x[0].generation_image_count for x in micro_batches if x),
                     sum(x[1].get('i2t_null_candidates',0) for x in micro_batches if x),
-                    sum(x[1].get('i2t_null_images',0) for x in micro_batches if x)],device='npu',dtype=torch.int64)
+                    sum(x[1].get('i2t_null_images',0) for x in micro_batches if x),
+                    sum(x[1]['condition_query_tokens'] for x in micro_batches if x),
+                    sum(x[1]['unconditional_images'] for x in micro_batches if x)],device='npu',dtype=torch.int64)
                 dist.all_reduce(counts,group=P.state().get_data_parallel_group())
                 counts=counts.tolist()
                 if counts[4]==0:
@@ -647,7 +655,8 @@ def main():
                         renderer_forward_events.append([])
                         events[0].record()
                     deferred=bool(batch.generation is not None and batch.generation.microbatches)
-                    losses = wrapped(batch, reference=args.split_reference, loss_scales=scales,defer_renderer=deferred)
+                    outputs = wrapped(batch, reference=args.split_reference, compute_image_loss=not deferred)
+                    losses = compose_losses(outputs, cfg, scales)
                     if ordered_buckets:
                         finish_parameter_gathers(wrapped)
                         if not len(batch.image_indices): ordered_buckets.absent_images()
@@ -656,9 +665,9 @@ def main():
                     if args.phase_timing:
                         events[1].record()
                     if deferred:
-                        from training.renderer_schedule import backward_deferred_renderer
                         backward_deferred_renderer(model,batch,losses,1. if loader else 1/args.grad_accum,wrapped,
-                            renderer_forward_events[-1] if args.phase_timing else None)
+                            renderer_forward_events[-1] if args.phase_timing else None,
+                            image_factor=cfg.image_weight*(scales[1] if scales is not None else 1.))
                     else:(losses['loss'] / (1 if loader else args.grad_accum)).backward()
                     if args.phase_timing:
                         events[2].record()
@@ -740,7 +749,7 @@ def main():
                            t2i_captions_completed=counts[7],i2t_captions_completed=counts[8],
                            active_microbatches=counts[4],data_wait_seconds=resource_values[0].item(),
                            supervised_text_tokens=counts[0],
-                           condition_query_tokens=(counts[12] if cfg.method=='CQ_IT' else counts[1])*cfg.image_condition_queries,
+                           condition_query_tokens=counts[15],unconditional_images=counts[16],
                            backbone_processed_slots=counts[9],padding_tokens=counts[10],dit_microbatches=counts[11],
                            data_prepare_seconds=resource_values[1].item(),data_device_wait_seconds=resource_values[2].item(),
                            cpu_peak_rss_gib=resource_values[3].item(),
@@ -850,7 +859,7 @@ def main():
                    packing_stats=packer.stats,preparer_stats=preparer.stats,
                    device_stats=loader.stats,image_stats=docs.image_reader.stats() if docs.image_reader else {})
         (output/f'data_rank_{rank:05d}.json').write_text(json.dumps(stats))
-    from models.delta_ascendc import provenance
+    from infra.delta_ascendc import provenance
     (output/f'backend_rank_{rank:05d}.json').write_text(json.dumps(provenance(),indent=2))
     dist.barrier()
     dist.destroy_process_group()

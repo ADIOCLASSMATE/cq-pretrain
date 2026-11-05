@@ -5,7 +5,7 @@ from pathlib import Path
 
 def tokenizer_root(root,cfg):
     if cfg is not None and cfg.text_assets:
-        from models.backbone_qwen35 import asset_path
+        from utils.assets import asset_path
         return asset_path(cfg.text_assets)
     return Path(root)/'tokenizer'
 
@@ -13,7 +13,7 @@ def tokenizer_root(root,cfg):
 def tokenizer_metadata(cfg,published):
     if cfg is None or not cfg.text_assets:
         return published
-    from models.backbone_qwen35 import asset_manifest, asset_path
+    from utils.assets import asset_manifest, asset_path
     from scripts.prepare_qwen35 import sha256
     root=asset_path(cfg.text_assets);manifest=asset_manifest(root)
     files={name:manifest['files'][name] for name in ('tokenizer.json','tokenizer_config.json')}

@@ -1,4 +1,5 @@
 """All-parameter TP vs dense NPU oracle; separate from real-data throughput."""
+from training.loss import compose_losses
 import argparse
 import copy
 import json
@@ -7,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.distributed as dist
-import training.mcore as P
+import infra.parallel as P
 from configs.config import tiny_config
 from data.batch import fake_batch
 from data.generation import GenerationInputs
@@ -15,7 +16,7 @@ from models.backbone_qwen35 import cast_for_training, unfused_parameters
 
 
 def ce_check(device):
-    from training.loss import linear_cross_entropy
+    from infra.cross_entropy import linear_cross_entropy
     torch.manual_seed(77+P.dp_rank())
     full=torch.randn(4096,128,dtype=torch.bfloat16,device=device).requires_grad_()
     weight=torch.nn.Parameter(full.detach().chunk(P.tp_size())[P.state().get_tensor_model_parallel_rank()].clone())
@@ -42,7 +43,8 @@ def ce_check(device):
 
 
 def vision_check(device,freeze_encoder=False):
-    from models.vision import QwenVisionTower, VisionInputs
+    from models.vision import QwenVisionTower
+    from data.vision import VisionInputs
     vc=dict(depth=2,hidden_act='gelu_pytorch_tanh',hidden_size=128,intermediate_size=256,
         in_channels=3,num_heads=4,num_position_embeddings=64,out_hidden_size=128,
         patch_size=16,spatial_merge_size=2,temporal_patch_size=2,_tensor_parallel=False)
@@ -107,14 +109,14 @@ def main():
                        if clean.endswith('.proj.qkv.weight') else source[clean])
                 view.copy_(P.checkpoint_shard(value,view))
     model=model.to(device);reference=reference.to(device);batch=batch.to(device)
-    output=model(batch,return_hidden=True);output['loss'].backward()
+    output=compose_losses(model(batch, return_hidden=True), model.cfg);output['loss'].backward()
     for name,param in model.named_parameters():
         if name.endswith(('.q_norm.weight','.k_norm.weight','.linear_attn.norm.weight')):
             dist.all_reduce(param.grad,group=P.state().get_tensor_model_parallel_group())
     P._active=False
     import models.moss as moss
     moss.FUSED_POINTWISE=False
-    expected=reference(batch,return_hidden=True);expected['loss'].backward()
+    expected=compose_losses(reference(batch, return_hidden=True), reference.cfg);expected['loss'].backward()
     P._active=True
     def relative(a,b):
         a=a.detach().cpu().float();b=b.detach().cpu().float()

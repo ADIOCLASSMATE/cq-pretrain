@@ -69,7 +69,7 @@ class VisualCache:
 def caches(cfg):
     if not cfg.visual_cache:return None,None
     if not (cfg.freeze_vision and cfg.freeze_vision_merger):raise ValueError('Visual caches require frozen ViT and merger')
-    from models.vision import vision_config
+    from utils.assets import vision_config
     if vision_config(cfg.vision_assets)['out_hidden_size']!=cfg.width:
         raise ValueError('Final visual caches require the native merger width, without a random projection')
     common={'version':'native-qwen-wan-v1'}

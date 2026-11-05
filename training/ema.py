@@ -11,7 +11,7 @@ import torch
 import torch.distributed as dist
 
 from utils.checkpoint import _optimizers
-import training.mcore as P
+import infra.parallel as P
 
 
 class RendererEMA:

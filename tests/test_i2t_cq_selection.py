@@ -1,11 +1,12 @@
 """Selected generation readouts preserve understanding and exact CQ gradients."""
+from training.loss import compose_losses
 import copy
 import unittest
 
 import torch
 
 from data.batch import fake_batch
-from models.cq import build_plan
+from data.planning import build_plan
 from models.modeling_umm import JointModel
 import tests.test_qwen35_vision as vision_tests
 
@@ -57,8 +58,8 @@ class SelectedCQContracts(unittest.TestCase):
         expected_model=JointModel(cfg)
         torch.nn.init.normal_(expected_model.renderer.output.weight,std=.02)
         actual_model=copy.deepcopy(expected_model)
-        expected=expected_model(full,return_hidden=True)
-        actual=actual_model(lean,return_hidden=True)
+        expected=compose_losses(expected_model(full, return_hidden=True), expected_model.cfg)
+        actual=compose_losses(actual_model(lean, return_hidden=True), actual_model.cfg)
         for key in ('loss','image_loss','text_loss'):
             torch.testing.assert_close(actual[key],expected[key],atol=3e-6,rtol=2e-4,msg=key)
         torch.testing.assert_close(actual['hidden'][lean.text_indices],expected['hidden'][full.text_indices],

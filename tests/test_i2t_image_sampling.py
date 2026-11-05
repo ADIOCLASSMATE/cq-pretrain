@@ -1,4 +1,5 @@
 """I2T subsampling saves generation work without dropping understanding data."""
+from training.loss import compose_losses
 import copy
 import unittest
 from unittest.mock import patch
@@ -87,7 +88,7 @@ class I2TImageSamplingTests(unittest.TestCase):
         self.assertEqual(ready.latents.shape,(32,128))
         model=JointModel(cfg);captured=[]
         handle=model.renderer.register_forward_pre_hook(lambda module,args:captured.append(args[0]))
-        losses=model(ready,return_hidden=True);handle.remove()
+        losses=compose_losses(model(ready, return_hidden=True), model.cfg);handle.remove()
         expected=losses['hidden'][ready.mainline.condition_indices[ready.generation_image_indices]]
         torch.testing.assert_close(captured[0],expected,rtol=0,atol=0)
         losses['loss'].backward()
@@ -105,7 +106,7 @@ class I2TImageSamplingTests(unittest.TestCase):
         self.assertEqual(randoms,())
         model=JointModel(cfg)
         with patch.object(model.renderer,'forward',side_effect=AssertionError('DiT should be skipped')):
-            losses=model(ready)
+            losses=compose_losses(model(ready), model.cfg)
         self.assertEqual(losses['image_loss'].item(),0)
         self.assertGreater(losses['text_loss'].item(),0)
         losses['loss'].backward()
@@ -137,9 +138,9 @@ class I2TImageSamplingTests(unittest.TestCase):
         batch,_=DevicePreparer(cfg,device='cpu',encoder='fake').prepare(batch,receipt)
         self.assertEqual(len(batch.generation.microbatches),3)
         torch.manual_seed(29);reference=JointModel(cfg);staged=copy.deepcopy(reference)
-        expected=reference(batch);expected['loss'].backward()
-        actual=staged(batch,defer_renderer=True)
-        backward_deferred_renderer(staged,batch,actual)
+        expected=compose_losses(reference(batch), reference.cfg);expected['loss'].backward()
+        actual=compose_losses(staged(batch, compute_image_loss=not True), staged.cfg)
+        backward_deferred_renderer(staged,batch,actual,image_factor=cfg.image_weight)
         torch.testing.assert_close(actual['loss'],expected['loss'],atol=3e-6,rtol=2e-5)
         for (name,p),(_,q) in zip(reference.named_parameters(),staged.named_parameters()):
             if p.grad is None:self.assertIsNone(q.grad,name)

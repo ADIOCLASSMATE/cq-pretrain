@@ -17,7 +17,7 @@ import torch.distributed as dist
 
 def check(output):
     import scripts.validation.delta64_probe as p
-    import training.mcore as P
+    import infra.parallel as P
     from utils.checkpoint import _optimizers
     rank, world = dist.get_rank(), dist.get_world_size()
     length = int(os.getenv('DELTA_ASCENDC_ORACLE_LENGTH', '128'))

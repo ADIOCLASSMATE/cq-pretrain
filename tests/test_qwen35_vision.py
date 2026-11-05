@@ -1,4 +1,5 @@
 """CPU semantic, weight-layout, gradient, packing and native-resolution contracts."""
+from training.loss import compose_losses
 import copy
 import json
 from pathlib import Path
@@ -15,7 +16,9 @@ from data.batch import fake_batch
 from data.packing import Packer
 from data.runtime import empty_batch
 from models.modeling_umm import JointModel
-from models.vision import NativeImageProcessor, QwenVisionTower, VisionInputs, asset_path, vision_config
+from data.vision import NativeImageProcessor, VisionInputs
+from models.vision import QwenVisionTower
+from utils.assets import asset_path, vision_config
 
 
 class Documents:
@@ -132,7 +135,7 @@ class NativeVisionContracts(unittest.TestCase):
             torch.manual_seed(211);model=JointModel(cfg)
             torch.nn.init.normal_(model.renderer.output.weight,std=.02)
             reference=copy.deepcopy(model)
-            a=model(batch,return_hidden=True);b=reference(batch,reference=True,return_hidden=True)
+            a=compose_losses(model(batch, return_hidden=True), model.cfg);b=compose_losses(reference(batch, reference=True, return_hidden=True), reference.cfg)
             for name in a:torch.testing.assert_close(a[name],b[name],atol=3e-6,rtol=2e-4,msg=method+'/'+name)
             a['loss'].backward();b['loss'].backward()
             for (name,p),(rn,r) in zip(model.named_parameters(),reference.named_parameters()):
@@ -147,15 +150,15 @@ class NativeVisionContracts(unittest.TestCase):
             after=int(batch.image_indices[0].max())+2
             self.assertGreater((result[after]-a['hidden'][after]).abs().max().item(),1e-6)
             # Query-to-query attention remains absent in CQ and bidirectional in Bi.
-            import models.cq as mainline
-            original=mainline.packed_layer
             qstart=(64+len(batch.mainline.query_positions)-32 if method=='CQ_IT' else
                     64+int(batch.mainline.generation_condition[0,0])-batch.mainline.prefix)
-            def perturb(layer,hidden,*rest):
-                if layer is model.layers[0]:
-                    hidden=hidden.clone();hidden[qstart,0]+=torch.linspace(-2,2,cfg.width)
-                return original(layer,hidden,*rest)
-            with patch.object(mainline,'packed_layer',perturb),torch.no_grad():perturbed=model.backbone(batch)
+            def perturb(layer,args):
+                hidden,*rest=args
+                hidden=hidden.clone();hidden[qstart,0]+=torch.linspace(-2,2,cfg.width)
+                return (hidden,*rest)
+            hook=model.layers[0].register_forward_pre_hook(perturb)
+            with torch.no_grad():perturbed=model.backbone(batch)
+            hook.remove()
             delta=(perturbed[batch.mainline.condition_indices[0,-1]]-a['hidden'][batch.mainline.condition_indices[0,-1]]).abs().max().item()
             if method=='CQ_IT':self.assertEqual(delta,0)
             else:self.assertGreater(delta,1e-6)
@@ -196,12 +199,12 @@ class NativeVisionContracts(unittest.TestCase):
         cfg=self.cfg();batch=fake_batch(cfg,64)
         model=JointModel(cfg);reference=copy.deepcopy(model)
         model.patch_embed.visual.recompute=True
-        model(batch)['loss'].backward();reference(batch)['loss'].backward()
+        compose_losses(model(batch), model.cfg)['loss'].backward();compose_losses(reference(batch), reference.cfg)['loss'].backward()
         for (name,p),(rn,r) in zip(model.named_parameters(),reference.named_parameters()):
             torch.testing.assert_close(p.grad,r.grad,atol=0,rtol=0,msg=name)
         model.zero_grad(set_to_none=True)
         empty=empty_batch(cfg,self.tokens).to('cpu')
-        result=model(empty);self.assertEqual(result['loss'].item(),0)
+        result=compose_losses(model(empty), model.cfg);self.assertEqual(result['loss'].item(),0)
         result['loss'].backward()
         # Optional visual/renderer modules stay under patch_embed/renderer, so
         # the existing ordered DDP buckets can mark all their absent grads ready.
@@ -235,9 +238,9 @@ class NativeVisionContracts(unittest.TestCase):
                 self.assertFalse(model.patch_embed.visual.recompute)
                 self.assertEqual(model.patch_embed.visual.merger.training,not freeze_merger)
                 with patch('models.vision.checkpoint',side_effect=AssertionError('Frozen encoder recomputed')):
-                    actual=model(batch)
+                    actual=compose_losses(model(batch), model.cfg)
                     actual['loss'].backward()
-                expected=reference(reference_batch);expected['loss'].backward()
+                expected=compose_losses(reference(reference_batch), reference.cfg);expected['loss'].backward()
                 torch.testing.assert_close(actual['loss'],expected['loss'],atol=0,rtol=0)
                 self.assertIsNone(batch.vision.pixel_values.grad)
                 refs=dict(reference.named_parameters())

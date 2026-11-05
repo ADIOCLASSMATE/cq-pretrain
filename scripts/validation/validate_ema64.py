@@ -10,7 +10,7 @@ import torch
 from torch import nn
 import torch.distributed as dist
 
-import training.mcore as P
+import infra.parallel as P
 import utils.checkpoint as checkpoint_io
 from utils.checkpoint_catalog import latest, prune
 from scripts.validation.compare_data_restart import equal
@@ -119,7 +119,7 @@ def main():
     if ema.num_updates!=5:raise AssertionError('EMA did not continue after resume')
     report=dict(passed=True,rank=rank,tp=args.tp,world=64,ema=ema.metadata(),local_ema_bytes=ema.local_bytes,
         checks=['FP32 EMA vs CPU recurrence','DP shard coverage','EMA materialization','online model/master/Adam exact restoration',
-                'rolling three checkpoints','schema6 exact EMA restore','training and EMA continue after resume'],losses=losses)
+                'rolling three checkpoints','current-schema exact EMA restore','training and EMA continue after resume'],losses=losses)
     (root/f'rank_{rank:05d}.json').write_text(json.dumps(report,indent=2))
     dist.barrier()
     if rank==0:

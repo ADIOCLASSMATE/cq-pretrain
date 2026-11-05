@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch_npu
-from configs.config import ModelConfig
+from configs.config import RunConfig
 from data.generation import WanGenerationInputs
 from models.generator_wan21 import Wan21Generator, FP32Linear
 
@@ -19,8 +19,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output',required=True,type=Path)
     args=p.parse_args();torch.npu.set_device(0);torch.manual_seed(19)
-    cfg=ModelConfig(width=64,dit_width=128,dit_heads=2,dit_layers=2,dit_ffn=256,wan_text_dim=64,
-                    wan_freq_dim=32,checkpoint_dit=True)
+    cfg=RunConfig(width=64,dit_width=128,dit_heads=2,dit_layers=2,dit_ffn=256,wan_freq_dim=32,checkpoint_dit=True)
     model=Wan21Generator(cfg).to(dtype=torch.bfloat16)
     for module in model.modules():
         if isinstance(module,FP32Linear):module.float()

@@ -8,7 +8,7 @@ import torch
 import torch.distributed as dist
 import torch_npu
 
-from configs.config import ModelConfig
+from configs.config import RunConfig
 from data.stream import DocumentStream
 from data.packing import Packer, ConsumedLoader, token_contract
 from data.device import DeviceLoader
@@ -22,7 +22,7 @@ def main():
     a=p.parse_args();device=f'npu:{os.environ["LOCAL_RANK"]}';torch.npu.set_device(device)
     torch.set_num_threads(1);dist.init_process_group('hccl');rank,world=dist.get_rank(),dist.get_world_size()
     if world!=64:raise ValueError('This oracle must run on exactly 64 NPUs')
-    cfg=ModelConfig.load(a.config);tokens=token_contract(a.data_root,cfg)
+    cfg=RunConfig.load(a.config);tokens=token_contract(a.data_root,cfg)
     out=Path(a.output)
     if rank==0:out.mkdir(parents=True,exist_ok=True)
     dist.barrier()

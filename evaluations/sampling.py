@@ -18,8 +18,9 @@ import torch.distributed as dist
 from torch.nn import functional as F
 from PIL import Image
 
-import training.mcore as P
-from models.cq import backbone, finalize_plan
+import infra.parallel as P
+from models.cq import backbone
+from data.planning import finalize_plan
 from data.packing import Packer, token_contract
 import data.chat as chat
 
@@ -27,7 +28,7 @@ import data.chat as chat
 def video_input(cfg,case):
     from data.video import prepare_video, prepare_qwen_inputs
     from data.sequence import video_sequence
-    from models.vision import native_processor
+    from data.vision import native_processor
     settings=case.get('video_settings',{'mode':'native'})
     if case['task']=='T2V':
         n=case['num_frames'];fps=case.get('fps',16)
@@ -78,6 +79,7 @@ def prune_queries(batch,cfg,keep):
     rows=torch.cat((torch.arange(s),s+keep))
     plan=replace(plan,query_positions=plan.query_positions[keep],query_image=plan.query_image[:,keep],
         query_rope=plan.query_rope[:,keep],output_positions=plan.output_positions[keep],
+        query_unconditional=(plan.query_unconditional[keep] if plan.query_unconditional is not None else None),
         cq_mask=plan.cq_mask[:,:,rows].contiguous(),cq_valid=plan.cq_valid[:,rows],cq_plan=None)
     batch.mainline=finalize_plan(batch,cfg,plan)
     return batch
@@ -100,7 +102,7 @@ def encode_spans(tokenizer,pieces):
             for piece in pieces]
 
 
-def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,instruction=None,sequence=None):
+def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,instruction=None,sequence=None,non_cfg=False):
     """Build one validation pack under the Qwen3.5 chat template.
 
     Training wraps every caption in user/assistant messages, so evaluation must
@@ -111,7 +113,7 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     body=np.asarray(text_ids,dtype=np.int32)
     def element(ids,supervised=False):
         return dict(type='text',input_ids=ids,supervised=supervised)
-    picture=dict(type='image',generation_target=task in ('T2I','T2V'))
+    picture=dict(type='image',generation_target=task in ('T2I','T2V'),non_cfg=non_cfg)
     if sequence is not None:picture['video_sequence']=sequence
     if processed is None:
         elements=[element(body,True)]
@@ -137,14 +139,15 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
                   processed[2][1]*processed[2][2]//4 if processed is not None else 0)
     scaffold=sum(len(e['input_ids']) for e in elements if e['type']=='text')
     length=max(scaffold+image_tokens+4,cfg.vision_min_pixels//1024+4)
-    packer=Packer(docs,replace(cfg,visual_cache=''),length,tokens,padding_multiple=0)
+    packer=Packer(docs,replace(cfg,visual_cache='',visual_uncond_probability=0.),
+                  length,tokens,padding_multiple=0)
     batch,receipt=packer.next()
     if not receipt['documents'][0]['completed']:raise ValueError('Validation example exceeds its pack')
     used=receipt['occupied']
     # Remove the unused physical tail before constructing the inference plan.
     batch.ids=batch.ids[:,:used];batch.segments=batch.segments[:,:used];batch.sigma=batch.sigma[:,:used]
     batch.image_queries=batch.image_queries[:,:used];batch.row_col=batch.row_col[:,:used]
-    from models.cq import build_plan
+    from data.planning import build_plan
     batch.mainline=build_plan(batch,cfg)
     if not prune:return batch
     if task in ('T2I','T2V'):keep=batch.mainline.query_image[0]
@@ -153,14 +156,10 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
 
 
 def make_null_batch(cfg,tokens,processed,tokenizer,sequence=None):
-    """Use the checkpoint's trained null template and retain its image CQ.
-
-    An image-first I2T caption exposes only the fixed user prefix to image
-    queries. Its instruction and answer follow the image and are invisible to
-    these queries. Keep the same template here instead of substituting an
-    empty T2I instruction, which has a different visible prefix.
-    """
+    """Match training: empty visual-Q reads, or an explicit legacy template."""
     mode=cfg.cfg_null_condition
+    if mode=='empty':
+        return make_batch(cfg,tokens,[],processed,'T2I',tokenizer=tokenizer,sequence=sequence,non_cfg=True)
     if mode=='empty_t2i':
         return make_batch(cfg,tokens,[],processed,'T2I',tokenizer=tokenizer,sequence=sequence)
     if mode=='i2t_prefix':
@@ -181,7 +180,7 @@ def score_reference(model,case,tokenizer,tokens,processor,vae):
     indices=batch.text_indices
     indices=indices[(indices>batch.image_indices.max()+1)&(indices<batch.ids.shape[1]-1)]
     targets=batch.ids.flatten()[indices]
-    from training.loss import linear_cross_entropy
+    from infra.cross_entropy import linear_cross_entropy
     weight=model.lm_head.weight if model.lm_head is not None else model.embedding.weight
     nll=linear_cross_entropy(hidden[indices],weight,targets,cfg.ce_chunk)
     if cfg.renderer=='wan':return dict(reference_text_nll=float(nll),reference_text_tokens=len(targets))
@@ -233,20 +232,29 @@ def caption(model,case,tokenizer,tokens,processor):
     # it as an assistant prefix made the model read its own instruction back and
     # immediately emit <|im_end|>, yielding an empty caption.
     instruction=case.get('prompt','').strip() or None
-    prefix=[]
-    features=None;reason='max_new_tokens'
+    reason='max_new_tokens'
     stops={tokens['eos'],tokens['boi']}
     end=tokenizer.token_to_id('<|im_end|>')
     if end is not None:stops.add(end)
-    for _ in range(case.get('max_new_tokens',48)):
-        batch=make_batch(cfg,tokens,prefix+emitted,processed,'I2T',tokenizer=tokenizer,
-                         instruction=instruction,sequence=sequence).to('npu')
-        if features is None:features=model.patch_embed(batch.vision)
-        hidden=backbone(model,batch,vision_features=features)
-        token=greedy_token(model,hidden[batch.mainline.output_positions])
+    from models.inference import CQDecoder
+    limit=case.get('max_new_tokens',48)
+    cached=cfg.method=='CQ_IT';features=None
+    if limit and cached:
+        batch=make_batch(cfg,tokens,[],processed,'I2T',tokenizer=tokenizer,
+                         instruction=instruction,sequence=sequence)
+        decoder=CQDecoder(model,batch,limit)
+    for step in range(limit):
+        if cached:hidden=decoder.hidden
+        else:
+            batch=make_batch(cfg,tokens,emitted,processed,'I2T',tokenizer=tokenizer,
+                instruction=instruction,sequence=sequence).to('npu')
+            if features is None:features=model.patch_embed(batch.vision)
+            hidden=backbone(model,batch,vision_features=features)[batch.mainline.output_positions]
+        token=greedy_token(model,hidden)
         if token in stops:
             reason=f'stop_token_{token}';break
         emitted.append(token)
+        if cached and step+1<limit:decoder.advance(token)
     return dict(text=tokenizer.decode(emitted,skip_special_tokens=False),token_ids=emitted,
                 stop_reason=reason,reference_captions=case.get('references',[]),
                 image=source,prompt=case.get('prompt',''))
@@ -275,19 +283,24 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     if guidance!=1.:
         negative,other=conditions()
         negative_projected=model.renderer.project_conditions(negative,other)
+    positive_kv=negative_kv={}
+    if cfg.renderer=='wan':
+        positive_kv=dict(cached_kv=model.renderer.cache_condition_kv(projected))
+        if negative_projected is not None:
+            negative_kv=dict(cached_kv=model.renderer.cache_condition_kv(negative_projected))
     generator=torch.Generator(device='cpu').manual_seed(case['seed'])
     latent=torch.randn(sum(layout.lengths),cfg.latent_channels*(4 if cfg.renderer=='wan' else 1),generator=generator).to('npu')
     sigmas=moss_sigmas(case.get('steps',30),case.get('shift',5.))
     if cfg.renderer=='wan':
         base=torch.linspace(1.,0.,case.get('steps',30)+1);shift=case.get('shift',5.)
         sigmas=shift*base/(1+(shift-1)*base)
-    for start,end in zip(sigmas[:-1],sigmas[1:]):
-        half=cfg.wan_freq_dim//2 if cfg.renderer=='wan' else 128
-        phase=(start*1000).double()*10000**(-torch.arange(half,dtype=torch.float64)/half)
-        time_features=torch.cat((phase.cos(),phase.sin()))[None].to(device='npu',dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
-        velocity=model.renderer.predict(latent,positive,time_features,layout,projected).float()
+    half=cfg.wan_freq_dim//2 if cfg.renderer=='wan' else 128
+    phase=(sigmas[:-1]*1000).double()[:,None]*10000**(-torch.arange(half,dtype=torch.float64)/half)
+    time_features=torch.cat((phase.cos(),phase.sin()),-1).to(device='npu',dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
+    for i,(start,end) in enumerate(zip(sigmas[:-1],sigmas[1:])):
+        velocity=model.renderer.predict(latent,positive,time_features[i:i+1],layout,projected,**positive_kv).float()
         if negative_projected is not None:
-            uncond=model.renderer.predict(latent,positive,time_features,layout,negative_projected).float()
+            uncond=model.renderer.predict(latent,positive,time_features[i:i+1],layout,negative_projected,**negative_kv).float()
             velocity=uncond+guidance*(velocity-uncond)
         latent=latent+(float(end)-float(start))*velocity
     if not torch.isfinite(latent).all().item():raise FloatingPointError('Nonfinite generated latent')
@@ -347,7 +360,7 @@ def report_html(output,rows,weight_sources=None):
 @torch.no_grad()
 def run_suite(model,suite_path,output,preparer,weight_sources=None):
     from tokenizers import Tokenizer
-    from models.vision import NativeImageProcessor
+    from data.vision import NativeImageProcessor
     if model.cfg.method!='CQ_IT':raise ValueError('This validator implements CQ_IT only')
     if preparer is None or not hasattr(preparer.vae,'vae'):raise ValueError('Frozen generation VAE preparer required')
     suite=json.loads(Path(suite_path).read_text());output=Path(output)

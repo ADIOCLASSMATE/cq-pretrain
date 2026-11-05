@@ -1,12 +1,12 @@
 """Independent linear-chain references for the optional training adapter."""
 import unittest
 import torch
-from models.mc2 import _RowAllReduce
+from infra.mc2 import _RowAllReduce
 
 
 class MC2GradientTests(unittest.TestCase):
     def test_fragmented_topology_cannot_use_mc2(self):
-        from models.mc2 import topology_supports_mc2
+        from infra.mc2 import topology_supports_mc2
         mapping='NPU ID Chip ID Chip Logic ID\n1 0 0 Ascend\n1 1 - Mcu\n10 0 1 Ascend'
         topo='NPU1 NPU10 CPU Affinity\nNPU1 X PHB 0-47\nNPU10 PHB X 0-47'
         self.assertFalse(topology_supports_mc2(2,0,2,mapping,topo))

@@ -52,6 +52,7 @@ __pycache__/
 .pytest_cache/
 
 # Unified training source layout.
+!/infra/
 !/models/
 !/data/
 !/training/

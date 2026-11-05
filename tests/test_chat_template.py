@@ -197,7 +197,7 @@ class QueryPruning(unittest.TestCase):
         import torch
         from configs.config import tiny_config
         from data.batch import fake_batch
-        from models.cq import build_plan
+        from data.planning import build_plan
         cfg = tiny_config()
         batch = fake_batch(cfg, 64, 1, 1)
         if supervised is not None:
@@ -257,9 +257,9 @@ class ResumeConfigCompatibility(unittest.TestCase):
         self.assertFalse(self.check(saved, current, {}))
 
     def test_real_config_matches_its_own_dict(self):
-        from configs.config import ModelConfig
+        from configs.config import RunConfig
         from dataclasses import fields
-        cfg = ModelConfig.load(Path(__file__).resolve().parents[1] / 'configs/qwen35_2b_wan.yaml')
+        cfg = RunConfig.load(Path(__file__).resolve().parents[1] / 'configs/qwen35_2b_wan.yaml')
         current = cfg.to_dict()
         defaults = {f.name: f.default for f in fields(cfg)}
         saved = {k: v for k, v in current.items() if k != 'moss_cross_attention'}

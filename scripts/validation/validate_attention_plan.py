@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 import time
 import torch
-from data.attention_plan import plan_attention, tiled_attention
-from configs.config import ModelConfig
+from infra.attention_plan import plan_attention
+from infra.attention import tiled_attention
+from configs.config import RunConfig
 from data.batch import fake_batch
-from models.kernels import attention
+from infra.kernels import attention
 
 
 def cpu_checks():
@@ -45,7 +46,7 @@ def main():
         return
     import torch_npu
     torch.npu.set_device(0);torch.set_num_threads(4);torch.manual_seed(42)
-    batch=fake_batch(ModelConfig(),device='cpu',dtype=torch.bfloat16)
+    batch=fake_batch(RunConfig(),device='cpu',dtype=torch.bfloat16)
     plans={n:plan_attention(batch.mask,n) for n in (1024,2048,4096)}
     batch=batch.to('npu');plans={n:p.bind(batch.mask) for n,p in plans.items()}
     inputs=[torch.randn(s,1,h,128,device='npu',dtype=torch.bfloat16,requires_grad=True)

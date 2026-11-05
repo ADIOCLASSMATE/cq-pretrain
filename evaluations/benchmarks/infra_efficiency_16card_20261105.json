@@ -1,0 +1,166 @@
+{
+  "date": "2026-11-05",
+  "hardware": "16 x Ascend 910B 64GB",
+  "tp": 2,
+  "dp": 8,
+  "models": [
+    "Qwen3.5-2B-Base",
+    "Wan2.1-T2V-1.3B"
+  ],
+  "dtype": "BF16 weights/activations; FP32 recurrent state",
+  "training_setup": {
+    "sequence_length": 8192,
+    "global_batch": 8,
+    "microbatch": 1,
+    "checkpoint_backbone": true,
+    "checkpoint_dit": true,
+    "steps": 7,
+    "warmup": 2,
+    "inputs": "Fixed synthetic shapes, resident visual features and Wan latents; excludes data loading."
+  },
+  "training": {
+    "i2t": {
+      "before_seconds": 1.676614761352539,
+      "after_seconds": 1.6326199769973755,
+      "throughput_ratio": 1.0269473514810694,
+      "before_peak_gib": 10.830310821533203,
+      "after_peak_gib": 10.830432891845703,
+      "before_timed_seconds": [
+        1.6798254251480103,
+        1.676614761352539,
+        1.7679121494293213,
+        1.669268012046814,
+        1.6694282293319702
+      ],
+      "after_timed_seconds": [
+        1.6326199769973755,
+        1.6339902877807617,
+        1.6302191019058228,
+        1.633323311805725,
+        1.6309062242507935
+      ],
+      "first_step_loss_before": 0.6944150924682617,
+      "first_step_loss_after": 0.6944150924682617,
+      "first_step_grad_norm_before": 4.1096272468566895,
+      "first_step_grad_norm_after": 4.109570026397705
+    },
+    "joint": {
+      "before_seconds": 2.1092026233673096,
+      "after_seconds": 1.9522346258163452,
+      "throughput_ratio": 1.0804042687672988,
+      "before_peak_gib": 16.49165916442871,
+      "after_peak_gib": 16.49178123474121,
+      "before_timed_seconds": [
+        2.0859551429748535,
+        2.1111624240875244,
+        2.1112239360809326,
+        2.1092026233673096,
+        1.9989013671875
+      ],
+      "after_timed_seconds": [
+        1.9560825824737549,
+        1.9496819972991943,
+        1.9522346258163452,
+        1.9545754194259644,
+        1.9452625513076782
+      ],
+      "first_step_loss_before": 2.005479574203491,
+      "first_step_loss_after": 2.005479574203491,
+      "first_step_grad_norm_before": 13.668508529663086,
+      "first_step_grad_norm_after": 13.663355827331543
+    }
+  },
+  "inference": {
+    "world_size": 16,
+    "tp": 2,
+    "dp": 8,
+    "cq": [
+      {
+        "prefix_tokens": 323,
+        "decode_tokens": 8,
+        "relative_rms": 0.015086215920746326,
+        "max_abs": 0.5,
+        "rank0_error_by_token": [
+          0.013922881335020065,
+          0.011085611768066883,
+          0.015086215920746326,
+          0.01338572334498167,
+          0.0136294299736619,
+          0.013222143054008484,
+          0.012560561299324036,
+          0.013048435561358929,
+          0.014305496588349342
+        ],
+        "full_prefix_ms_per_token": 45.94484344124794,
+        "cached_ms_per_token": 34.88367050886154,
+        "speedup": 1.317087415717234
+      },
+      {
+        "prefix_tokens": 2115,
+        "decode_tokens": 8,
+        "relative_rms": 0.013802282512187958,
+        "max_abs": 0.5830078125,
+        "rank0_error_by_token": [
+          0.01336437463760376,
+          0.012034638784825802,
+          0.013325953856110573,
+          0.01341902744024992,
+          0.013802282512187958,
+          0.012235898524522781,
+          0.012088818475604057,
+          0.012778697535395622,
+          0.013494000770151615
+        ],
+        "full_prefix_ms_per_token": 64.65429812669754,
+        "cached_ms_per_token": 34.97450053691864,
+        "speedup": 1.8486124786385236
+      }
+    ],
+    "wan": {
+      "relative_rms": 0.0,
+      "cache_bytes": 11796480,
+      "uncached_ms": 80.6873550415039,
+      "cached_ms": 81.4683609008789,
+      "speedup": 0.9904133844017651
+    },
+    "complete": true
+  },
+  "inference_setup": {
+    "tokens": 8,
+    "repeats": 3,
+    "metric": "Median backbone decode latency, worst rank; excludes prefill, tokenization, vision, LM head and sampling.",
+    "wan_input": "One 256x256 image plus one 5-frame 256x256 video, 64 conditions each.",
+    "wan_metric": "Seven predict calls per path, first two excluded; caches already built."
+  },
+  "validation": {
+    "cpu_tests_passed": 52,
+    "cpu_subtests_passed": 19,
+    "cpu": "Float64 multi-token equality for text/image/video prefixes, fused/unfused projections and grouped value heads; stable cache storage. Existing forward/gradient/packing/checkpoint tests pass.",
+    "npu_max_relative_rms": 0.015086215920746326,
+    "npu_tolerance": 0.025,
+    "wan_output_relative_rms": 0.0,
+    "limitations": [
+      "BF16 cached and full-prefix execution are not bitwise identical. This is a short numerical/performance check, not a generation-quality evaluation.",
+      "Wan KV caching removes repeated projections but did not improve overall latency for the measured shape.",
+      "Whole-step training peak memory is essentially unchanged; allocation reductions do not imply a lower optimizer-dominated peak."
+    ]
+  },
+  "before_sha256": {
+    "data/layout.py": "f02f4df4e52edff1df5b9195197c6f808115efbc10ac6e6d3189a4e0ef7acedf",
+    "models/backbone_qwen35.py": "218c995ad4b8329ccb8e2483ae57a7853ab6d6bf8ea54afcf5e09271f604eb05",
+    "models/cq.py": "34131d43df2db99213d06b7544a1b322827804c65e253ef4e400f7bbe94368c9",
+    "models/delta_ascendc.py": "bfccde0b78adda43ad1ddf076b6c5f385e7f5ac2a5af7b741e219d066b474b7e",
+    "models/generator_wan21.py": "23142e762e294dd04188454330f822ac836b0bbffdfcbbaa569f2a30835e4c44",
+    "evaluations/sampling.py": "95419f3399861c694fd3bdd355b99059436039c2d7ac085a4a7037e561dd67e6"
+  },
+  "after_sha256": {
+    "data/layout.py": "f1da359f61ccda3a16c3fc526230026bef308153b69d7a2107a6a72c2ded20f9",
+    "models/backbone_qwen35.py": "ebf6035c8da608a17289a977a1875385430c51ff083e6ce74e2032c94db70a98",
+    "models/cq.py": "1643954c87155b687a06c8c639bbd7e0f0093c1dea5de8e927cd89c3fca19cbf",
+    "models/delta_ascendc.py": "e841880f442254ac5ed6d056c9066fab76cc08e80c39d0bb7c6900835c6607c8",
+    "models/generator_wan21.py": "79f3bac794aad4f9349e5baad5db0069fd3d985401bafb0fe3133968bc15d471",
+    "models/inference.py": "9510b059e831c29ea979182222d42fa2f1876239742f8c6f41850807b108e086",
+    "evaluations/sampling.py": "00a4e5d13f7e401ac107268431d927a0d94bd60e4bb75d7ad829a2ee9a5801a7"
+  },
+  "resources_released": true
+}

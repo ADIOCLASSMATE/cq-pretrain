@@ -1,7 +1,7 @@
 """Bounded, standalone numerical localization; never used for timing."""
 import torch
 import torch_npu
-import models.delta_ascendc as b
+import infra.delta_ascendc as b
 from scripts.validation.delta64_probe import error_stats
 
 torch.npu.set_device(0)

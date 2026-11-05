@@ -1,7 +1,7 @@
 import unittest
 import torch
 from utils.checkpoint_reshard import reshard_tensor, reshard_state
-from training.mcore import mark_sharded
+from infra.parallel import mark_sharded
 
 
 class ReshardContracts(unittest.TestCase):

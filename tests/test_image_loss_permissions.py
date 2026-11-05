@@ -1,4 +1,5 @@
 """Image-target permissions survive loading and never remove understanding."""
+from training.loss import compose_losses
 import copy
 import hashlib
 import json
@@ -132,7 +133,7 @@ class PermissionPackingTests(unittest.TestCase):
             ready,_=preparer.prepare(batch,receipt)
         model=JointModel(cfg)
         with patch.object(model.renderer,'forward',side_effect=AssertionError('DiT must be skipped')):
-            losses=model(ready)
+            losses=compose_losses(model(ready), model.cfg)
         self.assertEqual(losses['image_loss'].item(),0)
         self.assertGreater(losses['text_loss'].item(),0)
         losses['loss'].backward()
@@ -168,11 +169,11 @@ class PermissionPackingTests(unittest.TestCase):
                     ready.pixels=ready.pixels.float()
                     model=JointModel(cfg)
                     if allowed:
-                        losses=model(ready)
+                        losses=compose_losses(model(ready), model.cfg)
                         self.assertGreater(losses['image_loss'].item(),0)
                     else:
                         with patch.object(model.renderer,'forward',side_effect=AssertionError('DiT must be skipped')):
-                            losses=model(ready)
+                            losses=compose_losses(model(ready), model.cfg)
                         self.assertEqual(losses['image_loss'].item(),0)
                     losses['loss'].backward()
                     self.assertTrue(any(p.grad is not None and p.grad.abs().sum()>0 for p in model.patch_embed.parameters()))

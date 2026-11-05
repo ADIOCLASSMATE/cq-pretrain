@@ -10,13 +10,12 @@ from models.generator_wan21 import Wan21Generator
 
 def small_config(**kwargs):
     return tiny_config(renderer='wan',width=32,dit_width=64,dit_heads=2,dit_layers=2,
-        dit_ffn=128,latent_channels=16,wan_text_dim=32,wan_freq_dim=32,flow_draws=1,**kwargs)
+        dit_ffn=128,latent_channels=16,wan_freq_dim=32,flow_draws=1,**kwargs)
 
 
 def native_state(model):
     result={}
     for name,value in model.state_dict().items():
-        if name.startswith('condition_proj.'):continue
         name=name.replace('.impl.','.')
         if '.kv.' in name:
             for label,part in zip(('k','v'),value.chunk(2,0)):
@@ -45,8 +44,6 @@ def test_packed_wan_matches_diffusers_forward_and_backward():
         from diffusers.loaders.single_file_utils import convert_wan_transformer_to_diffusers
     torch.manual_seed(41)
     cfg=small_config(); model=Wan21Generator(cfg)
-    with torch.no_grad():
-        model.condition_proj.weight.copy_(torch.eye(32));model.condition_proj.bias.zero_()
     reference=WanTransformer3DModel(num_attention_heads=2,attention_head_dim=32,in_channels=16,
         out_channels=16,text_dim=32,freq_dim=32,ffn_dim=128,num_layers=2)
     reference.load_state_dict(convert_wan_transformer_to_diffusers(native_state(model)),strict=True)
@@ -101,9 +98,9 @@ def test_wan_chunks_preserve_loss_and_every_gradient(recompute):
     expected=condition.square().mean()+.3*cfg.image_weight*renderer(condition,batch)
     (expected*.4).backward()
     actual_condition=other_bridge(inputs);text_loss=actual_condition.square().mean()
-    losses=dict(loss=text_loss,text_loss=text_loss,_image_conditions=actual_condition,_image_scale=.3)
+    losses=dict(loss=text_loss,text_loss=text_loss,image_conditions=actual_condition)
     visits=[];actual_condition.register_hook(lambda gradient:visits.append(True))
-    backward_deferred_renderer(SimpleNamespace(cfg=cfg,renderer=other_renderer),batch,losses,.4)
+    backward_deferred_renderer(SimpleNamespace(cfg=cfg,renderer=other_renderer),batch,losses,.4,image_factor=cfg.image_weight*.3)
     assert visits==[True]
     torch.testing.assert_close(losses['loss'],expected)
     for reference,actual in ((bridge,other_bridge),(renderer,other_renderer)):
@@ -127,11 +124,12 @@ def test_cache_identity_atomic_resume_and_tamper(tmp_path):
     with pytest.raises(ValueError,match='checksum'):cache.load(key)
 
 
-def test_video_blocks_and_understanding_queries():
+@pytest.mark.parametrize("visibility", ["visual_block", "causal"])
+def test_video_blocks_and_understanding_queries(visibility):
     from data.batch import Batch
-    from models.cq import build_visual_plan
+    from data.planning import build_visual_plan
     from types import SimpleNamespace
-    cfg=small_config(visual_query_mode='native')
+    cfg=small_config(visual_query_mode='native',content_visibility=visibility)
     s=16; spans=torch.tensor([[2,3,4,5,7,8,9,10],[12,13,-1,-1,-1,-1,-1,-1]])
     sigma=torch.arange(s)[None];sigma[0,2:6]=2;sigma[0,7:11]=7;sigma[0,12:14]=12
     empty=torch.empty(0)
@@ -139,11 +137,13 @@ def test_video_blocks_and_understanding_queries():
         torch.zeros(1,s,dtype=torch.bool),sigma,torch.zeros(1,s,dtype=torch.long),
         torch.arange(s).float()[None,:,None].expand(3,-1,-1).clone(),empty,empty,empty,empty,
         vision=SimpleNamespace(grid_thw=((2,4,4),(1,2,4))),generation_image_indices=torch.tensor([1]))
+    original_sigma=batch.sigma.clone()
     plan=build_visual_plan(batch,cfg)
+    torch.testing.assert_close(batch.sigma,original_sigma,rtol=0,atol=0)
     assert plan.query_image.sum()==2
     assert plan.condition_indices.shape==(2,2) # An understanding video cannot increase target Q padding.
     assert plan.output_size==s+2
-    assert not plan.cq_mask[0,0,2,5] # bidirectional in block
+    assert bool(plan.cq_mask[0,0,2,5]) == (visibility=='causal')
     assert plan.cq_mask[0,0,2,7] # no future block
     assert not plan.cq_mask[0,0,7,2] # past block visible
     assert plan.cq_mask[0,0,s+len(batch.text_indices):,12:].all() # target content is invisible to its queries
@@ -161,7 +161,8 @@ def test_video_blocks_and_understanding_queries():
         torch.testing.assert_close(forward(changed)[2:6],expected[2:6],rtol=0,atol=0)
         changed=content.clone();changed[5]+=torch.randn_like(changed[5])
         actual=forward(changed)
-        assert not torch.allclose(actual[2],expected[2]) # later token in same block is visible
+        if visibility=='visual_block':assert not torch.allclose(actual[2],expected[2])
+        else:torch.testing.assert_close(actual[2],expected[2],rtol=0,atol=0)
         assert not torch.allclose(actual[7],expected[7]) # earlier block is visible
         changed=content.clone();changed[12:14]+=torch.randn_like(changed[12:14])
         torch.testing.assert_close(forward(changed)[s+len(batch.text_indices):],
@@ -170,12 +171,26 @@ def test_video_blocks_and_understanding_queries():
     plan=build_visual_plan(batch,cfg)
     assert not plan.query_image.any() and plan.output_size==s
     assert plan.condition_indices.shape==(2,0)
+    # A video target uses the same flag as an image, across all native time blocks.
+    batch.generation_image_indices=torch.tensor([0,1])
+    batch.generation_unconditional=torch.tensor([True,False])
+    plan=build_visual_plan(batch,cfg)
+    assert plan.query_unconditional.sum()==8
+    content=torch.randn(s+len(plan.query_positions),1,cfg.width)
+    with torch.no_grad():
+        expected=forward(content)
+        changed=content.clone();changed[:s]+=torch.randn_like(changed[:s])
+        actual=forward(changed)
+        null_rows=s+plan.query_unconditional.nonzero().flatten()
+        normal_rows=s+(plan.query_image[0]&~plan.query_unconditional).nonzero().flatten()
+        torch.testing.assert_close(actual[null_rows],expected[null_rows],rtol=0,atol=0)
+        assert not torch.allclose(actual[normal_rows],expected[normal_rows])
 
 
 def test_native_video_serialization_and_mixed_source_resume(tmp_path):
     from pathlib import Path
     from PIL import Image
-    from models.vision import native_processor
+    from data.vision import native_processor
     from data.sequence import video_sequence, native_video_metadata
     from data.video import prepare_qwen_inputs
     from data.stream import DocumentStream
@@ -222,7 +237,7 @@ def test_native_video_serialization_and_mixed_source_resume(tmp_path):
         assert batch.mainline.query_image.sum()==14
         assert sorted(batch.generation.grids)==[(1,4,6),(2,4,6)]
         assert len(batch.vision.ends)==5 # 2 + 2 native video blocks, one image.
-        from models.cq import build_visual_plan
+        from data.planning import build_visual_plan
         native=build_visual_plan(batch,replace(cfg,visual_query_mode='native'))
         expected=torch.cat([batch.row_col[:,batch.image_indices[i][batch.image_indices[i]>=0]]
                             for i in batch.generation_image_indices.tolist()],1)
@@ -233,3 +248,22 @@ def test_native_video_serialization_and_mixed_source_resume(tmp_path):
         assert batch.latents.shape==(72,64)
         assert torch.isfinite(batch.latents).all()
     finally:docs.close()
+
+
+def test_adapted_native_checkpoint_keeps_bias_and_second_layer(tmp_path):
+    from safetensors.torch import save_file
+    cfg=small_config()
+    native=Wan21Generator(replace(cfg,width=96))
+    state=native_state(native)
+    (tmp_path/'config.json').write_text(json.dumps(dict(dim=64,ffn_dim=128,
+        num_heads=2,num_layers=2,in_dim=16)))
+    save_file(state,str(tmp_path/'diffusion_pytorch_model.safetensors'))
+    adapted=Wan21Generator(cfg)
+    report=adapted.load_pretrained(tmp_path)
+    assert report['initialized']==['text_embedding.0.weight']
+    assert adapted.text_embedding[0].weight.shape==(64,32)
+    assert adapted.text_embedding[2].weight.shape==(64,64)
+    for name,value in native_state(adapted).items():
+        if name!='text_embedding.0.weight':
+            torch.testing.assert_close(value,state[name],rtol=0,atol=0)
+    assert not any(name.startswith('condition_proj') for name,_ in adapted.named_parameters())

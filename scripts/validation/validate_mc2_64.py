@@ -7,9 +7,9 @@ import statistics
 import torch
 import torch.distributed as dist
 import torch_npu
-import training.mcore as P
-from configs.config import ModelConfig
-from models.mc2 import _RowAllReduce
+import infra.parallel as P
+from configs.config import RunConfig
+from infra.mc2 import _RowAllReduce
 
 
 def relative(a,b):
@@ -19,7 +19,7 @@ def relative(a,b):
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--output',type=Path,required=True)
     args=parser.parse_args()
-    P.initialize(2,ModelConfig.load(Path(__file__).resolve().parents[2]/'configs/legacy/qwen35_9b_moss.json'))
+    P.initialize(2,RunConfig.load(Path(__file__).resolve().parents[2]/'configs/legacy/qwen35_9b_moss.json'))
     rank=dist.get_rank();group=P.state().get_tensor_model_parallel_group()
     if dist.get_world_size()!=64:raise ValueError('Requires 64 NPUs')
     hcom=group._get_backend(torch.device('npu')).get_hccl_comm_name(rank)

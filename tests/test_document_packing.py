@@ -1,4 +1,5 @@
 """Semantic/gradient oracles for whole documents and independently chunked DiT."""
+from training.loss import compose_losses
 import ast
 import copy
 from pathlib import Path
@@ -12,7 +13,7 @@ import tests.test_qwen35_vision as fixtures
 from data.generation import GenerationInputs
 from data.packing import Packer, ConsumedLoader
 from models.modeling_umm import JointModel
-from models.cq import build_plan
+from data.planning import build_plan
 from training.renderer_schedule import backward_deferred_renderer, suspend_gradient_readiness
 
 
@@ -160,12 +161,12 @@ class DocumentPackingTests(unittest.TestCase):
                 def capture(module,args):
                     args[0].retain_grad();reference_cq.append(args[0])
                 handle=expected_model.renderer.register_forward_pre_hook(capture)
-                expected=expected_model(batch,loss_scales=(.7,.3));handle.remove()
+                expected=compose_losses(expected_model(batch), expected_model.cfg, (0.7, 0.3));handle.remove()
                 (expected['loss']*.4).backward()
-                actual=actual_model(batch,loss_scales=(.7,.3),return_hidden=True,defer_renderer=True)
-                cq=actual['_image_conditions'];cq.retain_grad();backward_visits=[]
+                actual=compose_losses(actual_model(batch, return_hidden=True, compute_image_loss=not True), actual_model.cfg, (0.7, 0.3))
+                cq=actual['image_conditions'];cq.retain_grad();backward_visits=[]
                 actual['hidden'].register_hook(lambda x:backward_visits.append(True))
-                backward_deferred_renderer(actual_model,batch,actual,.4)
+                backward_deferred_renderer(actual_model,batch,actual,.4,image_factor=cfg.image_weight*.3)
                 self.assertEqual(backward_visits,[True])
                 for name in ('loss','text_loss','image_loss'):
                     torch.testing.assert_close(actual[name],expected[name],atol=3e-6,rtol=2e-5,msg=name)
@@ -232,9 +233,9 @@ class DocumentPackingTests(unittest.TestCase):
                 group.is_last_microbatch=bool(micro)
                 batch=self.pair(cfg)
                 if micro:batch.generation.plan_microbatches(40)
-                (reference(batch)['loss']*.5).backward()
-                losses=actual(batch,defer_renderer=True)
-                backward_deferred_renderer(actual,batch,losses,.5,wrapped)
+                (compose_losses(reference(batch), reference.cfg)['loss']*.5).backward()
+                losses=compose_losses(actual(batch, compute_image_loss=not True), actual.cfg)
+                backward_deferred_renderer(actual,batch,losses,.5,wrapped,image_factor=cfg.image_weight)
                 self.assertEqual(group.is_last_microbatch,bool(micro))
                 if micro==0:
                     self.assertEqual(completed,[]);self.assertEqual(group.per_param_grad_ready_counts,{})

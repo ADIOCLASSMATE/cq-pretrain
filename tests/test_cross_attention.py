@@ -2,7 +2,7 @@
 import copy
 import unittest
 import torch
-from configs.config import ModelConfig, tiny_config
+from configs.config import RunConfig, tiny_config
 from data.generation import GenerationInputs
 from models.moss import MOSSRenderer
 import numpy as np
@@ -21,7 +21,7 @@ def layout_and_batch(queries=4, shapes=((32,48),(16,32)), seed=0):
 
 
 def small_cfg(cross):
-    cfg=ModelConfig(renderer='moss',latent_channels=128,flow_draws=1,
+    cfg=RunConfig(renderer='moss',latent_channels=128,flow_draws=1,
         dit_width=64,dit_heads=4,dit_layers=2,dit_ffn=128,width=64,
         image_condition_queries=4,moss_cross_attention=cross,
         checkpoint_dit=False,checkpoint_backbone=False)
@@ -168,7 +168,7 @@ class CrossAttentionControl(unittest.TestCase):
         """TP4 must partition one draw, including the strided K/V projection."""
         from unittest.mock import patch
         from types import SimpleNamespace
-        import training.mcore as P
+        import infra.parallel as P
         cfg=small_cfg(True)
         full=MOSSRenderer(cfg)
         torch.manual_seed(101)

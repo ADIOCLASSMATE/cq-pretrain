@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 import torch
 import torch_npu
-from configs.config import ModelConfig
+from configs.config import RunConfig
 from data.batch import fake_batch
 from models.backbone_qwen35 import GatedDelta
 from models import delta_ascendc
@@ -31,7 +31,7 @@ def main():
         import mindspeed.megatron_adaptor
     finally:
         sys.argv=previous; torch.compile=compile_function
-    cfg=ModelConfig(renderer='legacy',vision_assets='assets/Qwen3.5-0.8B-vision',
+    cfg=RunConfig(renderer='legacy',vision_assets='assets/Qwen3.5-0.8B-vision',
         qwen_fused_projections=True,vision_max_pixels=262144)
     model=GatedDelta(cfg).to('npu',torch.bfloat16)
     model.A_log.data=model.A_log.data.float(); model.norm.weight.data=model.norm.weight.data.float()

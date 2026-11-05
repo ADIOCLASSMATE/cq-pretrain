@@ -11,20 +11,23 @@ import numpy as np
 import torch
 
 from data.batch import Batch
-from models.cq import build_plan
+from data.planning import build_plan
 from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed
 
 
-def select_i2t_image(sample_id, probability, seed=0, epoch=0):
+def sample_objective(sample_id, probability, seed=0, epoch=0, salt='i2t-null-v1'):
     """Independent Bernoulli draws keyed by occurrence, safe across TP/restart.
 
-    No batch quota or inverse-probability weighting: the skipped images are
-    intentionally absent from the image objective. A new epoch redraws them.
+    Separate salts keep objectives independent. A new epoch redraws them;
+    prefetch depth, pack boundaries and worker completion order do not.
     """
     if probability == 1:return True
     if probability == 0:return False
-    digest=hashlib.sha256(f'i2t-null-v1:{seed}:{epoch}:{sample_id}'.encode()).digest()
+    digest=hashlib.sha256(f'{salt}:{seed}:{epoch}:{sample_id}'.encode()).digest()
     return int.from_bytes(digest[:8],'big') < int(probability*(1 << 64))
+
+
+select_i2t_image = sample_objective  # Legacy MOSS checkpoint/test contract.
 
 
 def token_contract(root, cfg):
@@ -68,10 +71,13 @@ class Packer:
         if cfg.i2t_image_loss_probability != 1:
             self.packing_contract['i2t_image_loss_probability']=cfg.i2t_image_loss_probability
             self.packing_contract['i2t_sampling']='sample_seed_epoch_sha256_v1'
+        if cfg.renderer=='wan':
+            self.packing_contract.update(visual_uncond_probability=cfg.visual_uncond_probability,
+                objective_policy='wan_non_cfg_flag_v2')
         self.stats=dict(batches=0,pack_seconds=0.,plan_seconds=0.,pin_seconds=0.,atomic_captions=0,
                         atomic_documents=0,long_document_windows=0)
         if cfg.vision_encoder == 'qwen35':
-            from models.vision import NativeImageProcessor
+            from data.vision import NativeImageProcessor
             self.processor = NativeImageProcessor(cfg,length)
         if state:
             restored=state.get('packing') if cfg.preserve_documents else state.get('packing',self.packing_contract)
@@ -139,6 +145,7 @@ class Packer:
         image_queries = np.zeros(s, bool)
         text_indices, image_indices, pixels, records = [], [], [], []
         generation_image_indices=[]
+        generation_unconditional=[]
         i2t_null_candidates=i2t_null_images=0
         vision_pixels,vision_grids=[],[]
         visual_features,visual_latents,visual_cache_keys=[],[],[]
@@ -149,12 +156,13 @@ class Packer:
             doc = self.documents.peek()
             if doc is None:
                 break
+            signature=getattr(self.documents,'signature',{})
+            seed,epoch=signature.get('seed',0),signature.get('epoch',0)
             # Only image-first caption pairs have the fixed trained null
             # prefix. Conversation/interleaved images may have real context.
             is_null=doc.get('format')=='caption' and doc.get('direction')=='I2T'
-            signature=getattr(self.documents,'signature',{})
             sampled_image=not is_null or select_i2t_image(doc['id'],cfg.i2t_image_loss_probability,
-                signature.get('seed',0),signature.get('epoch',0))
+                seed,epoch)
             if cfg.renderer=='wan' and doc.get('direction') in ('I2T','V2T'):sampled_image=False
             # This is an objective permission, independent of source format or
             # random null-target sampling. Validate all flags before packing.
@@ -260,6 +268,16 @@ class Packer:
                         size=len(sequence['ids'])
                         if position+size>s or (self.max_images and len(pixels)>=self.max_images):break
                         generate_image=sampled_image and image_permissions[self.element] and e.get('generation_target',True)
+                        unconditional=e.get('non_cfg')
+                        if unconditional is None:unconditional=doc.get('non_cfg')
+                        if unconditional is None:
+                            # Training policy only fills unspecified flags. The
+                            # model consumes the flag, never the source format.
+                            natural=doc.get('format')=='interleaved' or not templated
+                            unconditional=(not (current_record['body_tokens'] or current_record['images']) if natural else
+                                sample_objective(f'{doc["id"]}:{self.element}',cfg.visual_uncond_probability,
+                                                 seed,epoch,'visual-uncond-v1'))
+                        generation_unconditional.append(generate_image and unconditional)
                         stop=position+size;indices=position+sequence['visual']
                         ids[position:stop]=sequence['ids'];segment[position:stop]=seg
                         sigma[position:stop]=sequence['sigma']+position
@@ -357,6 +375,8 @@ class Packer:
             noise=torch.empty(0), times=torch.empty(0), mask=torch.empty(0,dtype=torch.bool), valid_rows=torch.empty(0,dtype=torch.bool))
         if cfg.renderer in ('moss','wan') or len(generation_image_indices)!=n_images:
             batch.generation_image_indices=torch.tensor(generation_image_indices,dtype=torch.long)
+        if cfg.renderer=='wan':
+            batch.generation_unconditional=torch.tensor(generation_unconditional,dtype=torch.bool)
         if generation_image_indices and cfg.renderer=='moss':
             from data.generation import GenerationInputs
             batch.generation=GenerationInputs.prepare([pixels[i] for i in generation_image_indices],cfg.image_condition_queries,cfg.dit_width//cfg.dit_heads,
@@ -370,7 +390,7 @@ class Packer:
                 cached_latents=[visual_latents[i] for i in generation_image_indices])
             batch.generation.cache_keys=tuple(visual_cache_keys[i][1] for i in generation_image_indices)
         if vision_pixels:
-            from models.vision import VisionInputs
+            from data.vision import VisionInputs
             batch.vision=VisionInputs.prepare(torch.cat(vision_pixels),vision_grids,
                 torch.from_numpy(np.concatenate(image_indices)),self.processor.config)
         if batch.vision is not None and cfg.renderer=='wan':
@@ -401,6 +421,9 @@ class Packer:
         receipt = dict(serial=self.serial, next_state=self.state_dict(), documents=records,
                        body_tokens=body_count, occupied=position, images=n_images,
                        generation_images=batch.generation_image_count,
+                       condition_query_tokens=(int(batch.mainline.query_image.sum()) if cfg.method=='CQ_IT'
+                                               else n_images*cfg.image_condition_queries),
+                       unconditional_images=sum(generation_unconditional),
                        i2t_null_candidates=i2t_null_candidates,i2t_null_images=i2t_null_images,
                        generation_tokens=generation_tokens,
                        dit_microbatches=(max(1,len(batch.generation.microbatches)) if batch.generation else 0),

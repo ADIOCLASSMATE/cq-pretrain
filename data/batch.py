@@ -28,6 +28,7 @@ class Batch:
     # Indices into the understanding images/CQ rows, not into latent tokens.
     # None preserves the historical all-images target set; empty means no DiT.
     generation_image_indices: torch.Tensor | None = None
+    generation_unconditional: torch.Tensor | None = None  # [visuals], explicit non-CFG; None = normal C visibility
 
     @property
     def generation_image_count(self):
@@ -82,7 +83,7 @@ def make_mask(sigma, segments):
 def fake_batch(config, length=8192, batch_size=1, images_per_sequence=2,
                seed=42, device='cpu', dtype=torch.float32):
     if config.vision_encoder == 'qwen35':
-        from models.vision import fake_vision_batch
+        from data.synthetic import fake_vision_batch
         return fake_vision_batch(config,length,batch_size,images_per_sequence,seed,device,dtype)
     config.validate()
     patches = config.image_tokens
@@ -132,6 +133,6 @@ def fake_batch(config, length=8192, batch_size=1, images_per_sequence=2,
         row_col=positions.permute(0, 2, 1).contiguous(),
         noise=torch.randn(*noise_shape, generator=generator, dtype=dtype), times=times,
         mask=mask, valid_rows=valid)
-    from models.cq import build_plan
+    from data.planning import build_plan
     result.mainline=build_plan(result,config)
     return result.to(device)

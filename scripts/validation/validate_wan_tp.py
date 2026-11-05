@@ -5,11 +5,11 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.distributed as dist
-from configs.config import ModelConfig
+from configs.config import RunConfig
 from models.generator_wan21 import Wan21Generator, FP32Linear
 from data.generation import WanGenerationInputs
 from scripts.validation.validate_wan import rms
-import training.mcore as P
+import infra.parallel as P
 
 
 def main():
@@ -17,8 +17,8 @@ def main():
     parser.add_argument('--output',required=True,type=Path)
     parser.add_argument('--tp',type=int,default=2)
     args=parser.parse_args();torch.manual_seed(73)
-    cfg=ModelConfig(width=64,layers=4,heads=2,kv_heads=2,head_dim=32,ffn=128,
-        dit_width=128,dit_heads=2,dit_layers=2,dit_ffn=256,wan_text_dim=64,wan_freq_dim=32)
+    cfg=RunConfig(width=64,layers=4,heads=2,kv_heads=2,head_dim=32,ffn=128,
+        dit_width=128,dit_heads=2,dit_layers=2,dit_ffn=256,wan_freq_dim=32)
     full=Wan21Generator(cfg).to(dtype=torch.bfloat16)
     for module in full.modules():
         if isinstance(module,FP32Linear):module.float()

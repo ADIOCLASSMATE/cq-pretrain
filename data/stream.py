@@ -50,6 +50,9 @@ class DocumentStream:
         self.position = dict(block=0, row=0)
         if cfg is not None:
             self.signature['generation']={'renderer':cfg.renderer,'max_pixels':cfg.generation_max_pixels,'flow_draws':cfg.flow_draws,'channels':cfg.latent_channels,'token_budget':cfg.generation_token_budget}
+            if cfg.renderer=='wan':
+                self.signature['generation'].update(visual_uncond_probability=cfg.visual_uncond_probability,
+                    objective_policy='wan_non_cfg_flag_v2')
             if cfg.i2t_image_loss_probability != 1:
                 self.signature['generation']['i2t_image_loss_probability']=cfg.i2t_image_loss_probability
                 self.signature['generation']['i2t_sampling']='sample_seed_epoch_sha256_v1'
@@ -123,6 +126,7 @@ class DocumentStream:
                         reference = repr(sorted(locator.items()))
                         elements.append(dict(type='image', image_ref=reference, locator=locator,
                             image_loss_allowed=image_permissions[span['image_index']],
+                            non_cfg=info.get('non_cfg'),
                             generation_target=(row.get('direction',direction) not in ('I2T','V2T') and
                                                span.get('role','assistant')=='assistant')))
                 else:
@@ -132,6 +136,7 @@ class DocumentStream:
             corpus_count += row['text_tokens']
             documents.append(dict(id=row['sample_id'], elements=elements, text_tokens=counted,
                                   format=row['format'],direction=row.get('direction',direction),templated=templated,
+                                  non_cfg=row.get('non_cfg'),
                                   corpus_text_tokens=row['text_tokens'],image_loss_allowed=allowed))
         stats = dict(documents=len(documents), text_spans=len(spans), tokenizer_tokens=token_count,
                      corpus_text_tokens=corpus_count, tokenize_seconds=tokenize_seconds,
@@ -175,7 +180,7 @@ class DocumentStream:
             from data.video import prepare_video, prepare_qwen_inputs
             from data.sequence import video_sequence
             if not hasattr(self.image_local,'video_processor'):
-                from models.vision import native_processor
+                from data.vision import native_processor
                 self.image_local.video_processor=native_processor(self.cfg.vision_assets)
             processor=self.image_local.video_processor
             rgb,clip=prepare_video(locator,locator['settings'])
@@ -200,7 +205,7 @@ class DocumentStream:
             if max(pixels.shape[:2])>200*min(pixels.shape[:2]):
                 with self.image_reader.lock:self.stats['aspect_padded_images']+=1
             if not hasattr(self.image_local, 'processor'):
-                from models.vision import NativeImageProcessor
+                from data.vision import NativeImageProcessor
                 self.image_local.processor = NativeImageProcessor(self.cfg, self.sequence_length)
             return self.image_local.processor(pixels)
         return pixels

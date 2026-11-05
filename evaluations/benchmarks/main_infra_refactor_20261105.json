@@ -1,0 +1,365 @@
+{
+  "branch": "main",
+  "base_commit": "115f9dd4a4891f839da7870016b3173cb5b4c2f2",
+  "video_modified": false,
+  "adapter": {
+    "structure": "Linear(2048,1536) -> GELU(tanh) -> Linear(1536,1536)",
+    "previous_parameters": 17046528,
+    "parameters": 5508096,
+    "removed_parameters": 11538432,
+    "pretrained_loading": "Reinitialize only native text_embedding.0.weight; preserve compatible bias and second layer; TP shards use one canonical full draw.",
+    "old_three_layer_checkpoint_compatible": false
+  },
+  "boundaries": {
+    "infra": "Numerical kernels, TP, MC2 and shared prepared layouts; no data/models/training imports",
+    "models": "Unweighted objective tensors and public image_conditions; accepts ModelConfig without loss/data fields",
+    "data": "Native preprocessing, CPU CQ planning and objective selection",
+    "training": "Loss weights, DP counts and chunked renderer backward"
+  },
+  "visibility": {
+    "default": "visual_block",
+    "options": [
+      "visual_block",
+      "causal"
+    ],
+    "visual_block": "Bidirectional per image / Qwen native video time block; causal across blocks",
+    "wan_dit": "Whole clip bidirectional in both modes",
+    "non_cfg": "Queries read no C through attention, convolution or recurrent state"
+  },
+  "cpu": {
+    "passed": true,
+    "tests": 156,
+    "subtests": 46,
+    "seconds": 46.12,
+    "command": "TORCH_DEVICE_BACKEND_AUTOLOAD=0 OMP_NUM_THREADS=1 .venv/bin/python -m pytest -q tests",
+    "log": ".runs/main-infra-refactor-20261105/cpu-tests.log",
+    "checks": [
+      "Diffusers Wan forward and gradients",
+      "native adapter loading",
+      "causal and visual-block C/Q semantics",
+      "cached decode equivalence in both modes",
+      "DP/GA chunked loss and every gradient",
+      "checkpoint optimizer/RNG/cursor restore",
+      "configuration without data/loss policy",
+      "FP32 CE accumulation and readiness hooks"
+    ],
+    "adapter_followup": {
+      "passed": true,
+      "log": ".runs/main-infra-refactor-20261105/adapter-tests.log",
+      "scope": "Wan loading, objectives, both visibility modes and cache after native config omission fix"
+    }
+  },
+  "npu": {
+    "passed": true,
+    "status": "validated",
+    "requested_cards": 16,
+    "requested_priority": 6,
+    "assigned_priority_level": "HIGH",
+    "world": 16,
+    "tp": 2,
+    "dp": 8,
+    "device": "Ascend910B2C",
+    "attempts": [
+      {
+        "name": "cq-main-refactor16-1105",
+        "job_id": "job-5d100a95-609d-46aa-9ea5-9c8e8136eb3b",
+        "workspace_id": "ws-e5a87523-5ec2-4afa-a14a-56c3f4088d14",
+        "priority": 6,
+        "cards": 16,
+        "node": "infra-gpu-npu-430.host.shzhisuan.com",
+        "log": ".runs/main-infra-refactor-20261105/attempt1-wan-tp2.log",
+        "model_executed": false
+      },
+      {
+        "name": "cq-main-refactor16-1105-r2",
+        "job_id": "job-d24ba358-21ff-4a48-ae93-8eeb0544576b",
+        "workspace_id": "ws-e5a87523-5ec2-4afa-a14a-56c3f4088d14",
+        "priority": 6,
+        "cards": 16,
+        "node": "infra-gpu-npu-429.host.shzhisuan.com",
+        "log": ".runs/main-infra-refactor-20261105/attempt2-wan-tp2.log",
+        "model_executed": false
+      },
+      {
+        "name": "cq-main-refactor16-1105-r3",
+        "job_id": "job-c3ac7ddf-de95-4421-9492-6ea6fd731d7b",
+        "workspace_id": "ws-e5a87523-5ec2-4afa-a14a-56c3f4088d14",
+        "priority": 6,
+        "cards": 16,
+        "node": "infra-gpu-npu-426.host.shzhisuan.com",
+        "log": ".runs/main-infra-refactor-20261105/attempt3-wan-tp2.log",
+        "model_executed": false
+      },
+      {
+        "name": "cq-main-refactor16-1105-r5",
+        "job_id": "job-53334e31-ae54-4646-815b-7c43248340e7",
+        "workspace_id": "ws-e5a87523-5ec2-4afa-a14a-56c3f4088d14",
+        "priority": 6,
+        "cards": 16,
+        "node": "infra-gpu-npu-054.host.shzhisuan.com",
+        "model_executed": true,
+        "all_npu_stages_passed": true,
+        "platform_terminal_status": "FAILED",
+        "stopped": true,
+        "terminal_reason": "Final CPU-only checkpoint comparison auto-loaded torch_npu without the launcher environment; corrected TORCH_DEVICE_BACKEND_AUTOLOAD=0 and compared the saved checkpoints successfully on CPU."
+      }
+    ],
+    "previous_startup_failure": {
+      "error": "aclInit 507008: unable to obtain SoC version",
+      "device_evidence": "Third attempt exposes davinci device files, but /usr/local/Ascend/driver/lib64 is empty and version.info / driver/common libraries are missing",
+      "device_log": ".runs/main-infra-refactor-20261105/attempt3-device-environment.log"
+    },
+    "placement": "Excluded the live Ready-node complement to use node 054; specified_nodes is unavailable in this workspace.",
+    "payload": ".runs/main-infra-refactor-20261105/r5-payload.json",
+    "device_log": ".runs/main-infra-refactor-20261105/device-environment.log",
+    "wan_tp": {
+      "passed": true,
+      "ranks": 16,
+      "forward_rms": 0.002789255464449525,
+      "input_gradient_rms": 0.0036913047078996897,
+      "condition_gradient_rms": 0.008903655223548412,
+      "max_parameter_gradient_rms": 0.012503041885793209,
+      "scope": "Small Wan with both image/video layouts, BF16 NPU TP2 versus full FP32 CPU forward and every gradient",
+      "artifact": ".runs/main-infra-refactor-20261105/wan-tp2.json"
+    },
+    "renderer_schedule": {
+      "passed": true,
+      "world": 16,
+      "renderer": "wan",
+      "tp": 2,
+      "scope": "Small synthetic correctness oracle; real NPU kernels, TP/DP and MCore optimizer; not throughput",
+      "chunk_counts": [
+        3,
+        4,
+        5
+      ],
+      "worst_gradient_relative": 0.0033703551162034273,
+      "checks": [
+        "recompute on/off",
+        "GA2 with unequal DP chunk counts",
+        "joint loss",
+        "CQ gradients",
+        "all trainable parameter gradients",
+        "one backbone backward",
+        "ordered DP reduce-scatter/parameter all-gather",
+        "finite optimizer updates"
+      ]
+    },
+    "inference": {
+      "world_size": 16,
+      "tp": 2,
+      "dp": 8,
+      "cq": [
+        {
+          "prefix_tokens": 323,
+          "decode_tokens": 8,
+          "relative_rms": 0.016349507495760918,
+          "max_abs": 0.875,
+          "rank0_error_by_token": [
+            0.016349507495760918,
+            0.013462282717227936,
+            0.01585191860795021,
+            0.01598493568599224,
+            0.015123977325856686,
+            0.014188560657203197,
+            0.01368260383605957,
+            0.014482202008366585,
+            0.015573570504784584
+          ],
+          "full_prefix_ms_per_token": 47.727856785058975,
+          "cached_ms_per_token": 34.63861346244812,
+          "speedup": 1.377880117424474
+        },
+        {
+          "prefix_tokens": 2115,
+          "decode_tokens": 8,
+          "relative_rms": 0.01857384294271469,
+          "max_abs": 0.75,
+          "rank0_error_by_token": [
+            0.015936309471726418,
+            0.014470563270151615,
+            0.01482986006885767,
+            0.01857384294271469,
+            0.011151221580803394,
+            0.011750517413020134,
+            0.011861619539558887,
+            0.011464953422546387,
+            0.011666616424918175
+          ],
+          "full_prefix_ms_per_token": 64.43165242671967,
+          "cached_ms_per_token": 36.868151277303696,
+          "speedup": 1.7476236316298361
+        }
+      ],
+      "wan": {
+        "relative_rms": 0.0,
+        "cache_bytes": 11796480,
+        "uncached_ms": 83.2383041381836,
+        "cached_ms": 72.2195053100586,
+        "speedup": 1.1525737234119537
+      },
+      "complete": true
+    },
+    "restart": {
+      "passed": true,
+      "bitwise_identical": true,
+      "world": 16,
+      "files": 18,
+      "checked": [
+        "model",
+        "FP32 Adam/master shards",
+        "CPU/NPU RNG",
+        "consumed data state"
+      ],
+      "ema_bitwise_identical": true,
+      "artifact": ".runs/main-infra-refactor-20261105/restart.json",
+      "scope": "Actual training.train with random-init four-layer Qwen-width backbone, two-layer small Wan, frozen native vision, GA2 and EMA. Three uninterrupted updates versus two plus resume. Synthetic inputs; no real corpus cursor exercised."
+    },
+    "all_created_test_jobs_stopped": true,
+    "development_notebook_stopped": true,
+    "pending": []
+  },
+  "performance": {
+    "training_step_measured": true,
+    "end_to_end_speedup_measured": false,
+    "scope": "Same 16-card node, TP2/DP8, BF16, 8K content, batch8. Full pretrained Qwen2B and Wan1.3B, dynamic visual queries, resident synthetic features/latents. Includes backward, DP/TP synchronization, optimizer and joint EMA; excludes vision/VAE encoding and data I/O.",
+    "measured_steps": 5,
+    "warmup_steps": 3,
+    "results": {
+      "i2t": {
+        "before_seconds": 1.6282174587249756,
+        "after_seconds": 1.6288940906524658,
+        "speedup": 0.9995846065552247,
+        "before_peak_gib": 10.830440521240234,
+        "after_peak_gib": 10.830440521240234,
+        "before_parameters": 1881825088,
+        "after_parameters": 1881825088,
+        "content_tokens": 8192,
+        "query_tokens": 7997,
+        "before_artifact": ".runs/main-infra-refactor-20261105/before-i2t.json",
+        "after_artifact": ".runs/main-infra-refactor-20261105/after-i2t.json"
+      },
+      "joint": {
+        "before_seconds": 1.9523600339889526,
+        "after_seconds": 1.9461758136749268,
+        "speedup": 1.0031776267439827,
+        "before_peak_gib": 16.500268936157227,
+        "after_peak_gib": 16.427967071533203,
+        "before_parameters": 3309214592,
+        "after_parameters": 3297676160,
+        "content_tokens": 8192,
+        "query_tokens": 8189,
+        "before_artifact": ".runs/main-infra-refactor-20261105/before-joint.json",
+        "after_artifact": ".runs/main-infra-refactor-20261105/after-joint.json"
+      }
+    },
+    "conclusion": "Training speed is effectively unchanged: I2T -0.04% and joint +0.32%; differences are too small to claim a material speedup. Joint peak allocation falls about 74 MiB/card.",
+    "full_data_pipeline_measured": false
+  },
+  "source_sha256": {
+    "configs/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "configs/config.py": "1a211f79abeda1d78a886de307873559c0931b559af639b5f8991f7169e6d468",
+    "data/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "data/batch.py": "8df783d01735104b5dbe607b5d6c993dc0f1152cea45da086a4abd327a0454f9",
+    "data/cache.py": "c108c73455e5555d986b161e71e2baadb15127261b1d6369971492dddd0b608a",
+    "data/catalog.py": "e173ab829042dc5598d29fc0f168f75a421707841e2f863fb1390a6c99ede63f",
+    "data/chat.py": "6486755c7f8c1a6dfe1c3370924143ae6045aa0a03593e0fbe588cf9eb730a47",
+    "data/codec.py": "dd8dd90efa50d8b2ca8cab1378744459b8e75eee02c049054ab83f2ccc0f8599",
+    "data/device.py": "0a81414a6ba0e92d1db2968a7b6b497f60bd71a64f9df6472ff8d688e41ca883",
+    "data/generation.py": "ee9a4dc4cbb1f33d6d1671c5fdfc621fb7b9de4e77591e528acb224aeedf8b88",
+    "data/images.py": "1a36ab558914a1cb98e2049379ece107ebc4bfd8f8ffb225fee7254de8d85229",
+    "data/loss_permissions.py": "d3e874ca305f68f19900cc642e1d809deee40cf506fc3fb24631e1f0ba57cee9",
+    "data/moss_codec.py": "935fa1a37ee8989f7877c04d3d706e616928f502824d474916e5435a21db4af3",
+    "data/packing.py": "a17f62a3cbb610f243df0f3644ba351f01edbd248e3e3bd6c8c37b0898a45369",
+    "data/planning.py": "4f61ca9e7aeb63eb936b7eba8f6b0303590597d9757f34f25439b3771ab9f785",
+    "data/runtime.py": "4eb4dad633d8cd90fa199ff97f82dd55f3137929a9126af47b304bf4d01eb633",
+    "data/sequence.py": "577163646f97601d6d9e668719a79e050f83334ad0e388184caa3c8c3de63438",
+    "data/sources.py": "d7c93b932f1e6857928458bd1a27f0a578f749d2562642e2ff810edaffe36c4e",
+    "data/stream.py": "a3c799da079b352945246dda0f6ae7687455e94b89c7528d3f0f7b406583b368",
+    "data/synthetic.py": "624b80a5a0fd5c261fc10a7aa1cdfdda46423510029aa30d40cf2b9e0ddb3cec",
+    "data/tokenizer.py": "ec4adf384edea2460ac381c980a11bbe156c7a50a72124ae6de6bf45cb901d36",
+    "data/video.py": "abb431545ecabee8d63b6dfcf08f21a5f0293ae81f50ca8dcb07392a715cc0e6",
+    "data/vision.py": "6c846bb7148cd80cf6dab7b4c2bbe890530b763e78a660fa63c3dcf13c725660",
+    "data/wan_codec.py": "828efe3ad2deff184f0c12a1878daacaeabc3991f3c26dc8a31ba71662e7d130",
+    "infra/__init__.py": "a30ff6352569b1a1cbe413ec0ce1a292961bb851f054e54af0210eb465c0cde2",
+    "infra/attention.py": "f8bb4abf4c7c464d2b98bba5d36a86d786231e30d369d89e4e65f8d93fd09c4f",
+    "infra/attention_plan.py": "866a3ac461c342ecdfd1a3a5d766dd84bce2b701c14dd4ab3bf6c7c65603ca19",
+    "infra/compiled.py": "1440688ce73c55a7108132e00dec318aedaeb06502662f21d4ed4ddcb7088c18",
+    "infra/cross_entropy.py": "28ea70a33629b8ff5f16491b9dd4a25c5c7f5208359eb8baf4052ea99621a9df",
+    "infra/delta_ascendc.py": "085c189c52d256a35b96dc2e028ee0e84d0b4eac185556b756dc0ce242a00b81",
+    "infra/kernels.py": "df951d869cdeba5648ce521e3f2a861b2ed7bdb3dccae2f958dd3a9132b17b3f",
+    "infra/layout.py": "a20bf81bcdc48a3ae9ea3f41028f7ebda1e66a0cf90c03f390aaf90e7eaca8d9",
+    "infra/mc2.py": "b957ce38b9b424381a99bdadbdbbed713d1fe9ebaebf517a2d8c72df7bc78b18",
+    "infra/parallel.py": "25f2009b5330a9b1dfeb340f044b260becbaff6edb83bc13c37dc3cb975d19ad",
+    "infra/plans.py": "6ac93092d274a60d8aa71382b600d3813fe41af80428f40594169aa2c2d5d50d",
+    "models/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "models/backbone_qwen35.py": "de2050742c751288d249ba255fbe45089be99d2549a8888582f3a627cdf7010c",
+    "models/cq.py": "98096f2621d5eef5cc175ee5a6abd82d48c3d37960a2457e26faf22c75625e2c",
+    "models/generator_wan21.py": "8d3ac8f35d9ce9d0a0147d9ce96a3d1d20f670e0572d90a5796cf4d66ae6da84",
+    "models/inference.py": "fcfcd207eddaf60bf3c4f1fbe3ec905a87d3a343defd7cdef3e8406e0496885a",
+    "models/legacy.py": "424c7422cad7adbe288732fc1bf31c971ba9778134dc7dfc8aba4eca14cc167c",
+    "models/modeling_umm.py": "f2a535de775aadc8dd9e39629f99ce47f8a4c11d8104e289d3daa95ff14e02d5",
+    "models/moss.py": "390ea9c55fcde555cb0ab834276b53821e3a3f736ca627d016632f5a265c517b",
+    "models/moss_kernels.py": "97e30d32d9122c17de3cc8768869311a155217226915afe9f581b1e825f82ff0",
+    "models/vision.py": "d8f3fbc029a5670471b79e029c24f6dc5c952e93a51b5e186561dcd9423a8535",
+    "training/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "training/ema.py": "cac29b411292a87a1cdda146af4226a832352bbd63409d1e3b2d084c0b078419",
+    "training/loss.py": "99938e95d07cb4235e42bf61c5fc1bd624a5e2608bc50ec5ff449f371fb0f62f",
+    "training/mcore_parallel.py": "6c493d20626a469a5b61ee8204d0474b50ced7580a80493202ee36478496526f",
+    "training/renderer_schedule.py": "e11746aa5f9f3e2967ce24013742fb57e4e2cb7adbd24a0e46bcb0b08ce69767",
+    "training/train.py": "a73acde3eb2262209ee2aa469a05d61a5148f1e1095be501c6c106fa6c71dae2",
+    "utils/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "utils/assets.py": "6f12b8bf139faeddb70bdfc4f2316e78ce680b15ca479e641cca5ce6f8111694",
+    "utils/checkpoint.py": "85b14613699425f14bb3b142383bc855d91abd56301d321fbfe40285e491a3df",
+    "utils/checkpoint_catalog.py": "76ffc7f2f02f5d7d7a246550971f050e23e4d93ec849fe79f24c10d1cd666850",
+    "utils/checkpoint_reshard.py": "9ac1f6aca81fef41f1bdb9a074722486c7478b9d6549c2d9f3675a622ec3ce2e",
+    "utils/distributed.py": "3d7cfb583bee2982145c517e1a562569c451e6aeb3c279c38888196e452b4d02",
+    "utils/eval_snapshot.py": "5c9eee6060a05180000cbb93220aa3fc67757f0076d6f260fd4baefb0ed44be8",
+    "utils/experiment.py": "5557b0bb400095befb7c2b40c00fe794d09cc7e76d62e1367f14bdfc3f4bdca1",
+    "utils/network.py": "feb2f2292dc3c9071d65a1a1b51270143af0f81bb0eb19bf62c6fcbed9e43500",
+    "utils/stack.py": "fbe0e6757ab74d4089c6310aca458dc612519d42bf6176ad117135df4e0af399"
+  },
+  "native_wan_load": {
+    "path": "/inspire/sj-ssd3/project/high-dimensionaldata/public/models/Wan2.1-T2V-1.3B",
+    "loaded_tensors": 824,
+    "initialized": [
+      "text_embedding.0.weight"
+    ],
+    "config": {
+      "_class_name": "WanModel",
+      "_diffusers_version": "0.30.0",
+      "dim": 1536,
+      "eps": 1e-06,
+      "ffn_dim": 8960,
+      "freq_dim": 256,
+      "in_dim": 16,
+      "model_type": "t2v",
+      "num_heads": 12,
+      "num_layers": 30,
+      "out_dim": 16,
+      "text_len": 512
+    },
+    "passed": true,
+    "seconds": 4.229861091822386,
+    "adapter_parameters": 5508096,
+    "scope": "Actual public Wan1.3B weights on CPU; direct adapter shape and retained tensors verified"
+  },
+  "validation_artifacts_sha256": {
+    ".runs/main-infra-refactor-20261105/r5-npu-check.sh": "3a039a626956b0048befcf8a500415f0b0445afdb6cf91fbd0ff98de76f46ebd",
+    ".runs/main-infra-refactor-20261105/r5-payload.json": "cc880ac5d5d3561e4810949763606ab9f6689d74fb56bcca8d196e172417d8c1",
+    ".runs/main-infra-refactor-20261105/wan-tp2.json": "1aa1b147a00655557dc73ae8ea799eb65738ff4265653430c1e518cf240b67f4",
+    ".runs/main-infra-refactor-20261105/schedule/summary.json": "a275c72a5998440d4074ee67ef9ed34da63d91305f2274eab0227696081f81ab",
+    ".runs/main-infra-refactor-20261105/inference.json": "cf724cd6815005e038a8f771634dfa45bb9ed16d8e2347e60efbbb4ba4f382c1",
+    ".runs/main-infra-refactor-20261105/restart.json": "29304ef558b932cdfa938bb2e00cb88d4726147d71b229c62df3d03a3f9bbbcf",
+    ".runs/main-infra-refactor-20261105/before-i2t.json": "df85a7e37d2689caa3b5216c8f2ae4094dd6c3e8ad24734a991878f50706cb48",
+    ".runs/main-infra-refactor-20261105/before-joint.json": "d42572c05733833ee7405345427065001d6821054904cf2e705deccdfd875b16",
+    ".runs/main-infra-refactor-20261105/after-i2t.json": "ad0130dd232971c5fd8787e856e73866d4d4567c155b4e501d7cbb5314c11927",
+    ".runs/main-infra-refactor-20261105/after-joint.json": "d59ac140fa8b0661780fe16d9563c3c7bbd44b6b5f146cbe0e303a516394a8d2",
+    "scripts/validation/validate_wan_tp.py": "2034739d9a858035970a569bde653f0d6fb75fdb8ee92a6e754e97a5aa95fbee",
+    "scripts/validation/validate_renderer_schedule.py": "a354bd857f12066963a60db6193e02b9785a5629c35a8c1a5d050975664ae21f",
+    "scripts/validation/validate_inference_cache.py": "0cf80b535488be8508121c437792f85a0ca0d2f1c446edd5b58a273ae56c346b",
+    "scripts/validation/compare_data_restart.py": "917998f42951fc204531faa774148e7d8b7c39e01b42f0fbfa6b3107ee271851",
+    "scripts/benchmark_backbones.py": "482d8020732995f1e9e835caf038c7de35f133cb4ef5ec92f7d094c670770440"
+  },
+  "validated_at_utc": "2026-11-05T16:11:27.265466+00:00"
+}

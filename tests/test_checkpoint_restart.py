@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from utils.checkpoint_catalog import discover, durable_json, latest, prune, remove_incomplete, shard_names
+from utils.checkpoint_catalog import SCHEMA, discover, durable_json, latest, prune, remove_incomplete, shard_names
 
 
 def fixture(root, step, world=2, tp=1):
@@ -18,7 +18,7 @@ def fixture(root, step, world=2, tp=1):
     for name in shard_names(world, tp):
         (path/name).write_bytes(b'complete shard')
         files[name] = (path/name).stat().st_size
-    durable_json(path/'manifest.json', dict(schema=5, step=step, world=world,
+    durable_json(path/'manifest.json', dict(schema=SCHEMA, step=step, world=world,
         topology=dict(tp=tp, dp=world//tp), config={}, training_state={}, files=files))
     return path
 
@@ -68,6 +68,19 @@ def cpu_restore_worker(root, rank):
 
 
 class CheckpointRestartTests(unittest.TestCase):
+    def test_old_formats_are_rejected_before_loading_weights(self):
+        import utils.checkpoint as checkpoint_io
+        for schema in (3, 4, 5, 6, 'cq_eval_snapshot_v1'):
+            with self.subTest(schema=schema), tempfile.TemporaryDirectory() as temporary:
+                path = fixture(Path(temporary), 1)
+                manifest = json.loads((path/'manifest.json').read_text())
+                manifest['schema'] = schema
+                durable_json(path/'manifest.json', manifest)
+                with self.assertRaisesRegex(ValueError, 'schema'):
+                    checkpoint_io.load(path, None, None, None, None)
+                with self.assertRaisesRegex(ValueError, 'schema'):
+                    checkpoint_io.initialize_model(path, None, None)
+
     def test_incomplete_missing_and_truncated_fallback(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

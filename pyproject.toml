@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 dependencies = ["PyYAML", "numpy", "Pillow", "pyarrow", "safetensors", "tokenizers", "transformers==5.7.0", "diffusers==0.38.0", "av==16.0.1"]
 
 [tool.setuptools.packages.find]
-include = ["models*", "data*", "training*", "configs*", "evaluations*", "utils*", "scripts*", "corpus_pipeline*"]
+include = ["infra*", "models*", "data*", "training*", "configs*", "evaluations*", "utils*", "scripts*", "corpus_pipeline*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

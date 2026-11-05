@@ -28,7 +28,7 @@ def main():
     p.add_argument('--key-heads',type=int,default=16);p.add_argument('--value-heads',type=int,default=16)
     a=p.parse_args()
     import torch_npu
-    import models.delta_ascendc as backend
+    import infra.delta_ascendc as backend
     torch.set_num_threads(1);device=f'npu:{os.environ["LOCAL_RANK"]}';torch.npu.set_device(device)
     backend.initialize();dist.init_process_group('hccl');rank=dist.get_rank();world=dist.get_world_size()
     if world!=64:raise ValueError('CQ fusion validation requires all 64 NPUs')

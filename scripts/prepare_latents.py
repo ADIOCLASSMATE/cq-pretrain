@@ -3,7 +3,7 @@ import argparse
 import json
 import math
 import torch
-from configs.config import ModelConfig
+from configs.config import RunConfig
 from data.cache import caches
 from data.stream import DocumentStream
 from data.packing import Packer, token_contract
@@ -25,7 +25,7 @@ def main():
     if args.device.startswith('npu'):
         import torch_npu
         torch.npu.set_device(args.device)
-    cfg=ModelConfig.load(args.config);cfg.visual_cache=args.cache
+    cfg=RunConfig.load(args.config);cfg.visual_cache=args.cache
     cfg.validate();feature_cache,latent_cache=caches(cfg)
     documents=DocumentStream(args.data_root,'A',args.rank,args.world,42,cfg=cfg,
         native_images=True,sequence_length=args.sequence_length)

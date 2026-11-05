@@ -13,8 +13,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
-import training.mcore as P
-import models.kernels as K
+import infra.parallel as P
+import infra.kernels as K
 
 _pointwise_setting=os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
 FUSED_POINTWISE=_pointwise_setting!='0'

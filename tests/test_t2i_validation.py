@@ -7,7 +7,7 @@ from tests.test_qwen35_vision import NativeVisionContracts
 from evaluations.sampling import make_batch, moss_sigmas
 from models.cq import backbone
 from models.modeling_umm import JointModel
-from models.vision import NativeImageProcessor
+from data.vision import NativeImageProcessor
 from data.packing import Packer
 
 

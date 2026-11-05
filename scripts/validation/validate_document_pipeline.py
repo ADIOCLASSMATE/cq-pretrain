@@ -9,7 +9,7 @@ import time
 import numpy as np
 import torch
 
-from configs.config import ModelConfig
+from configs.config import RunConfig
 from data.stream import DocumentStream
 from data.packing import Packer, token_contract
 
@@ -23,7 +23,7 @@ class PrefixStream:
 
 
 def audit(args,preserve):
-    cfg=ModelConfig.load(args.config);cfg.preserve_documents=preserve
+    cfg=RunConfig.load(args.config);cfg.preserve_documents=preserve
     docs=DocumentStream(args.data_root,'A',0,32,args.seed,workers=2,prefetch=4,
         image_threads=2,image_prefetch=16,block_rows=4,tokenize_rows=32,cfg=cfg,
         native_images=True,sequence_length=8192)

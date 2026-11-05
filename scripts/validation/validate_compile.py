@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 import torch
 import torch_npu
-from models.compiled_kernels import compiled, modulated_norm_reference, gated_add_reference
+from infra.compiled import compiled, modulated_norm_reference, gated_add_reference
 
 
 def main():

@@ -5,7 +5,7 @@ import gc
 import torch
 import torch_npu
 from torch.nn import functional as F
-import models.delta_ascendc as b
+import infra.delta_ascendc as b
 from scripts.validation.delta64_probe import error_stats, recurrent_reference, write_json, log
 
 

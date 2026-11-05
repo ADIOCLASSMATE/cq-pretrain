@@ -13,7 +13,7 @@ import torch
 import torch.distributed as dist
 
 import scripts.validation.delta64_probe as probe
-import training.mcore as P
+import infra.parallel as P
 
 
 original_benchmark = probe.benchmark

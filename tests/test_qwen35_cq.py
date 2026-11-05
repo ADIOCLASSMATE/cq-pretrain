@@ -7,7 +7,7 @@ import torch
 from torch.nn import functional as F
 from configs.config import tiny_config
 from data.batch import fake_batch
-from models.cq import build_plan
+from data.planning import build_plan
 from models.backbone_qwen35 import GatedDelta, recurrent_delta, QwenBlock, RMSNorm, unfused_parameters
 
 

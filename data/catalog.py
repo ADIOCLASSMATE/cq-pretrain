@@ -130,7 +130,7 @@ class Catalog:
             begin = ends[group - 1] if group else 0
             key = (shard, group)
             if key not in cache['groups']:
-                columns = self.COLUMNS + [name for name in LOSS_PERMISSION_FIELDS
+                columns = self.COLUMNS + [name for name in (*LOSS_PERMISSION_FIELDS,'non_cfg')
                                            if name in parquet.schema_arrow.names]
                 table = parquet.read_row_group(group, columns=columns, use_threads=False)
                 if table.nbytes <= self.cache_bytes:

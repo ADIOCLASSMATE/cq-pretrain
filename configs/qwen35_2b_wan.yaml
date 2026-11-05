@@ -1,15 +1,26 @@
 model:
   renderer: wan
   image_condition_queries: 64
-  visual_query_mode: fixed
-  gdn_backend: ascendc
+  visual_query_mode: native
+  content_visibility: visual_block
   freeze_vision: true
   freeze_vision_merger: true
+
+data:
   preserve_documents: true
   generation_token_budget: 65536
+  i2t_image_loss_probability: 0.0
+  visual_uncond_probability: 0.1
+  cfg_null_condition: empty
+
+loss:
+  text_weight: 0.05
+  image_weight: 1.0
+
+runtime:
+  gdn_backend: ascendc
   checkpoint_backbone: true
   checkpoint_dit: true
-  i2t_image_loss_probability: 0.0
 
 training:
   tp: 2

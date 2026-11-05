@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import shutil
 
+SCHEMA = 7
+
 
 def fsync_directory(path):
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
@@ -38,10 +40,8 @@ def inspect_checkpoint(path):
     if path.is_symlink() or not path.is_dir():
         raise ValueError('Checkpoint must be a real directory')
     manifest = json.loads((path / 'manifest.json').read_text())
-    if manifest.get('schema') not in (3, 4, 5, 6):
+    if manifest.get('schema') != SCHEMA:
         raise ValueError('Unsupported checkpoint schema')
-    if (manifest['schema']==6)!=('ema' in manifest):
-        raise ValueError('Checkpoint schema and renderer EMA metadata disagree')
     step = manifest['step']
     if not isinstance(step, int) or step < 0 or path.name != f'step_{step:07d}':
         raise ValueError('Checkpoint step/directory mismatch')
@@ -49,13 +49,13 @@ def inspect_checkpoint(path):
     if manifest['topology']['dp'] * manifest['topology']['tp'] != manifest['world']:
         raise ValueError('Invalid saved DP topology')
     sizes = manifest.get('files')
-    if manifest['schema'] >= 5 and (not isinstance(sizes, dict) or set(sizes) != set(names)):
+    if not isinstance(sizes, dict) or set(sizes) != set(names):
         raise ValueError('Incomplete checkpoint inventory')
     for name in names:
         shard = path / name
         if shard.is_symlink() or not shard.is_file() or shard.stat().st_size == 0:
             raise ValueError(f'Missing/empty shard: {name}')
-        if sizes is not None and shard.stat().st_size != sizes[name]:
+        if shard.stat().st_size != sizes[name]:
             raise ValueError(f'Truncated shard: {name}')
     return manifest
 

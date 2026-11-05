@@ -96,7 +96,7 @@ class EMATests(unittest.TestCase):
             manifest_path=path/'manifest.json'
             manifest=json.loads(manifest_path.read_text());manifest.pop('ema')
             manifest_path.write_text(json.dumps(manifest))
-            with self.assertRaisesRegex(ValueError,'schema and renderer EMA'):
+            with self.assertRaisesRegex(ValueError,'Renderer EMA shard and manifest'):
                 checkpoint_io.load(path,model,opt,cfg,topology,{'ema':.9999})
 
 

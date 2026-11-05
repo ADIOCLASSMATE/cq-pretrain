@@ -11,12 +11,12 @@ import time
 
 import torch.distributed as dist
 
-import training.mcore as P
+import infra.parallel as P
 from utils.checkpoint import _save_file
 from utils.checkpoint_catalog import durable_json, fsync_directory
 
 
-SCHEMA = 'cq_eval_snapshot_v1'
+SCHEMA = 'cq_eval_snapshot_v2'
 KIND = 'inference_weights'
 
 

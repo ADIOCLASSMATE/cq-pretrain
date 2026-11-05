@@ -5,7 +5,7 @@ from pathlib import Path
 import traceback
 
 import scripts.validation.delta64_probe as probe
-import models.delta_ascendc as backend
+import infra.delta_ascendc as backend
 from scripts.validation.delta_ascendc_distributed_check import check as distributed_check
 
 
