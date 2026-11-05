@@ -3,10 +3,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-import math
 import torch
 from torch import nn
-from torch.nn import functional as F
 from torch.nn.utils.rnn import pad_sequence
 from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config
 
@@ -59,13 +57,21 @@ class UMMConfig:
                 "backbone_type": self.backbone_type, "generator_type": self.generator_type}
 
 
+class TextHead(nn.Linear):
+    def forward(self, hidden, targets=None):
+        if targets is None:
+            return super().forward(hidden)
+        from ops.cross_entropy import linear_cross_entropy
+        return linear_cross_entropy(hidden, self.weight, targets, chunk=256)
+
 
 class UMM(nn.Module):
     def __init__(self, config: UMMConfig, *, backbone=None, vision_encoder=None, generator=None):
         super().__init__()
         self.config = UMMConfig.from_dict(config) if isinstance(config, dict) else deepcopy(config)
         config = self.config
-        from .backbone_qwen35 import Qwen35CQBackbone, Qwen35VideoEncoder
+        from .backbone_qwen35 import Qwen35CQBackbone
+        from .vision_encoder import Qwen35VideoEncoder
         cfg = self.config.qwen_config
         self.backbone = Qwen35CQBackbone(cfg.text_config) if backbone is None else backbone
         if vision_encoder is not None:
@@ -88,13 +94,14 @@ class UMM(nn.Module):
                 raise ValueError(f"Injected backbone has incompatible {name}")
         self.backbone.gradient_checkpointing = config.gradient_checkpointing
         tied = cfg.text_config.tie_word_embeddings
-        self.lm_head = nn.Linear(cfg.text_config.hidden_size, cfg.text_config.vocab_size, bias=False,
+        self.lm_head = TextHead(cfg.text_config.hidden_size, cfg.text_config.vocab_size, bias=False,
                                  device="meta" if tied else self.backbone.embed_tokens.weight.device,
                                  dtype=self.backbone.embed_tokens.weight.dtype)
         if tied:
             self.lm_head.weight = self.backbone.embed_tokens.weight
         else:
             nn.init.normal_(self.lm_head.weight, std=cfg.text_config.initializer_range)
+            self.lm_head.weight._ce_direct_accumulation = True
         self.vision_encoder.requires_grad_(not config.freeze_vision)
         if config.freeze_vision:
             self.vision_encoder.eval()
@@ -118,7 +125,8 @@ class UMM(nn.Module):
         this stage-one API. Supplied IDs must agree with the caller's tokenizer.
         """
         from .generator_wan21 import Wan21Generator
-        from .backbone_qwen35 import Qwen35CQBackbone, Qwen35VideoEncoder
+        from .backbone_qwen35 import Qwen35CQBackbone
+        from .vision_encoder import Qwen35VideoEncoder
         qwen = Qwen3_5Config.from_pretrained(qwen_path, local_files_only=True)
         if not qwen.text_config.tie_word_embeddings:
             raise ValueError("Component loading requires tied Qwen text embeddings, as in Qwen3.5-2B")
@@ -152,6 +160,8 @@ class UMM(nn.Module):
         return self.backbone.prepare_inputs(batch)
 
     def generate_text(self, batch, **kwargs):
+        from .decoding import generate_text
+
         return generate_text(self, batch, **kwargs)
 
     @torch.no_grad()
@@ -201,7 +211,9 @@ class UMM(nn.Module):
                 unconditional = unconditional_mask = None
             else:
                 # One batched backbone evaluation; CFG removes query reads only.
-                doubled = dict(prepared)
+                doubled = {k: v for k, v in prepared.items() if k not in {
+                    "_cq_plan", "_content_positions", "_cpu_layout_inputs", "target_video_ids",
+                    "video_token_indices", "video_batch_indices"}}
                 for key in ("input_ids", "inputs_embeds", "token_types", "segment_ids",
                             "visual_group_ids", "query_read_end"):
                     doubled[key] = torch.cat((prepared[key], prepared[key]), 0)
@@ -243,7 +255,7 @@ class UMM(nn.Module):
         return self._condition_from_hidden(hidden, prepared)
 
     def forward(self, batch, noisy_latents=None, timesteps=None, *, compute_text=None,
-                return_hidden_states=False, flow_repeats=1):
+                return_hidden_states=False, flow_repeats=1, compute_text_loss=False):
         if type(flow_repeats) is not int or flow_repeats < 1:
             raise ValueError("flow_repeats must be a positive integer")
         if (noisy_latents is None) != (timesteps is None):
@@ -275,97 +287,9 @@ class UMM(nn.Module):
                 if labels.shape != prepared["input_ids"].shape:
                     raise ValueError("labels must align with input_ids without a next-token shift")
                 valid = labels.ne(-100) & prepared["token_types"].ne(1) & prepared["token_types"].ne(3)
-                output.update(text_logits=self.lm_head(query[valid]), text_labels=labels[valid])
+                selected = labels[valid]
+                if compute_text_loss:
+                    output.update(text_loss=self.lm_head(query[valid], selected), text_labels=selected)
+                else:
+                    output.update(text_logits=self.lm_head(query[valid]), text_labels=selected)
         return output
-
-
-
-def _sample(logits, temperature, top_k, top_p):
-    if temperature <= 0:
-        return logits.argmax(-1)
-    logits = logits.float() / temperature
-    if top_k:
-        threshold = logits.topk(min(top_k, logits.shape[-1]), -1).values[:, -1:]
-        logits = logits.masked_fill(logits < threshold, -torch.inf)
-    if top_p < 1:
-        sorted_logits, order = logits.sort(descending=True)
-        remove = sorted_logits.softmax(-1).cumsum(-1) > top_p
-        remove[:, 1:] = remove[:, :-1].clone()
-        remove[:, 0] = False
-        logits = logits.masked_fill(torch.zeros_like(remove).scatter(1, order, remove), -torch.inf)
-    return torch.multinomial(F.softmax(logits, -1), 1).squeeze(-1)
-
-
-
-@torch.no_grad()
-def generate_text(model, batch, *, max_new_tokens=128, temperature=0.0, top_k=0,
-                  top_p=1.0, eos_token_id=None, use_cache=False, return_logits=False):
-    """Same-position CQ decoding. Qwen3.5 recomputes the full prefix each step."""
-    if use_cache:
-        raise NotImplementedError("Qwen3.5 CQ generation currently supports no-cache decoding only")
-    if max_new_tokens < 0 or top_k < 0 or not 0 < top_p <= 1 or not math.isfinite(float(temperature)):
-        raise ValueError("Invalid text generation settings")
-    modes = [(module, module.training) for module in model.modules()]
-    model.eval()
-    try:
-        prepared = model.prepare_inputs(batch)
-        valid = prepared["token_types"].ne(3) & prepared["segment_ids"].ge(0)
-        if bool((~valid.any(-1)).any()):
-            raise ValueError("Each prompt needs nonempty content")
-        for row in range(valid.shape[0]):
-            if prepared["segment_ids"][row, valid[row]].unique().numel() != 1:
-                raise ValueError("Unpack independent segments before generation")
-        sequences = [row[keep].clone() for row, keep in zip(prepared["input_ids"], valid)]
-        device = prepared["input_ids"].device
-        text_config = model.config.qwen_config.text_config
-        eos = text_config.eos_token_id if eos_token_id is None else eos_token_id
-        eos_ids = [] if eos is None else (list(eos) if isinstance(eos, (list, tuple)) else [eos])
-        pad = text_config.pad_token_id
-        pad = 0 if pad is None else pad
-        # Frozen input features are reusable inputs, not decoder KV/GDN caches.
-        observed = model.backbone._video_flags(batch, "video_observed_mask",
-                                              len(prepared["video_token_indices"]), device, True)
-        features = [prepared["inputs_embeds"][row, slots] if observed[i] else None
-                    for i, (row, slots) in enumerate(zip(prepared["video_batch_indices"],
-                                                        prepared["video_token_indices"]))]
-        fixed = dict(video_grid_thw=prepared["video_grid_thw"], video_features=features,
-                     video_observed_mask=observed, target_video_ids=torch.empty(0, device=device, dtype=torch.long))
-        generated, scores = [], []
-        finished = torch.zeros(len(sequences), device=device, dtype=torch.bool)
-        for _ in range(max_new_tokens):
-            lengths = torch.tensor([s.numel() for s in sequences], device=device)
-            ids = prepared["input_ids"].new_full((len(sequences), int(lengths.max()) + 1), pad)
-            attention_mask = torch.zeros_like(ids, dtype=torch.bool)
-            for row, seq in enumerate(sequences):
-                ids[row, :seq.numel()] = seq
-                attention_mask[row, :seq.numel()] = True
-                ids[row, seq.numel()] = model.config.mask_token_id
-                attention_mask[row, seq.numel()] = ~finished[row]
-            step = model.prepare_inputs({**fixed, "input_ids": ids, "attention_mask": attention_mask})
-            hidden = model.backbone(step)["query_hidden"]
-            logits = model.lm_head(hidden[torch.arange(len(sequences), device=device), lengths])
-            sampling_logits = logits.clone()
-            # Input placeholders are not output text. Keep raw logits for parity checks.
-            reserved = {model.config.mask_token_id, model.config.video_mask_token_id,
-                        model.config.qwen_config.video_token_id, model.config.qwen_config.image_token_id}
-            sampling_logits[:, list(reserved)] = -torch.inf
-            token = _sample(sampling_logits, temperature, top_k, top_p)
-            token = torch.where(finished, pad, token)
-            generated.append(token)
-            if return_logits:
-                scores.append(logits)
-            for row in range(len(sequences)):
-                if not finished[row]:
-                    sequences[row] = torch.cat((sequences[row], token[row:row + 1]))
-            for eos_id in eos_ids:
-                finished |= token.eq(eos_id)
-            if bool(finished.all()):
-                break
-        tokens = torch.stack(generated, 1) if generated else prepared["input_ids"].new_empty((len(sequences), 0))
-        if return_logits:
-            logits = torch.stack(scores, 1) if scores else model.lm_head.weight.new_empty((len(sequences), 0, text_config.vocab_size))
-            return {"sequences": tokens, "logits": logits}
-        return tokens
-    finally:
-        for module, mode in modes:
-            module.training = mode

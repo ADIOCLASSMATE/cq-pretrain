@@ -15,7 +15,7 @@ from evaluations.validation import (
     loss_validation_options,
 )
 from utils.checkpoint import save_checkpoint, load_checkpoint, export_weights
-from utils.distributed import run_io_phase
+from utils.file_sync import run_io_phase
 from configs.config import resolve_output_paths
 from utils.checkpoint_catalog import commit_and_prune
 from utils.checkpoint import validate_checkpoint

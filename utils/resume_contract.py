@@ -3,7 +3,7 @@
 from copy import deepcopy
 import json
 
-SCHEMA = "umm_resume_contract_v1"
+SCHEMA = "umm_resume_contract_v2"
 MANAGEMENT = {
     "training": {
         "exp_id",
@@ -34,18 +34,7 @@ MANAGEMENT = {
 
 
 def normalized(config):
-    result = json.loads(json.dumps(config or {}))
-    if isinstance(result.get("flow"), dict):
-        result["flow"].setdefault("repeats", 1)
-    model = result.get("model")
-    if isinstance(model, dict):
-        model.setdefault("qwen_gdn_backend", "native")
-        # Old exports have neither field; their original implementation is
-        # native. A new explicit backend remains a strict training invariant.
-        text = model.get("architecture", {}).get("qwen_config", {}).get("text_config")
-        if isinstance(text, dict):
-            text.setdefault("qwen_gdn_backend", "native")
-    return result
+    return json.loads(json.dumps(config or {}))
 
 
 def training_contract(config):
@@ -90,8 +79,6 @@ def differences(saved, current, prefix=""):
 
 def validate_contract(saved_config, current_config, saved_contract=None):
     expected = training_contract(saved_config)
-    # Compare canonical defaults on both sides, including contracts written
-    # before the backend field existed, without weakening unknown-field checks.
     if saved_contract is not None and (
         not isinstance(saved_contract, dict)
         or set(saved_contract) != {"schema", "config"}

@@ -2,6 +2,25 @@
 
 本记录收录视频主链路及后续调整的验证。旧图像路线的独立源码备份及其验证记录已按用户要求清理，不用于证明当前视频路线。
 
+## 2026-11-05 UTC：共享 main 执行层与 16 卡验证
+
+通用 attention、GDN、分块交叉熵、融合投影、Wan 层和分布式执行改为 main 的实现；16 个共享模块逐文件 SHA-256 相同。视频包装层保留原生时间戳、动态 query、任务归一化和采样接口。video 继续从 Qwen3.5-2B 初始化，使用直接的 2048→1536→1536 adapter，拒绝旧结构的训练结果。backbone 在原生时间块内双向、块间 causal，Wan 在整个 clip 内双向。
+
+本轮结果与源码、kernel 身份见 [机器可读报告](shared_runtime_validation_20261105.json)。设备为节点 224 的 16 张 Ascend 910B2C；最终联合验证任务 `cq-video-shared16-1106-r7` 正常退出，退出码 0。
+
+| 检查 | 结果 |
+| --- | --- |
+| CPU 回归 | video 270 passed、18 项设备测试跳过；main 157 passed、51 subtests passed |
+| 实际 NPU 算子与 CQ | 16 rank 各 14 项通过，共 224 项，无失败或跳过；覆盖 AscendC 与 MindSpeed，检查实际 kernel 身份 |
+| 分布式更新对照 | 16 卡、GA=2、3 次更新，与显式全局 batch AdamW 的参数最大绝对差 `1.4901161193847656e-8`；副本及优化器恢复逐位一致 |
+| 混合 V2T/T2V 与恢复 | 16 卡、GA=2、重入式 checkpoint；小模型连续训练与恢复后的模型、FP32 master、优化器、scheduler 和通信就绪状态逐位一致 |
+| 完整初始权重训练 | Qwen3.5-2B + Wan2.1-T2V-1.3B，16 卡、GA=2，完成两次优化器更新；在线 ViT 与缓存 post-merger 特征均覆盖，loss/参数有限，所检查的副本参数完全相同；峰值显存 26.31 GiB |
+| 共享 Wan 的 TP2 回归 | 16 卡通过前后向对照；输出相对 RMS 0.279%，参数梯度最大相对 RMS 1.251% |
+
+设备测试发现并修复了视觉特征原地写入 Megatron 自定义 autograd view 的问题：现在将全部视觉位置合并为一次非原地 `index_copy`，并加入 CPU 回归。恢复检查还修复了首个更新后的通信就绪计数保存。独立 MindSpeed 对照显式传入与参考相同的 Q/K 归一化设置，数值阈值未放宽。失败尝试与节点诊断保留在报告和原始日志中，不计入通过结果。
+
+完整权重测试使用短合成视频布局和 VAE latent，不包含真实数据 I/O、VAE 编解码、完整分辨率长视频吞吐或生成质量评估；记录的 step 时间包含验证操作。video 训练仍为 DP、TP=PP=CP=1；独立 TP2 测试验证的是 main 的共享 Wan 层。Wan 条件投影与 K/V 已缓存，video 文本生成仍采用完整前缀接口，未接入 main 的增量 KV/GDN 解码。下方历史结果只适用于各自日期的实现。
+
 ## 2026-10-23 UTC：统一 sample/score 与四卡验证
 
 本轮以任务 YAML 驱动 loss、T2V/V2T 和 VBench 的 sample/score 调度。`models/` 的 8 个 Python 文件及原 `evaluations/validation.py` 与修改前逐字相同；不增加逐步采样轨迹。VBench 的规划、产物协议和外部 scorer 接口已接入，实际 CUDA 官方评分未执行。
@@ -109,7 +128,7 @@
 
 本轮证据目录为 `outputs/mcore_migration_20261021T182149Z/`，总报告为其中 `verification_report.json`；原始日志、逐张量比较、环境记录、修改前源码状态和诊断脚本均保留。
 
-本次新增 `training/mcore.py`、`training/mcore_parallel.py`，通过 MCore DDP/分布式 AdamW 接入普通 UMM 模块，TP=PP=CP=1、DP=4。默认开启 `overlap_grad_reduce` 和 `overlap_param_gather`，固定条件分支的通信次序；最后一个微批未使用的参数只补就绪事件，不清空此前累积的梯度。Qwen 函数式短卷积的参数读取由训练侧父模块 hook 等待收集完成。
+本次新增 `distributed/megatron.py`、`distributed/communication.py`，通过 MCore DDP/分布式 AdamW 接入普通 UMM 模块，TP=PP=CP=1、DP=4。默认开启 `overlap_grad_reduce` 和 `overlap_param_gather`，固定条件分支的通信次序；最后一个微批未使用的参数只补就绪事件，不清空此前累积的梯度。Qwen 函数式短卷积的参数读取由训练侧父模块 hook 等待收集完成。
 
 训练 loss 改为整个 DP/累积窗口内按有效文本 token 数、目标视频数归一化，不再额外除以累积次数；原有角色学习率、WSD、CFG、flow repeats、冻结控制保留。checkpoint 新增完整 BF16 模型与各 rank 的 FP32 master、Adam、scheduler、通信就绪状态，复用既有事务保存、自动恢复、最近 N 个清理和分类校验。
 

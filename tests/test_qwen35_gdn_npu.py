@@ -9,7 +9,16 @@ import os
 import pytest
 import torch
 
-from models import backbone_qwen35 as cq
+from models.qwen35_layers import recurrent_delta
+
+
+def select_scan(backend):
+    if backend == "native":
+        def scan(q, k, v, g, beta, **kwargs):
+            return recurrent_delta(q.float(), k.float(), v.float(), g.float(), beta.float(), (0, q.shape[1])), None
+        return scan
+    from mindspeed.core.ssm.npu_chunk_gated_delta_rule import chunk_gated_delta_rule
+    return chunk_gated_delta_rule
 
 
 _DEVICE = os.environ.get("UMM_VIDEO_DEVICE", "cpu")
@@ -20,7 +29,8 @@ pytestmark = pytest.mark.skipif(not _DEVICE.startswith("npu"), reason="requires 
 def device():
     import torch_npu  # noqa: F401
     torch.npu.set_device(_DEVICE)
-    assert cq.resolve_gdn_backend_identity("mindspeed")["module"] == "mindspeed.core.ssm.npu_chunk_gated_delta_rule"
+    from distributed.megatron import prepare_npu
+    prepare_npu()
     return torch.device(_DEVICE)
 
 
@@ -35,7 +45,7 @@ def inputs(length, *, batch=2):
 
 def run_scan(values, probe, backend, device):
     values = [value.to(device).detach().requires_grad_() for value in values]
-    output, state = cq._cq_select_chunk_gdn(backend)(
+    output, state = select_scan(backend)(
         *values[:3], g=values[3], beta=values[4], initial_state=None,
         output_final_state=False, use_qk_l2norm_in_kernel=True,
     )
@@ -131,9 +141,10 @@ def test_npu_readonly_queries_keep_prefix_gradients_without_state_writes(device,
 
     def forward(new_values):
         with torch.no_grad():
-            output, _ = cq._cq_mindspeed_chunk_gated_delta_rule(
+            output, _ = select_scan("mindspeed")(
                 *[value.to(device) for value in new_values[:3]],
                 g=new_values[3].to(device), beta=new_values[4].to(device),
+                use_qk_l2norm_in_kernel=True,
             )
         return output.float().cpu()
 

@@ -5,12 +5,12 @@ distributed:
   overlap_grad_reduce: true
   overlap_param_gather: true
 model:
-  qwen_gdn_backend: mindspeed
+  qwen_gdn_backend: ascendc
   wan_attention_backend: npu
   freeze_vision: true
   train_language: true
   train_wan: true
-  train_condition_proj: true
+  train_adapter: true
 training:
   exp_id: umm_video
 data:

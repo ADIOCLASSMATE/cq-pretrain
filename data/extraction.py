@@ -64,7 +64,7 @@ class Encoders:
         config = self.config
         if kind == "qwen":
             if self.qwen is None:
-                from models.backbone_qwen35 import Qwen35VideoEncoder
+                from models.vision_encoder import Qwen35VideoEncoder
 
                 self.qwen = (
                     Qwen35VideoEncoder.from_pretrained(

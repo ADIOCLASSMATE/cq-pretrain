@@ -182,7 +182,7 @@ def test_uniform_representations_mixed_tasks_and_gradients(fixture, qwen_mode):
     result = forward_loss(model, prepare_batch(batch, "cpu", config), config)
     result["loss"].backward()
     assert result["video_target_count"] == 2 and result["text_target_count"] > 0
-    assert model.generator.condition_proj.weight.grad.abs().sum() > 0
+    assert model.generator.text_embedding[0].weight.grad.abs().sum() > 0
     assert model.backbone.embed_tokens.weight.grad.abs().sum() > 0
     assert all(
         x.grad is None and not x.requires_grad
@@ -203,7 +203,11 @@ def test_uniform_representations_mixed_tasks_and_gradients(fixture, qwen_mode):
         "projector",
         "generator",
     }
-    assert parameter_role("generator.condition_proj.weight") == "projector"
+    for layer in (0, 2):
+        name = f"generator.text_embedding.{layer}.impl.weight"
+        assert parameter_role(name) == "projector"
+        group = next(g for g in optimizer.param_groups if name in g["param_names"])
+        assert group["lr"] == config["optimizer"]["projector_lr"]
 
 
 @pytest.mark.parametrize("branch", ["qwen", "wan"])

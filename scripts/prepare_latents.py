@@ -85,7 +85,7 @@ def main(argv=None):
                         rgb, clip, processor, settings
                     )
                     if qwen is None:
-                        from models.backbone_qwen35 import Qwen35VideoEncoder
+                        from models.vision_encoder import Qwen35VideoEncoder
 
                         qwen = (
                             Qwen35VideoEncoder.from_pretrained(

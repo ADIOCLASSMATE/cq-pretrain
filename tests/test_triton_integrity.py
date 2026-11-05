@@ -52,7 +52,7 @@ def test_ascend_record_wins_for_shared_files_and_bytecode_is_ignored(installed):
     bytecode.parent.mkdir()
     bytecode.write_bytes(b"untracked interpreter output")
     result = checker.verify_triton()
-    assert result["shared_files"] == len(checker.REQUIRED_SHARED)
+    assert result["core_files"] == len(checker.REQUIRED_SHARED)
     assert result["checked_files"] == len(checker.REQUIRED_SHARED | checker.REQUIRED_ASCEND) + 1
     assert result["import_path"] == str(site / "triton/__init__.py")
 

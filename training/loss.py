@@ -61,6 +61,8 @@ def sample_times(count, device, settings, generator=None):
 
 def prepare_batch(batch, device, config, generator=None, *, codec=None):
     result = to_device({k: v for k, v in batch.items() if k != "_data_state"}, device)
+    from models.backbone_qwen35 import cpu_metadata
+    result["_cpu_layout_inputs"] = cpu_metadata(batch)
     latents = result.get("wan_latents", [])
     pixels = result.pop("wan_rgb", [None] * len(latents))
     if len(latents) != len(result["target_video_ids"]) or len(pixels) != len(latents):
@@ -140,14 +142,13 @@ def forward_loss(model, batch, config, generator=None, *, loss_weights=(1.0, 1.0
         noisy_latents=noisy or None,
         timesteps=times * config["flow"]["timestep_scale"] if noisy else None,
         compute_text=True,
+        compute_text_loss=True,
         flow_repeats=repeats,
     )
     if target and len(output["velocity"]) != len(target):
         raise ValueError("Wan predictions must match every repeated flow target")
-    logits, labels = output["text_logits"], output["text_labels"]
-    text_loss = (
-        F.cross_entropy(logits.float(), labels) if labels.numel() else logits.sum() * 0
-    )
+    labels = output["text_labels"]
+    text_loss = output["text_loss"]
     video_loss = (
         torch.stack(
             [

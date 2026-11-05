@@ -12,7 +12,8 @@ from torch.nn import functional as F
 
 pytest.importorskip("diffusers")
 
-from models.generator_wan21 import Wan21Generator, _attention
+from models.generator_wan21 import Wan21Generator
+from models.wan_layers import packed_attention
 
 
 @pytest.fixture(scope="module")
@@ -59,7 +60,9 @@ def test_fused_attention_mask_and_backward_match_cpu_oracle(device):
     actual_inputs = [x.to(device).requires_grad_() for x in cpu]
     oracle_inputs = [x.float().requires_grad_() for x in cpu]
     lengths = torch.tensor([11, 4], device=device)
-    actual = _attention(*actual_inputs, lengths, "auto")
+    q, k, v = actual_inputs
+    actual = packed_attention(q.flatten(0, 1), torch.cat((k[0], k[1, :4])),
+                              torch.cat((v[0], v[1, :4])), (17, 34), (11, 15)).reshape_as(q)
     allowed = torch.arange(11)[None] < lengths.cpu()[:, None]
     expected = F.scaled_dot_product_attention(
         *(x.transpose(1, 2) for x in oracle_inputs), attn_mask=allowed[:, None, None],
@@ -98,9 +101,9 @@ def test_variable_latents_condition_mask_and_backward(device, convert_weights):
     assert torch.count_nonzero(condition.grad[~mask]).item() == 0
     for name, p in model.named_parameters():
         assert p.grad is not None and bool(torch.isfinite(p.grad).all()), name
-    for p in (model.condition_proj.weight, model.patch_embedding.weight,
+    for p in (model.text_embedding[0].weight, model.patch_embedding.weight,
               model.time_embedding[0].weight, model.blocks[0].self_attn.q.weight,
-              model.blocks[0].cross_attn.k.weight):
+              model.blocks[0].cross_attn.kv.weight):
         nonzero_finite(p.grad)
 
 

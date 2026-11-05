@@ -5,7 +5,6 @@ only for deterministic DP batch sharding, including weighted samplers.
 """
 
 from contextlib import contextmanager, nullcontext
-from datetime import timedelta
 import hashlib
 import json
 import logging
@@ -17,12 +16,12 @@ from types import SimpleNamespace
 import torch
 import torch.distributed as dist
 
-from .mcore_parallel import (
+from distributed.communication import (
     OrderedParameterGathers,
     OrderedGradientBuckets,
-    install_functional_parameter_hooks,
 )
-from .optimizer import parameter_groups, wsd_multiplier
+from training.optimizer import parameter_groups, wsd_multiplier
+import distributed.megatron as P
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -103,7 +102,7 @@ class Optimizer:
     def step(self):
         runtime = self.runtime
         runtime.last_absent_gradients = runtime.gradients.finish_backward()
-        runtime.model.finish_grad_sync()
+        P.finish_grad_sync(runtime.model)
         success, norm, _ = self.core.step()
         runtime.optimizer_step_was_skipped = not success
         runtime.last_grad_norm = float(norm) if norm is not None else None
@@ -148,10 +147,9 @@ class MCoreRuntime:
         for package, key in (("torch", "torch"), ("torch-npu", "torch_npu")):
             if version(package) != self.lock["runtime"][key]:
                 raise RuntimeError(f"Use .venv-npu matching the CQ runtime: {package}")
-        if config["model"].get("qwen_gdn_backend", "native") == "mindspeed":
+        if config["model"].get("qwen_gdn_backend", "ascendc") == "mindspeed":
             gdn_runtime = self.lock["gdn_runtime"]
             for package, expected in (
-                ("triton", gdn_runtime["triton"]),
                 ("triton-ascend", gdn_runtime["triton_ascend"]["version"]),
             ):
                 if version(package) != expected:
@@ -159,46 +157,14 @@ class MCoreRuntime:
                         f"MindSpeed CQ GDN requires the locked {package}=={expected}; "
                         "run scripts/setup_mindspeed.py"
                     )
-        # MegatronAdaptor creates dummy FLA modules for its own GDN. HF's
-        # fallback decorators resolve packages at import time: capture UMM's
-        # native choices first (as CQ does for its own kernels). This adapter
-        # selects transport only; UMM explicitly selects its own CQ GDN backend.
-        import models.backbone_qwen35  # noqa: F401
-        import models.generator_wan21  # noqa: F401
-
-        previous, compile_function = sys.argv, torch.compile
-        sys.argv = [
-            previous[0],
-            "--optimization-level",
-            "0",
-            "--optimizer-selection",
-            "fused_torch_adamw",
-        ]
-        try:
-            import megatron_adaptor  # noqa: F401
-            import mindspeed.megatron_adaptor  # noqa: F401
-        finally:
-            sys.argv, torch.compile = previous, compile_function
-        from models.backbone_qwen35 import resolve_gdn_backend_identity
-
-        # Resolve after global adaptors have run, so the recorded callable is
-        # the actual provider, not a pre-patch import-time assumption.
-        self.gdn_identity = resolve_gdn_backend_identity(
-            config["model"].get("qwen_gdn_backend", "native")
-        )
+        from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config
+        from models.backbone_qwen35 import layer_config, resolve_gdn_backend_identity
+        import models.vision_encoder  # capture native vision before MindSpeed patches
+        architecture = Qwen3_5Config.from_pretrained(config["model"]["qwen_path"], local_files_only=True)
+        P.initialize(1, layer_config(architecture), timeout_minutes=config["distributed"]["timeout_minutes"])
+        parallel_state = P.state()
+        self.gdn_identity = resolve_gdn_backend_identity(config["model"]["qwen_gdn_backend"])
         logging.getLogger(__name__).info("CQ GDN implementation: %s", self.gdn_identity)
-        logging.getLogger("megatron.core.optimizer").setLevel(logging.WARNING)
-        dist.init_process_group(
-            "hccl", timeout=timedelta(minutes=config["distributed"]["timeout_minutes"])
-        )
-        from megatron.core import parallel_state
-
-        parallel_state.initialize_model_parallel(
-            tensor_model_parallel_size=1,
-            pipeline_model_parallel_size=1,
-            create_gloo_process_groups=False,
-            num_distributed_optimizer_instances=1,
-        )
         self.dp_group = parallel_state.get_data_parallel_group()
         self.process_index = parallel_state.get_data_parallel_rank()
         self.num_processes = parallel_state.get_data_parallel_world_size()
@@ -209,35 +175,13 @@ class MCoreRuntime:
         self._models, self._optimizers, self._schedulers = [], [], []
 
     def prepare_model(self, model):
-        from megatron.core.distributed import (
-            DistributedDataParallel,
-            DistributedDataParallelConfig,
-        )
-        from megatron.core.transformer.transformer_config import TransformerConfig
-        from megatron.core.optimizer import get_megatron_optimizer, AdamOptimizerConfig
+        from megatron.core.optimizer import AdamOptimizerConfig
         from megatron.core.optimizer.optimizer_config import ParamKey
+        from models.qwen35_layers import cast_for_training
 
         self._audit_gdn_backend(model)
-        model.to(device=self.device, dtype=torch.bfloat16)
-        # A transport configuration only: no replacement of Qwen/Wan layers.
-        transport = TransformerConfig(
-            num_layers=1,
-            hidden_size=128,
-            num_attention_heads=1,
-            params_dtype=torch.bfloat16,
-            bf16=True,
-            use_cpu_initialization=True,
-            gradient_accumulation_fusion=False,
-        )
+        cast_for_training(model, self.device)
         settings = self.config["distributed"]
-        ddp = DistributedDataParallelConfig(
-            grad_reduce_in_fp32=True,
-            use_distributed_optimizer=True,
-            overlap_grad_reduce=settings["overlap_grad_reduce"],
-            overlap_param_gather=settings["overlap_param_gather"],
-            bucket_size=settings["bucket_size"],
-            num_distributed_optimizer_instances=1,
-        )
         groups = parameter_groups(model, self.config)
         overrides = {}
         for group in groups:
@@ -251,8 +195,6 @@ class MCoreRuntime:
                 "weight_decay": group["weight_decay"],
                 "role": group["role"],
             }
-        self.model = DistributedDataParallel(transport, ddp, model)
-        self.model.broadcast_params()
         opt = self.config["optimizer"]
         opt_config = AdamOptimizerConfig(
             optimizer="adam",
@@ -267,15 +209,15 @@ class MCoreRuntime:
             adam_beta2=opt["betas"][1],
             adam_eps=opt["eps"],
         )
-        core = get_megatron_optimizer(
-            opt_config,
-            [self.model],
-            config_overrides=overrides,
-            use_gloo_process_groups=False,
+        self.model, core = P.make_optimizer(
+            model, opt["backbone_lr"], bucket_size=settings["bucket_size"],
+            overlap_param_gather=settings["overlap_param_gather"],
+            overlap_grad_reduce=settings["overlap_grad_reduce"],
+            optimizer_config=opt_config, config_overrides=overrides,
         )
+        self.model.broadcast_params()
         self.gathers = OrderedParameterGathers(self.model)
         self.gradients = OrderedGradientBuckets(self.model)
-        self.functional_hooks = install_functional_parameter_hooks(self.model)
         self.optimizer = Optimizer(self, core)
         self.scheduler = WSDScheduler(self.optimizer, self.config)
         self._models, self._optimizers, self._schedulers = (
@@ -367,9 +309,6 @@ class MCoreRuntime:
     @contextmanager
     def evaluation_parameters(self):
         self.synchronize_parameters()
-        for handle in self.functional_hooks:
-            handle.remove()
-        self.functional_hooks = []
         if self.model.ddp_config.overlap_param_gather:
             self.model.disable_forward_pre_hook(param_sync=False)
         try:
@@ -377,7 +316,6 @@ class MCoreRuntime:
         finally:
             if self.model.ddp_config.overlap_param_gather:
                 self.model.enable_forward_pre_hook()
-            self.functional_hooks = install_functional_parameter_hooks(self.model)
 
     def runtime_contract(self):
         return dict(
@@ -410,7 +348,7 @@ class MCoreRuntime:
                 )
             )
         payload = dict(
-            schema="umm_mcore_rank_v1",
+            schema="umm_mcore_rank_v2",
             layout=self.layout_digest,
             optimizer=states,
             scheduler=self.scheduler.state_dict(),
@@ -418,9 +356,10 @@ class MCoreRuntime:
             # not repeat MCore's non-overlapped golden-count warmup backward.
             readiness=[
                 dict(
-                    first=group.is_first_batch,
+                    first=group.is_first_batch and not group.per_param_grad_ready_counts,
                     counts=[
-                        group.golden_per_param_grad_ready_counts.get(p, 0)
+                        (group.per_param_grad_ready_counts if group.is_first_batch
+                         else group.golden_per_param_grad_ready_counts).get(p, 0)
                         for bucket in group.buckets
                         for p in bucket.params_list
                     ],
@@ -440,7 +379,7 @@ class MCoreRuntime:
             weights_only=False,
         )
         if (
-            payload["schema"] != "umm_mcore_rank_v1"
+            payload["schema"] != "umm_mcore_rank_v2"
             or payload["layout"] != self.layout_digest
         ):
             raise ValueError("MCore optimizer bucket layout changed on resume")

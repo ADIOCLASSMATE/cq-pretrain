@@ -10,13 +10,13 @@ distributed:
 model:
   qwen_path: /inspire/sj-ssd3/project/high-dimensionaldata/public/models/Qwen3.5-2B
   wan_path: /inspire/sj-ssd3/project/high-dimensionaldata/public/models/Wan2.1-T2V-1.3B
-  qwen_gdn_backend: mindspeed
+  qwen_gdn_backend: ascendc
   wan_attention_backend: npu
   gradient_checkpointing: true
   freeze_vision: true
   train_language: true
   train_wan: true
-  train_condition_proj: true
+  train_adapter: true
   lambda_text: 0.05
   lambda_video: 1.0
   video_uncond_prob: 0.1

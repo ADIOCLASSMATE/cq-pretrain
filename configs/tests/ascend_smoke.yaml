@@ -5,7 +5,7 @@ distributed:
   overlap_grad_reduce: true
   overlap_param_gather: true
 model:
-  qwen_gdn_backend: mindspeed
+  qwen_gdn_backend: ascendc
   freeze_vision: true
   gradient_checkpointing: true
   wan_attention_backend: npu

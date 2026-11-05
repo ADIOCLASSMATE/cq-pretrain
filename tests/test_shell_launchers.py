@@ -30,7 +30,9 @@ def environment_project(tmp_path):
     (atb / "set_env.sh").write_text('export ATB_HOME_PATH="$UMM_ENV_ROOT/.deps/Ascend90/nnal/atb"\n')
     python = project / ".venv-npu/bin/python"
     python.parent.mkdir(parents=True)
-    python.symlink_to(sys.executable)
+    import shlex
+    python.write_text(f'#!/usr/bin/env bash\nexec {shlex.quote(sys.executable)} "$@"\n')
+    python.chmod(0o755)
     utilities = project / "utils"
     utilities.mkdir()
     (utilities / "triton_integrity.py").write_text(

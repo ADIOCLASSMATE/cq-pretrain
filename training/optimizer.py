@@ -8,7 +8,7 @@ import torch
 
 
 def parameter_role(name):
-    if name.startswith("generator.condition_proj."):
+    if name.startswith("generator.text_embedding."):
         return "projector"
     if name.startswith("generator."):
         return "generator"
@@ -24,7 +24,7 @@ def apply_trainable_scope(model, settings):
         backbone=settings["train_language"],
         embedding=settings["train_language"],
         generator=settings["train_wan"],
-        projector=settings["train_condition_proj"],
+        projector=settings["train_adapter"],
         vision=not settings["freeze_vision"],
     )
     for name, param in model.named_parameters():

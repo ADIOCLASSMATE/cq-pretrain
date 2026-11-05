@@ -1,4 +1,4 @@
-# Qwen3.5 / Wan2.1 等长 CQ 接口
+# Qwen3.5 / Wan2.1 视频 CQ 接口
 
 模型运行实现分为 `backbone_*`、`generator_*` 和 `modeling_umm.py`。
 `models/references/` 只保存原生源码，训练和推理不导入该目录。
@@ -7,8 +7,8 @@
 
 ## 双流约定
 
-- Content 和 query 始终是 `[B,L,D]`，逐位置对齐。
-- Content 按输入的物理顺序执行原生因果 Attention、短卷积和 GDN。
+- Content 压紧所有有效 token。训练只构造受监督文本和目标视频的 query；调试输出还原为 `[B,L,D]`，未计算的 query 位置为零。
+- Content 默认在图像组内、视频原生时间块内双向可见，块间 causal。GDN 在同一块全部写入后读取该块，短卷积保持真实 C 历史。`model.content_visibility=causal` 用于原生对照。
 - 文本 query `Q_i` 读取 `C_<i`，预测同位置 `labels[i]`，不 shift。
 - 同一视频所有 visual query 读取第一个 visual token 之前的前缀。
   帧间字符仍处于原始 content 位置，其 text query 可以读取此前视觉内容。
@@ -19,11 +19,9 @@
 - GDN 将只读 query 事件插在对应 content 写入之前，query 的 K/V/beta/g 为零。
   Content 更新相对顺序不变。Full Attention 的 query 只读取 content K/V。
 - CFG 只删除选定完整视频 query 的前缀读取，不改变 content。
-- CQ 不支持 cache。原生参考计算路径保留原有行为。
+- video 的文本生成不缓存跨步 KV、卷积或 GDN 状态；Wan 条件投影与 cross-attention K/V 按请求缓存。
 
-`backbone_qwen35.py` 删除所有 `CQ BEGIN` / `CQ END` 块后逐字恢复原生 Qwen3.5
-源码。`generator_wan21.py` 先保留完整原生 Wan 源码，再在标注块内提供条件适配、
-设备后端和采样方法。
+`models/qwen35_layers.py`、`models/wan_layers.py`、`ops/` 和 `distributed/` 使用 main 的实现；视频包装层只负责输入、原生位置和采样接口。原生源码仅用于测试对照。
 
 ## 装配与权重
 
@@ -61,8 +59,7 @@ Batch 使用原生 processor 的 `input_ids`、`attention_mask`、`mm_token_type
 
 可用 `video_features` 替代像素 patches：它是按视频顺序排列的 post-merger 特征列表，
 每项形状为 `[visual_tokens,D]`。未知目标视频对应 `None`，并通过
-`video_observed_mask[videos]` 标记为 False。批内可混合缓存与在线输入：
-`pixel_video_ids` 给出 pixels 对应的视频索引，features 同位置为 None；同一视频不能重复提供两种输入。
+`video_observed_mask[videos]` 标记为 False。同一 batch 的 Qwen 表示统一使用缓存或在线像素，不接受 `pixel_video_ids`。
 
 `target_video_ids` 指定送入 Wan 的视频及顺序；省略时选择全部视频。
 文本理解无需调用 Wan，可以显式传入空目标列表。
@@ -81,7 +78,7 @@ predictions = model(
 # velocity: list of [C,T,H,W]，FP32 noise-minus-clean 预测
 ```
 
-模型返回预测；文本 CE 和 flow loss 仍由训练层计算。Qwen visual token 数量与
+训练设置 `compute_text_loss=True`，通过共享分块交叉熵返回 `text_loss`，不保留完整词表 logits；flow loss 及其归一化仍由训练层计算。Qwen visual token 数量与
 Wan latent token 数量不要求相同。
 
 ## 无缓存推理
@@ -107,7 +104,7 @@ latents = model.generate_video(
 T2V 输入包含目标视频的完整原生占位布局和已知网格，不需要目标像素。
 `generate_video` 排除所选目标的 pixels/features，保留其它已知视频。
 一次 backbone 前向产生固定条件；CFG 使用同一批次中的有条件／无条件两份输入。
-随后仅运行 Wan 采样循环。输入 latent shapes 是 Wan VAE 坐标，不从 Qwen grid 猜测。
+随后仅运行 Wan 采样循环，条件投影与每层 cross-attention K/V 在该请求内缓存一次。输入 latent shapes 是 Wan VAE 坐标，不从 Qwen grid 猜测。
 
 采样支持 Euler/Heun，积分方向是 sigma=1 到 0，模型预测为 noise-clean，
 传给模型的 timestep 为 `sigma * timestep_scale`（默认 1000）。
@@ -123,7 +120,7 @@ UMM_VIDEO_DEVICE=npu:0 python -m pytest tests/test_modeling_umm_video.py
 python tests/validation/validate_wan21.py --help
 ```
 
-测试覆盖原生源码保留、逐层多模态 content 一致性、跨 chunk 梯度、整视频与帧间字符无泄漏、
+测试覆盖共享层的原生因果数值对照、时间块双向可见性、跨 chunk 梯度、整视频与帧间字符无泄漏、
 query 独立性、CFG 不改 content、同位置训练与无缓存推理 logits 对齐、Wan 积分方向、
 原生分片权重加载与序列化，以及运行时禁止导入 references。
 CPU 小配置验证不能代替真实 Ascend 设备和完整预训练模型的性能验证。

@@ -79,16 +79,14 @@ def test_complete_resume_matches_uninterrupted_optimizer_step(tmp_path):
 
 
 
-def test_legacy_single_draw_checkpoint_accepts_default_repeats(tmp_path):
+@pytest.mark.parametrize("repeats", [1, 2])
+def test_checkpoint_rejects_missing_training_fields(tmp_path, repeats):
     model, optimizer, scheduler, _ = make_training()
     path = tmp_path / "legacy-video"
     old_config = {"flow": {"time_sampling": "logit_normal"}}
     save_checkpoint(path, model=model, optimizer=optimizer, scheduler=scheduler,
                     global_step=0, data_state={}, config=old_config)
-    config = {"flow": {"time_sampling": "logit_normal", "repeats": 1}}
-    validate_checkpoint(path, expected_config=config)
-    assert "repeats" not in old_config["flow"]
-    config["flow"]["repeats"] = 2
+    config = {"flow": {"time_sampling": "logit_normal", "repeats": repeats}}
     with pytest.raises(ValueError, match="configuration contract differs"):
         validate_checkpoint(path, expected_config=config)
 
@@ -183,3 +181,24 @@ def _distributed_ema_worker(rank, init_path, checkpoint):
 def test_rank_sharded_ema_real_two_process_collectives(tmp_path):
     torch.multiprocessing.spawn(_distributed_ema_worker,
         args=(str(tmp_path / "dist-init"), str(tmp_path / "ema")), nprocs=2, join=True)
+
+
+def test_old_checkpoint_and_export_schemas_are_rejected(tmp_path):
+    import json
+    from utils.weights import read_weights
+
+    model, optimizer, scheduler, _ = make_training()
+    path = tmp_path / "checkpoint-0"
+    save_checkpoint(path, model=model, optimizer=optimizer, scheduler=scheduler,
+                    global_step=0, data_state={}, config={})
+    for name in ("metadata.json", "checkpoint_complete.json"):
+        file = path / name
+        payload = json.loads(file.read_text())
+        payload["schema"] = "umm_training_checkpoint_v1"
+        file.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="unsupported checkpoint schema"):
+        validate_checkpoint(path)
+    weights = tmp_path / "weights.pt"
+    torch.save({"schema": "umm_weights_v1", "model": model.state_dict()}, weights)
+    with pytest.raises(ValueError, match="Expected a UMM"):
+        read_weights(weights)

@@ -19,7 +19,7 @@ def test_in_place_precision_interruption_resume_and_reading(
     tmp_path, monkeypatch, dtype
 ):
     from data.codec import WanVideoCodec
-    from models.backbone_qwen35 import Qwen35VideoEncoder
+    from models.vision_encoder import Qwen35VideoEncoder
 
     config, processor, model, _, _ = make_fixture(tmp_path / "fixture")
     config["training"]["mixed_precision"] = "bf16" if dtype == torch.bfloat16 else "no"

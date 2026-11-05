@@ -47,26 +47,12 @@ def prepare_runtime(config):
     ):
         raise RuntimeError("Use the CQ-pinned Python, torch and torch_npu in .venv-npu")
     torch.npu.set_device(int(os.environ.get("LOCAL_RANK", 0)))
-    for name in lock["sources"]:
-        path = str(root / ".deps/core17" / name)
-        if path not in sys.path:
-            sys.path.insert(0, path)
-
-    # Capture native HF dispatch before the adaptors install patches.
-    import models.backbone_qwen35  # noqa: F401
-    import models.generator_wan21  # noqa: F401
-
-    previous, compile_function = sys.argv, torch.compile
-    sys.argv = [previous[0], "--optimization-level", "0", "--optimizer-selection", "fused_torch_adamw"]
-    try:
-        with redirect_stdout(sys.stderr):
-            import megatron_adaptor  # noqa: F401
-            import mindspeed.megatron_adaptor  # noqa: F401
-            from models.backbone_qwen35 import resolve_gdn_backend_identity
-
-            identity = resolve_gdn_backend_identity(config["model"]["qwen_gdn_backend"])
-    finally:
-        sys.argv, torch.compile = previous, compile_function
+    import models.vision_encoder  # capture native vision before MindSpeed patches
+    from distributed.megatron import prepare_npu
+    from models.backbone_qwen35 import resolve_gdn_backend_identity
+    with redirect_stdout(sys.stderr):
+        prepare_npu()
+        identity = resolve_gdn_backend_identity(config["model"]["qwen_gdn_backend"])
     print(json.dumps({"qwen_gdn": identity, "model_dtype": "torch.bfloat16"}), file=sys.stderr)
     return torch.device("npu", torch.npu.current_device()), torch.bfloat16
 
@@ -121,7 +107,12 @@ class EvaluationRuntime:
                     self.backend_identity = model.backbone.gdn_backend_identity()
                 finally:
                     torch.compile = compile_function
-                self._model = model.to(device=self.device, dtype=self._model_dtype).eval()
+                if self._model_dtype == torch.bfloat16:
+                    from models.qwen35_layers import cast_for_training
+                    model = cast_for_training(model, self.device)
+                else:
+                    model = model.to(device=self.device, dtype=self._model_dtype)
+                self._model = model.eval()
         return self._model
 
     @property

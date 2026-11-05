@@ -28,7 +28,7 @@ package-dir = {"" = "."}
 py-modules = []
 
 [tool.setuptools.packages.find]
-include = ["models*", "data*", "training*", "evaluations*", "utils*", "configs*", "scripts"]
+include = ["ops*", "distributed*", "models*", "data*", "training*", "evaluations*", "utils*", "configs*", "scripts"]
 namespaces = false
 
 [tool.setuptools.package-data]

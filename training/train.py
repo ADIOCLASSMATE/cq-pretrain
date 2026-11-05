@@ -155,8 +155,11 @@ def load_model(config):
                 )
     # UMM and its backbone own separate config copies. Persist the effective
     # backend in both, so exports and all three loading paths use one choice.
-    gdn_backend = settings.get("qwen_gdn_backend", "native")
+    gdn_backend = settings.get("qwen_gdn_backend", "ascendc")
     model.backbone.configure_gdn_backend(gdn_backend)
+    model.backbone.cfg.content_visibility = settings["content_visibility"]
+    model.backbone.config.content_visibility = settings["content_visibility"]
+    model.config.qwen_config.text_config.content_visibility = settings["content_visibility"]
     model.config.qwen_config.text_config.qwen_gdn_backend = gdn_backend
     model.backbone.config._attn_implementation = settings["attn_implementation"]
     model.vision_encoder.visual.config._attn_implementation = settings[
@@ -240,7 +243,7 @@ def main(argv=None):
     from .optimizer import apply_trainable_scope, build_optimizer_and_scheduler
     from .ema import RankShardedEMA, build_sharded_ema_layout
     from .trainer import Trainer
-    from utils.distributed import run_io_phase
+    from utils.file_sync import run_io_phase
 
     from contextlib import ExitStack
     from utils.checkpoint_catalog import (
@@ -255,7 +258,7 @@ def main(argv=None):
     from utils.run_logging import RunLogger, resolve_attempt
 
     if config["distributed"]["backend"] == "mindspeed":
-        from .mcore import MCoreRuntime
+        from training.runtime import MCoreRuntime
         accelerator = MCoreRuntime(config)
     else:
         accelerator = build_accelerator(config)

@@ -29,6 +29,9 @@ source scripts/env_mindspeed.sh
 # 小模型通信与分布式优化器验证。
 "$PYTHON_BIN" -m torch.distributed.run --standalone --nproc-per-node=4 \
   -m tests.validation.validate_mcore --output outputs/my_transport_check
+# 16 卡混合 V2T/T2V、GA=2、重计算和精确恢复；加 --full-weights 加载正式初始权重。
+"$PYTHON_BIN" -m torch.distributed.run --standalone --nproc-per-node=16 \
+  -m tests.validation.validate_shared_runtime --output outputs/my_shared_check
 # Wan 原生权重和完整生成器前向/反向，不加载 backbone 或 VAE。
 "$PYTHON_BIN" -m tests.validation.validate_wan21 \
   --checkpoint /inspire/sj-ssd3/project/high-dimensionaldata/public/models/Wan2.1-T2V-1.3B \
@@ -42,8 +45,9 @@ source scripts/env_mindspeed.sh
 | --- | --- |
 | `validation/test_train.sh` | 真实数据、真实权重四卡短程训练 |
 | `validation/test_mindspeed_resume.sh` | 连续、恢复、保留数量和日志隔离验证 |
-| `validation/validate_cq_mcore.py` | 初始化 MCore 后运行 CQ / GDN 检查 |
+| `validation/validate_cq_mcore.py` | 加载 NPU 算子后运行 AscendC / MindSpeed CQ / GDN 检查 |
 | `validation/validate_mcore.py` | 通信、条件分支和优化器更新对照 |
+| `validation/validate_shared_runtime.py` | 16 卡真实 UMM 混合分支、梯度累积、优化器和恢复 |
 | `validation/validate_wan21.py` | Wan 权重和生成器设备验证 |
 | `validation/verify_mcore_run.py` | 校验恢复脚本产生的完整结果 |
 | `validation/compare_mcore_checkpoints.py` | 逐张量比较两个 MCore checkpoint |

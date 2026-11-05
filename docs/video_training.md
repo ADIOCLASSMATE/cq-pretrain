@@ -12,7 +12,7 @@ V2T 把 video 放在 user 消息中，assistant 是待监督的描述。两类�
 
 文本 query 使用 `<|text_mask|>`，视觉 query 使用 `<|vision_mask|>`，分别对应现有配置字段 `mask_token_id`、`video_mask_token_id`。它们是 backbone 同一张 embedding 表中的两个独立行；原生 `<|image_pad|>`、`<|video_pad|>` 等 content 占位符保留原名。
 
-训练、推理和缓存准备共用 `load_processor()`。加载旧 processor 时，`<|mdm_mask|>`、`<|video_mask|>` 会在内存中重命名，并保留各自原有 ID，继续对应 checkpoint 中原来的 embedding 行；原 processor 文件不会被改写，新保存的 processor 使用新名称。若旧名和对应新名同时存在，会明确报错，避免选择错误的权重行。恢复旧运行时应继续指定匹配的 `model.processor_path`；初始化策略和 CQ 计算规则不因重命名改变。
+训练、推理和缓存准备共用 `load_processor()`。加载旧 processor 时，`<|mdm_mask|>`、`<|video_mask|>` 会在内存中重命名，并保留各自原有 ID，继续对应 checkpoint 中原来的 embedding 行；原 processor 文件不会被改写，新保存的 processor 使用新名称。若旧名和对应新名同时存在，会明确报错，避免选择错误的权重行。这一映射仅处理 processor 的 token 命名；旧训练 checkpoint 和权重导出不再支持恢复。
 
 简单标注也可直接使用：
 
@@ -145,7 +145,7 @@ flow:
 | per-rank batch / accumulation | 1 / 8 | 四卡时每次更新 32 个样本，默认 T2V/V2T 各 16 个 |
 | 精度 / EMA | BF16 autocast / 开启，0.9997 | 保留 FP32 优化参数/累积和原分片 EMA 设施 |
 
-这些是可运行的初始值，未经过视频质量调参。T2V CFG 条件丢弃概率默认 0.1，只删除视频 query 的前缀读取，content 不变。`train_language`、`train_wan`、`train_condition_proj`、`freeze_vision` 分别控制更新范围；冻结语言及 ViT 时不能安排 V2T 更新。
+这些是可运行的初始值，未经过视频质量调参。T2V CFG 条件丢弃概率默认 0.1，只删除视频 query 的前缀读取，content 不变。`train_language`、`train_wan`、`train_adapter`、`freeze_vision` 分别控制更新范围；冻结语言及 ViT 时不能安排 V2T 更新。
 
 正式配置 `configs/video.yaml` 不指向合成样本。`configs/tests/ascend_smoke.yaml` 单独提供两步验证：四卡、每卡 batch=1、累积=2、EMA 关闭，使用明确指定的 slider_stop 两种视图。设备默认 NPU，若 torch_npu/设备不可用会报错，不静默切换 CPU。910B 测试配置明确选择 `model.wan_attention_backend=npu`，展开 NPU attention 所需的 mask query 维度；Qwen Full Attention 保持使用支持显式 CQ mask 的 SDPA。其他配置仍可选择 `auto/npu/sdpa`。
 
@@ -170,7 +170,7 @@ bash scripts/train.sh --config /data/run.yaml --resume outputs/umm_video/checkpo
 
 `configs/config.py` 的默认后端和两个视频 YAML 均选择 `distributed.backend=mindspeed`，使用 torchrun、HCCL、MCore DDP 和分布式 AdamW；`distributed.num_processes` 默认 4。当前只支持 TP=PP=CP=1，保留模型层和权重布局。BF16 模型权重在 DP rank 间复制，FP32 master weights 和 Adam 状态分片保存。`overlap_grad_reduce`、`overlap_param_gather` 默认均为 true；bucket_size 默认 40000000 个元素。冻结范围、各角色学习率/weight decay、WSD 和 flow repeats 保留独立配置。
 
-这两个视频配置显式设置 `model.qwen_gdn_backend=mindspeed`；`configs/config.py` 的通用默认仍为 `native`。前者调用固定 MindSpeed 提交中的 `mindspeed.core.ssm.npu_chunk_gated_delta_rule.chunk_gated_delta_rule`，要求 NPU、BF16 Q/K/V、FP32 log-decay、无缓存整序列；后者调用原生 Torch 参考。两者共用原来的投影、短卷积、只读 query 事件、归一化和输出层，GDN 的事件排序/逆排序改用标准行级 `index_select`。没有新增自定义反向，也没有复制上游 kernel。普通非 CQ 原生 forward 保留原调用。
+视频默认使用 `model.qwen_gdn_backend=ascendc`，与 main 共用投影、短卷积、只读 query 事件和 AscendC 反向。`mindspeed` 保留作为显式对照。`model.content_visibility` 可选 `visual_block`（默认，原生时间块内双向、块间 causal）或 `causal`。Wan clip attention 始终双向，变长序列以 TND 紧凑执行，不构造 padding attention mask。
 
 Triton-Ascend 3.2.1 和社区 Triton 3.2.0 共享部分安装路径，必须通过 `scripts/setup_mindspeed.py --python` 保证 Ascend wheel 最后安装；首次编译需要主机 g++/make，可用 `--host-tools` 单独安装。CANN/Torch/torch_npu 仍保持 CQ 版本。MindSpeed 与 Triton-Ascend 的 NumPy 元数据约束无交集：保留 1.26.0，并在 `configs/deps.core17.lock.json` 记录单个例外；setup 只接受这项已知冲突，其他依赖冲突仍报错。首次不同形状会触发 Triton 编译，冷启动时间不代表常态吞吐。
 
@@ -180,15 +180,15 @@ Triton-Ascend 3.2.1 和社区 Triton 3.2.0 共享部分安装路径，必须通�
 
 环境入口默认设置 `ASCEND_WORK_PATH=.cache/ascend-work/<主机名>/` 的绝对路径，并保留用户覆盖；pytest 使用相同规则。CANN 的 `kernel_meta` 编译调试文件以及受该变量控制的运行日志等写入此工作目录，不混入 UMM 的实验日志。共享算子缓存 `ASCEND_CACHE_PATH` 没有改动。未加载项目环境时，CANN 仍可能在当前目录创建 `kernel_meta`；这不是模型源码或 checkpoint。含义与优先级见 [CANN 官方说明](https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/900beta2/API/appdevgapi/aclcppdevg_03_1371.html)。
 
-运行日志和 checkpoint 合同记录实际 GDN provider、源码摘要、Triton 版本和 CQ 行索引实现版本。改变后端不属于管理参数调整，不能作为精确恢复继续旧实验；需要用导出权重初始化新实验。旧配置缺少后端字段时按历史 `native` 解释。跨后端比较允许 BF16 舍入差，连续/恢复对照则必须在相同后端、配置和环境下执行。
+运行日志和 checkpoint 合同记录实际 GDN provider、源码摘要、Triton 版本和 CQ 行索引实现版本。改变后端不属于管理参数调整，不能作为精确恢复继续旧实验；需要用导出权重初始化新实验。旧训练结果不做后端字段补齐，必须按当前完整配置重新开始实验。跨后端比较允许 BF16 舍入差，连续/恢复对照则必须在相同后端、配置和环境下执行。
 
 统一评估的 `evaluations/runtime.py` 在第一次前向前导入并审计所选 GDN 后端，避免在扫描中途安装 MindSpeed adaptor 补丁；推理保留原来的 `torch.compile`。选择 MCore 配置时，加载后的模型显式转为 BF16，与训练时的参数和残差流 dtype 一致，不能仅依靠 autocast 将 FP32 模型当作同一计算设置。
 
-训练侧按固定顺序派发通信桶，防止不同 rank 的 T2V/V2T 分支跳过模块后发生 collective 顺序错位。最后一次 backward 后，只为缺席参数补齐就绪标记，不清空此前累积的梯度。整窗口未使用但仍可训练的参数采用零梯度，因此 Adam 动量/weight decay 仍可更新；要停更模块需显式冻结。Qwen 短卷积的函数式权重读取由 GDN 父模块 pre-hook 等待就绪；Wan 时间分支通过 FP32 Linear 子模块执行并保留原来的数值计算。
+训练侧按固定顺序派发通信桶，防止不同 rank 的 T2V/V2T 分支跳过模块后发生 collective 顺序错位。最后一次 backward 后，只为缺席参数补齐就绪标记，不清空此前累积的梯度。整窗口未使用但仍可训练的参数采用零梯度，因此 Adam 动量/weight decay 仍可更新；要停更模块需显式冻结。Qwen 短卷积直接调用共享 CausalConv 模块以触发权重收集；Wan 时间分支保持 FP32。重算允许同一参数多次触发梯度就绪事件。
 
 每个优化器窗口先统计所有 DP rank 的有效文本 token 数 N 和目标视频数 M，再给本地均值 loss 乘 D*n/N、D*m/M。梯度归约自身包含 1/D，不再额外除以累积次数。flow.repeats 对同一视频的独立 flow 抽样取均值，不放大视频权重。日志的 `train/objective_global` 使用全局 token/video 计数重建目标；分任务指标仍分别记录各任务的原始均值。
 
-`training/mcore.py` 只负责运行时、优化器和分片状态；`training/mcore_parallel.py` 负责条件分支通信。EMA、评估和导出前完成参数收集；评估暂时解除参数收集 hooks，避免覆盖 EMA 或在纯推理中触发训练通信。低层版本与源码提交固定在 `configs/deps.core17.lock.json`，恢复时同时校验 backend、拓扑、通信设置和 optimizer bucket 布局。
+`distributed/megatron.py` 只负责运行时、优化器和分片状态；`distributed/communication.py` 负责条件分支通信。EMA、评估和导出前完成参数收集；评估暂时解除参数收集 hooks，避免覆盖 EMA 或在纯推理中触发训练通信。低层版本与源码提交固定在 `configs/deps.core17.lock.json`，恢复时同时校验 backend、拓扑、通信设置和 optimizer bucket 布局。
 
 MCore checkpoint 的 `megatron/model.pt` 保存一份完整模型，各 rank 的 `optimizer_rank_XXXXX.pt` 保存 FP32 master、Adam 状态、scheduler 与通信就绪状态；外层各 rank runtime 文件保存 RNG 和已消费数据游标。旧 DeepSpeed 训练、启动配置和恢复能力已移除。CPU 回归在同一个 `.venv-npu` 中运行，显式选择 `distributed.backend=accelerate`、CPU 和原生计算后端，不与 MCore 组合；启动前设置 `TORCH_DEVICE_BACKEND_AUTOLOAD=0`。`accelerate` 仍是 MCore 数据分片的依赖，不能因移除 DeepSpeed 而卸载。依赖统一由 `requirements-mindspeed.txt` 和源码锁管理。
 

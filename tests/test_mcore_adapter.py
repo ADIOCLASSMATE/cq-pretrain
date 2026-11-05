@@ -8,8 +8,8 @@ import pytest
 import torch
 
 from training.loss import global_loss_weights
-from training.mcore import MCoreRuntime, _gdn_contract
-from training.mcore_parallel import OrderedGradientBuckets, OrderedParameterGathers
+from training.runtime import MCoreRuntime, _gdn_contract
+from distributed.communication import OrderedGradientBuckets, OrderedParameterGathers
 from tests.test_generator_wan21 import generator
 
 
@@ -55,7 +55,7 @@ def test_all_loading_paths_persist_gdn_backend_in_both_config_copies(source, tmp
         monkeypatch.setattr(UMM, "from_pretrained_components", lambda *args, **kwargs: UMM(architecture))
     else:
         export = tmp_path / "weights.pt"
-        torch.save(dict(schema="umm_weights_v1", model=UMM(architecture).state_dict(),
+        torch.save(dict(schema="umm_weights_v2", model=UMM(architecture).state_dict(),
                         config=deepcopy(config)), export)
         config["model"]["checkpoint"] = str(export)
     model = load_model(config)
@@ -79,7 +79,10 @@ def test_time_module_hooks_preserve_fp32_values_and_gradients(dtype):
         )
     times = torch.tensor([12.0, 501.0], requires_grad=True)
     old_times = times.detach().clone().requires_grad_()
-    hidden, modulation = model._embed_time(times, times.device)
+    half = model.freq_dim // 2
+    phase = times[:, None] * 10000.0 ** (-torch.arange(half, dtype=torch.float32) / half)
+    hidden = model.time_embedding(torch.cat((phase.cos(), phase.sin()), -1))
+    modulation = model.time_projection(hidden).unflatten(1, (6, model.dim))
     half = reference.freq_dim // 2
     frequencies = torch.pow(10000.0, -torch.arange(half, dtype=torch.float32) / half)
     angles = old_times[:, None] * frequencies[None]

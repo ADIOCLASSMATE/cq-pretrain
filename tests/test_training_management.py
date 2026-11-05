@@ -93,33 +93,21 @@ def test_management_can_change_but_training_and_unknown_fields_are_strict():
             validate_contract(saved, changed)
 
 
-def test_old_gdn_defaults_preserve_contract_integrity_and_explicit_backend_is_strict():
+def test_missing_gdn_configuration_and_old_contracts_are_rejected():
     saved = deepcopy(DEFAULTS)
     saved["model"].pop("qwen_gdn_backend")
-    saved["model"]["architecture"] = {"qwen_config": {"text_config": {"hidden_size": 32}}}
+    current = deepcopy(DEFAULTS)
     old_contract = training_contract(saved)
-    old_contract["config"]["model"].pop("qwen_gdn_backend")
-    old_contract["config"]["model"]["architecture"]["qwen_config"]["text_config"].pop("qwen_gdn_backend")
-    current = deepcopy(saved)
-    current["model"]["qwen_gdn_backend"] = "native"
-    current["model"]["architecture"]["qwen_config"]["text_config"]["qwen_gdn_backend"] = "native"
-    assert validate_contract(saved, current, old_contract) == []
-    changed = deepcopy(current)
-    changed["model"]["qwen_gdn_backend"] = "mindspeed"
-    with pytest.raises(ValueError, match="model.qwen_gdn_backend"):
-        validate_contract(saved, changed, old_contract)
+    with pytest.raises(ValueError, match="qwen_gdn_backend"):
+        validate_contract(saved, current, old_contract)
     tampered = deepcopy(old_contract)
-    tampered["config"]["optimizer"]["eps"] = 0.2
-    with pytest.raises(ValueError, match="disagrees"):
-        validate_contract(saved, current, tampered)
-    tampered = deepcopy(old_contract)
-    tampered["schema"] = "unknown"
+    tampered["schema"] = "umm_resume_contract_v1"
     with pytest.raises(ValueError, match="unsupported schema"):
         validate_contract(saved, current, tampered)
 
 
 @pytest.mark.parametrize("backend,device,precision,valid", [
-    ("native", "cpu", "no", True),
+    ("ascendc", "cpu", "no", True),
     ("mindspeed", "npu", "bf16", True),
     ("mindspeed", "cpu", "bf16", False),
     ("mindspeed", "npu", "no", False),

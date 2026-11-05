@@ -10,7 +10,7 @@ import shutil
 import socket
 import uuid
 
-SCHEMA = "umm_training_checkpoint_v1"
+SCHEMA = "umm_training_checkpoint_v2"
 NAME = re.compile(r"checkpoint-(\d+)")
 
 

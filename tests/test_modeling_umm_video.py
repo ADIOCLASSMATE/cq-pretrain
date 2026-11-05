@@ -12,7 +12,16 @@ import torch
 from models.references import modeling_qwen35 as native
 from models.modeling_umm import UMM, UMMConfig
 from models.references.modeling_wan21 import WanModel
-from models.backbone_qwen35 import build_cq_masks
+def build_cq_masks(prepared):
+    plan, indices = prepared["_cq_plan"], prepared["_content_positions"]
+    b, length = prepared["input_ids"].shape
+    n = len(indices)
+    allowed = ~plan.cq_mask[0, 0] & plan.cq_valid[0, :, None]
+    c = torch.zeros(b * length, b * length, dtype=torch.bool, device=indices.device)
+    q = torch.zeros_like(c)
+    c[indices[:, None], indices] = allowed[:n]
+    q[plan.output_positions[:, None], indices] = allowed[n:]
+    return tuple(torch.stack([x[i*length:(i+1)*length, i*length:(i+1)*length] for i in range(b)]) for x in (q, c))
 
 
 @pytest.fixture(params=["cpu"] + ([os.environ["UMM_VIDEO_DEVICE"]] if os.environ.get("UMM_VIDEO_DEVICE") else []))
@@ -80,6 +89,32 @@ def video_batch(device, specs=(((2, 4, 4),),), *, requires_grad=False):
                 target_video_ids=torch.tensor(target_ids, device=device, dtype=torch.long))
 
 
+def test_visual_injection_accepts_custom_autograd_embedding_views():
+    class EmbeddingView(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, value):
+            return value
+
+        @staticmethod
+        def backward(ctx, gradient):
+            return gradient
+
+    torch.manual_seed(502)
+    network = model("cpu", layers=4)
+    batch = video_batch("cpu", (((2, 4, 4),), ((1, 4, 4),)), requires_grad=True)
+    expected = network(batch, compute_text_loss=True)["text_loss"].detach()
+    handle = network.backbone.embed_tokens.register_forward_hook(
+        lambda module, inputs, output: EmbeddingView.apply(output))
+    try:
+        loss = network(batch, compute_text_loss=True)["text_loss"]
+        torch.testing.assert_close(loss, expected, rtol=0, atol=0)
+        loss.backward()
+        for gradient in (batch["pixel_values_videos"].grad, network.backbone.embed_tokens.weight.grad):
+            assert gradient is not None and torch.isfinite(gradient).all() and gradient.abs().max() > 0
+    finally:
+        handle.remove()
+
+
 def test_native_vision_features_positions_and_scatter_match(device):
     torch.manual_seed(101)
     actual = model(device).eval()
@@ -101,7 +136,10 @@ def test_native_vision_features_positions_and_scatter_match(device):
         assert bool(boundaries.eq(indices[0]).all())
         qmask, cmask = build_cq_masks(prepared)
         assert not bool(qmask[row, indices, int(indices[0]):].any())
-        assert not bool(torch.triu(cmask[row], diagonal=1).any())
+        blocks = indices.reshape(int(batch["video_grid_thw"][i, 0]), -1)
+        for block in blocks:
+            assert cmask[row, block[:, None], block].all()
+            assert not cmask[row, block, int(block[-1]) + 1:].any()
     assert actual.lm_head.weight is actual.backbone.embed_tokens.weight
 
 
@@ -125,16 +163,18 @@ def test_whole_video_no_leak_train_generation_alignment_and_gradients(device, ch
 
     # Flow must depend on query conditioning/backbone, but never target pixels.
     loss = (output["velocity"][0] * torch.randn_like(output["velocity"][0])).sum()
-    pixel_grad, mask_grad, bridge_grad = torch.autograd.grad(
-        loss, (batch["pixel_values_videos"], network.backbone.embed_tokens.weight,
-               network.generator.condition_proj.weight), retain_graph=True,
-    )
+    loss.backward(retain_graph=True)
+    pixel_grad = batch["pixel_values_videos"].grad.clone()
+    mask_grad = network.backbone.embed_tokens.weight.grad.clone()
+    bridge_grad = network.generator.text_embedding[0].weight.grad.clone()
+    network.zero_grad(set_to_none=True)
     assert torch.count_nonzero(pixel_grad) == 0
     assert mask_grad[network.config.video_mask_token_id].abs().max() > 0
     assert bridge_grad.abs().max() > 0
     # Later same-position text queries DO read video content and train the ViT.
     text_loss = (output["text_logits"] * torch.randn_like(output["text_logits"])).sum()
-    vision_grad, = torch.autograd.grad(text_loss, network.vision_encoder.visual.patch_embed.proj.weight)
+    text_loss.backward()
+    vision_grad = network.vision_encoder.visual.patch_embed.proj.weight.grad
     assert torch.isfinite(vision_grad).all() and vision_grad.abs().max() > 0
 
     network.eval()
@@ -166,26 +206,32 @@ def test_query_independence_through_all_video_backbone_layers(device):
     changed_position = int(selected[1])
     supplied = {}
 
-    def replace_query(module, args, kwargs):
-        if "query" not in supplied:
-            supplied["query"] = kwargs["query_hidden_states"].detach().clone().requires_grad_()
-        return args, {**kwargs, "query_hidden_states": supplied["query"]}
+    prepared = network.prepare_inputs(batch)
+    plan = prepared["_cq_plan"]
+    query_index = int((plan.output_positions == changed_position).nonzero()[0])
 
-    handle = network.backbone.layers[0].register_forward_pre_hook(replace_query, with_kwargs=True)
+    def replace_query(module, args):
+        hidden, rope, layout, n = args
+        if "query" not in supplied:
+            supplied["query"] = hidden[n:].detach().clone().requires_grad_()
+        return torch.cat((hidden[:n], supplied["query"])), rope, layout, n
+
+    handle = network.backbone.layers[0].register_forward_pre_hook(replace_query)
     try:
         original = network(batch, return_hidden_states=True)
         query = supplied["query"]
         probe = torch.randn_like(original["query_hidden"][:, changed_position])
         grad, = torch.autograd.grad((original["query_hidden"][:, changed_position] * probe).sum(), query)
-        others = torch.arange(query.shape[1], device=device) != changed_position
-        assert torch.count_nonzero(grad[:, others]) == 0
-        assert grad[:, changed_position].abs().max() > 0
+        others = torch.arange(len(query), device=device) != query_index
+        assert torch.count_nonzero(grad[others]) == 0
+        assert grad[query_index].abs().max() > 0
         supplied["query"] = query.detach().clone()
-        supplied["query"][:, changed_position] *= 5
+        supplied["query"][query_index] *= 5
         with torch.no_grad():
             changed = network(batch, return_hidden_states=True)
         torch.testing.assert_close(changed["content_hidden"], original["content_hidden"], rtol=0, atol=0)
-        torch.testing.assert_close(changed["query_hidden"][:, others], original["query_hidden"][:, others], rtol=0, atol=0)
+        positions = torch.arange(batch["input_ids"].shape[1], device=device) != changed_position
+        torch.testing.assert_close(changed["query_hidden"][:, positions], original["query_hidden"][:, positions], rtol=0, atol=0)
         assert not torch.allclose(changed["query_hidden"][:, changed_position], original["query_hidden"][:, changed_position])
     finally:
         handle.remove()
@@ -206,7 +252,7 @@ def test_variable_video_target_order_masks_and_cfg_use_whole_video_ids(device):
         target = prepared["video_token_indices"][1]
         assert not bool(qmask[0, target].any())
         allowed = torch.where(cmask[0, target[0]])[0]
-        torch.testing.assert_close(allowed, torch.arange(int(target[0]) + 1, device=device))
+        torch.testing.assert_close(allowed, torch.arange(int(target[-1]) + 1, device=device))
         assert output["condition_mask"].sum(-1).tolist() == [16, 4]
         assert torch.count_nonzero(output["condition"][1, 4:]) == 0
         assert output["target_video_ids"].tolist() == [2, 1]
@@ -291,7 +337,7 @@ def test_bfloat16_joint_forward_backward_and_checkpoint_parity(device, converted
         loss.backward()
         gradients = {key: p.grad.detach().clone() for key, p in network.named_parameters() if p.grad is not None}
         assert all(torch.isfinite(grad).all() for grad in gradients.values())
-        for key in ("generator.condition_proj.weight", "backbone.layers.0.linear_attn.in_proj_qkv.weight",
+        for key in ("generator.text_embedding.0.impl.weight", "backbone.layers.0.linear_attn.in_proj_all.impl.weight",
                     "backbone.vision_encoder.visual.patch_embed.proj.weight"):
             assert gradients[key].abs().max() > 0
         snapshots.append((output, gradients))
@@ -304,7 +350,7 @@ def test_bfloat16_joint_forward_backward_and_checkpoint_parity(device, converted
 
 
 @pytest.mark.parametrize("fault", ["frame_split_boundary", "metadata_leak_boundary", "missing_pixels", "wrong_grid",
-                                    "wrong_mm_types", "wrong_targets", "wrong_positions", "partial_cfg", "wrong_indices"])
+                                    "wrong_mm_types", "wrong_targets", "wrong_positions", "wrong_indices"])
 def test_rejects_misaligned_or_leaking_video_inputs(fault):
     network = model(torch.device("cpu")).eval()
     batch = video_batch("cpu")
@@ -351,12 +397,14 @@ def test_native_component_loading_and_state_dict_roundtrip(tmp_path):
         tmp_path / "qwen", tmp_path / "wan", mask_token_id=64, video_mask_token_id=65,
     )
     for name, value in original.model.language_model.state_dict().items():
-        actual = loaded.backbone.state_dict()[name]
+        actual = loaded.backbone.native_parameters()[name]
         torch.testing.assert_close(actual[:64] if name == "embed_tokens.weight" else actual, value, rtol=0, atol=0)
     for name, value in original.model.visual.state_dict().items():
         torch.testing.assert_close(loaded.vision_encoder.visual.state_dict()[name], value, rtol=0, atol=0)
+    from tests.test_generator_wan21 import native_state
     for name, value in wan.state_dict().items():
-        torch.testing.assert_close(loaded.generator.state_dict()[name], value, rtol=0, atol=0)
+        if name != "text_embedding.0.weight":
+            torch.testing.assert_close(native_state(loaded.generator)[name], value, rtol=0, atol=0)
     assert loaded.backbone.embed_tokens.num_embeddings == 66
     assert loaded.lm_head.weight is loaded.backbone.embed_tokens.weight
     restored = UMM(UMMConfig(**loaded.config.to_dict())).eval()
@@ -375,12 +423,13 @@ def test_multimodal_content_matches_every_native_layer_and_cfg_does_not_change_i
     network = model(device).eval()
     reference = native.Qwen3_5Model(deepcopy(network.config.qwen_config)).to(device).eval()
     reference.visual.load_state_dict(network.vision_encoder.visual.state_dict())
-    reference.language_model.load_state_dict({k: v for k, v in network.backbone.state_dict().items()
-                                              if not k.startswith("vision_encoder.")})
+    # Causal is the native Qwen oracle; visual-block visibility is checked separately.
+    network.backbone.cfg.content_visibility = "causal"
+    reference.language_model.load_state_dict(network.backbone.native_parameters())
     batch = video_batch(device)
     batch["video_uncond_mask"] = torch.tensor([cfg_drop], device=device)
     captured, expected_layers = [], []
-    handles = [layer.register_forward_hook(lambda m, a, out: captured.append(out[0]))
+    handles = [layer.register_forward_hook(lambda m, a, out: captured.append(out[:a[3], 0][None]))
                for layer in network.backbone.layers]
     handles += [layer.register_forward_hook(lambda m, a, out: expected_layers.append(out))
                 for layer in reference.language_model.layers]
@@ -506,7 +555,8 @@ class RejectReferences(importlib.abc.MetaPathFinder):
             raise AssertionError('Runtime imported reference: ' + fullname)
 sys.meta_path.insert(0, RejectReferences())
 from models import UMM, UMMConfig
-from models.backbone_qwen35 import Qwen35CQBackbone, Qwen35VideoEncoder
+from models.backbone_qwen35 import Qwen35CQBackbone
+from models.vision_encoder import Qwen35VideoEncoder
 from models.generator_wan21 import Wan21Generator
 assert not any(x.startswith('models.references') for x in sys.modules)
 '''

@@ -12,10 +12,9 @@ from pathlib import Path
 
 import torch
 from torch import nn
-from torch.nn import functional as F
 
 from configs.config import DEFAULTS
-from training.mcore import MCoreRuntime, _cpu, _optimizers
+from training.runtime import MCoreRuntime, _cpu, _optimizers
 from training.optimizer import parameter_groups
 
 
@@ -36,21 +35,16 @@ def main():
         vision_lr=1e-3,
     )
     runtime = MCoreRuntime(config)
-    from models.generator_wan21 import _FP32Linear
+    from models.wan_layers import FP32Linear
 
     class FunctionalGDN(nn.Module):
         def __init__(self):
             super().__init__()
-            self.conv1d = nn.Conv1d(8, 8, 4, groups=8)
+            self.conv1d = nn.Conv1d(8, 8, 4, groups=8, padding=3)
 
         def forward(self, x):
-            return F.conv1d(
-                x.transpose(1, 2),
-                self.conv1d.weight,
-                self.conv1d.bias,
-                groups=8,
-                padding=3,
-            )[..., : x.shape[1]].transpose(1, 2)
+            return self.conv1d(x.transpose(1, 2))[..., : x.shape[1]].transpose(1, 2)
+
 
     class Model(nn.Module):
         def __init__(self):
@@ -60,8 +54,8 @@ def main():
             )
             self.generator = nn.ModuleDict(
                 dict(
-                    condition_proj=nn.Linear(8, 8),
-                    time=nn.Sequential(_FP32Linear(8, 8), nn.SiLU(), _FP32Linear(8, 8)),
+                    text_embedding=nn.Linear(8, 8),
+                    time=nn.Sequential(FP32Linear(8, 8), nn.SiLU(), FP32Linear(8, 8)),
                 )
             )
             self.lm_head = nn.Linear(8, 2)
@@ -70,15 +64,15 @@ def main():
             hidden = self.backbone["linear_attn"](self.backbone["proj"](x))
             loss = self.lm_head(hidden).float().square().mean()
             if video:
-                value = self.generator["condition_proj"](hidden)
+                value = self.generator["text_embedding"](hidden)
                 loss = loss + self.generator["time"](value).square().mean()
             return loss
 
     torch.manual_seed(510)
     base = Model()
-    reference = deepcopy(base).to(device=runtime.device, dtype=torch.bfloat16)
+    from models.qwen35_layers import cast_for_training
+    reference = cast_for_training(deepcopy(base), runtime.device)
     wrapped, optimizer, scheduler = runtime.prepare_model(base)
-    assert len(runtime.functional_hooks) == 1
     master_map = {
         id(p): nn.Parameter(p.detach().float().clone()) for p in reference.parameters()
     }

@@ -1,7 +1,6 @@
-.venv/
-.venv-npu*/
+.venv*
 .python/
-.deps/
+.deps
 .mcore-migration-record
 __pycache__/
 *.pyc

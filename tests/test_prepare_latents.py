@@ -213,7 +213,7 @@ def test_native_qwen_fps_and_frame_count_are_mutually_exclusive():
 
 def test_prepare_native_caches_load_without_changing_dataset(tmp_path, monkeypatch):
     from data.codec import WanVideoCodec
-    from models.backbone_qwen35 import Qwen35VideoEncoder
+    from models.vision_encoder import Qwen35VideoEncoder
 
     torch.set_num_threads(2)
     config, processor, model, _, _ = make_fixture(tmp_path / "fixture")

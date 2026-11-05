@@ -12,6 +12,20 @@ from models.references import modeling_wan21 as native
 from models.generator_wan21 import Wan21Generator
 
 
+def native_state(model, *, gradients=False):
+    values = {}
+    for name, parameter in model.named_parameters():
+        tensor = parameter.grad if gradients else parameter
+        if tensor is None:
+            continue
+        name = name.replace('.impl.', '.')
+        if '.kv.' in name:
+            values.update({name.replace('.kv.', f'.{kind}.'): part for kind, part in zip(('k', 'v'), tensor.chunk(2, 0))})
+        else:
+            values[name] = tensor
+    return values
+
+
 def architecture(**updates):
     values = dict(model_type="t2v", patch_size=(1, 2, 2), text_len=5,
                   in_dim=4, out_dim=4, dim=24, ffn_dim=48, freq_dim=8,
@@ -93,10 +107,10 @@ def test_gradients_reach_latents_conditions_and_original_wan_parameters():
         assert_nonzero_finite(x.grad)
     assert_nonzero_finite(condition.grad[mask])
     assert torch.count_nonzero(condition.grad[~mask]) == 0
-    for name in ("condition_proj.weight", "text_embedding.0.weight", "patch_embedding.weight",
+    for name in ("text_embedding.0.weight", "text_embedding.2.weight", "patch_embedding.weight",
                  "time_embedding.0.weight", "time_projection.1.weight",
                  "blocks.0.self_attn.q.weight", "blocks.0.cross_attn.k.weight", "head.head.weight"):
-        assert_nonzero_finite(dict(model.named_parameters())[name].grad)
+        assert_nonzero_finite(native_state(model, gradients=True)[name])
 
 
 def test_gradient_checkpointing_matches_eager_outputs_and_gradients():
@@ -157,12 +171,9 @@ def test_matches_native_wan_forward_and_condition_gradients(monkeypatch):
     with torch.no_grad():
         source.head.head.weight.normal_(std=0.05)
     adapted = Wan21Generator(condition_dim=10, attention_backend="sdpa", **architecture())
-    missing, unexpected = adapted.load_state_dict(source.state_dict(), strict=False)
-    assert set(missing) == {"condition_proj.weight", "condition_proj.bias"}
-    assert not unexpected
     with torch.no_grad():
-        adapted.condition_proj.weight.copy_(torch.eye(10))
-        adapted.condition_proj.bias.zero_()
+        for name, target in native_state(adapted).items():
+            target.copy_(source.state_dict()[name])
     monkeypatch.setattr(native, "flash_attention", native_sdpa)
     latents, times, _, _ = inputs()
     context = torch.randn(2, source.text_len, source.text_dim, requires_grad=True)
@@ -206,11 +217,13 @@ def test_loads_real_native_checkpoint_without_resetting_wan_weights(tmp_path, sh
         tmp_path / "wan", condition_dim=7, attention_backend="sdpa",
     )
     original = source.state_dict()
-    assert set(adapted.state_dict()) - set(original) == {"condition_proj.weight", "condition_proj.bias"}
+    assert set(native_state(adapted)) == set(original)
+    assert adapted.text_embedding[0].weight.shape == (source.dim, 7)
     for name, value in original.items():
-        torch.testing.assert_close(adapted.state_dict()[name], value, rtol=0, atol=0)
+        if name != "text_embedding.0.weight":
+            torch.testing.assert_close(native_state(adapted)[name], value, rtol=0, atol=0)
     assert all(not parameter.is_meta for parameter in adapted.parameters())
-    assert_nonzero_finite(adapted.condition_proj.weight)
+    assert_nonzero_finite(adapted.text_embedding[0].weight)
     assert not adapted.training
     latents, times, condition, mask = inputs()
     assert all(torch.isfinite(x).all() for x in adapted(latents, times, condition, condition_mask=mask))
@@ -222,7 +235,8 @@ def test_native_load_bfloat16_and_full_generator_checkpoint_roundtrip(tmp_path):
         tmp_path / "wan", condition_dim=7, attention_backend="sdpa", torch_dtype=torch.bfloat16,
         gradient_checkpointing=True,
     )
-    assert all(p.dtype == torch.bfloat16 for p in model.parameters())
+    assert all(p.dtype == (torch.float32 if name.startswith(("time_embedding.", "time_projection.")) else torch.bfloat16)
+               for name, p in model.named_parameters())
     model.save_pretrained(tmp_path / "adapted")
     saved = json.loads((tmp_path / "adapted/config.json").read_text())
     for key in ("condition_dim", "patch_size", "text_dim", "qk_norm", "cross_attn_norm", "attention_backend"):
@@ -258,33 +272,44 @@ def test_rejects_incomplete_or_incompatible_native_checkpoints(tmp_path, corrupt
         Wan21Generator.from_wan_pretrained(tmp_path, condition_dim=7)
 
 
-def test_complete_checkpoint_cannot_silently_lose_condition_projection(tmp_path):
+def test_complete_checkpoint_cannot_silently_lose_adapter_weight(tmp_path):
     from safetensors.torch import load_file, save_file
     generator().save_pretrained(tmp_path)
     path = tmp_path / "diffusion_pytorch_model.safetensors"
     state = load_file(path)
-    del state["condition_proj.weight"]
+    del state["text_embedding.0.impl.weight"]
+    save_file(state, path, metadata={"format": "pt"})
+    with pytest.raises(ValueError, match="Incomplete adapted"):
+        Wan21Generator.from_pretrained(tmp_path, local_files_only=True)
+
+
+
+def test_rejects_old_three_layer_adapter_checkpoint(tmp_path):
+    from safetensors.torch import load_file, save_file
+    generator().save_pretrained(tmp_path)
+    path = tmp_path / "diffusion_pytorch_model.safetensors"
+    state = load_file(path)
+    # Even equal input dimensions must not silently accept an old extra layer.
+    state["condition_proj.weight"] = torch.eye(7)
+    state["condition_proj.bias"] = torch.zeros(7)
     save_file(state, path, metadata={"format": "pt"})
     with pytest.raises(ValueError, match="Incomplete adapted"):
         Wan21Generator.from_pretrained(tmp_path, local_files_only=True)
 
 
 def test_real_rope_matches_native_complex_rotation_and_extends_axes():
+    from ops.wan_layout import wan_rope
+    from models.wan_layers import rotary
     torch.manual_seed(77)
-    model = generator()
-    grids = [(2, 2, 3), (3, 1, 2)]
-    x = torch.randn(2, 12, 3, 8, requires_grad=True)
-    from models.generator_wan21 import _apply_rope
+    grid = (2, 2, 3)
+    x = torch.randn(1, 12, 3, 8, requires_grad=True)
     source = native.WanModel(**architecture())
-    expected = native.rope_apply(x, torch.tensor(grids), source.freqs)
-    actual = _apply_rope(x, model._rope(grids, 12, x.device))
-    torch.testing.assert_close(actual, expected, atol=5e-7, rtol=5e-6)
-    extended = model._rope([(1025, 1, 1)], 1025, x.device)
-    assert extended[0].shape == (1, 1025, 1, 4)
-    assert torch.isfinite(extended[0]).all()
-    model.bfloat16()
-    assert model._rope_cache == {}
-    assert model._rope(grids, 12, x.device)[0].dtype == torch.float32
+    expected = native.rope_apply(x, torch.tensor([grid]), source.freqs)
+    actual = rotary(x[0], wan_rope(grid, 8))
+    torch.testing.assert_close(actual, expected[0], atol=5e-7, rtol=5e-6)
+    cos, sin = wan_rope((1025, 1, 1), 8)
+    assert cos.shape == (1025, 1, 4)
+    assert torch.isfinite(cos).all() and cos.dtype == torch.float32
 
 
 @pytest.mark.parametrize("bad", ["empty", "channels", "patch", "time", "condition", "mask", "all_masked"])
@@ -314,10 +339,8 @@ def test_unsupported_architectures_and_backend_fail_explicitly():
         Wan21Generator(condition_dim=7, **architecture(model_type="i2v"))
     with pytest.raises(ValueError, match="global"):
         Wan21Generator(condition_dim=7, **architecture(window_size=(2, 2)))
-    model = Wan21Generator(condition_dim=7, attention_backend="flash", **architecture())
-    latents, times, condition, mask = inputs()
-    with pytest.raises(ValueError, match="requires CUDA"):
-        model(latents, times, condition, condition_mask=mask)
+    with pytest.raises(ValueError, match="attention_backend"):
+        Wan21Generator(condition_dim=7, attention_backend="flash", **architecture())
 
 
 @pytest.mark.parametrize("solver", ["euler", "heun"])
@@ -328,21 +351,13 @@ def test_sampler_integrates_native_noise_minus_clean_direction(monkeypatch, solv
     clean = torch.randn_like(noise[0])
     velocity = noise[0] - clean
     seen = []
-    def constant_velocity(values, timesteps, condition, **kwargs):
+    def constant_velocity(values, timesteps, condition, *args, **kwargs):
         seen.append(timesteps.clone())
         return [velocity.expand_as(x) for x in values]
-    monkeypatch.setattr(network, "forward", constant_velocity)
+    monkeypatch.setattr(network, "_predict_videos", constant_velocity)
     result = network.sample(torch.randn(1, 3, 12), initial_noise=noise, steps=4,
                             solver=solver, time_shift=3.0)
     torch.testing.assert_close(result[0], clean, rtol=1e-5, atol=1e-6)
     assert float(seen[0][0]) == 1000.
     assert all(bool(((t >= 0) & (t <= 1000)).all()) for t in seen)
     assert len(seen) == 4 * (2 if solver == "heun" else 1)
-
-
-def test_runtime_wan_retains_complete_unmodified_native_source():
-    from pathlib import Path
-    from models import generator_wan21
-    actual = Path(generator_wan21.__file__).read_bytes()
-    reference = Path(native.__file__).read_bytes()
-    assert actual.split(b"# CQ BEGIN:", 1)[0] == reference

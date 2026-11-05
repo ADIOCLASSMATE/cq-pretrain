@@ -19,7 +19,7 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
-from utils.distributed import run_io_phase
+from utils.file_sync import run_io_phase
 
 
 EMA_SCHEMA = "selfless_rank_sharded_fp32_ema_v1"

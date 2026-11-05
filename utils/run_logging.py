@@ -85,7 +85,7 @@ class RunLogger:
 
         source_hashes = {
             str(p.relative_to(project)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for folder in ("training", "evaluations", "utils", "configs", "data", "models")
+            for folder in ("distributed", "training", "evaluations", "utils", "configs", "data", "models")
             for p in (project / folder).rglob("*.py")
             if "references" not in p.parts
         }

@@ -18,7 +18,7 @@ import uuid
 
 import torch
 
-from utils.distributed import run_io_phase
+from utils.file_sync import run_io_phase
 from utils.checkpoint_catalog import (
     SCHEMA,
     durable_json,
@@ -354,7 +354,7 @@ def export_weights(path, *, model=None, ema_checkpoint=None, config=None, dtype=
     temporary = path.with_name(f".{path.name}.partial-{uuid.uuid4().hex}")
     torch.save(
         {
-            "schema": "umm_weights_v1",
+            "schema": "umm_weights_v2",
             "model": state,
             "config": config,
             "weights": "ema" if ema_checkpoint is not None else "raw",

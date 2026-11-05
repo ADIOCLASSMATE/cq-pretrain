@@ -7,7 +7,7 @@ From the repository root, with the project and device runtime installed::
 
 CUDA is also supported. Uses synthetic noisy VAE latents and backbone conditions;
 does not load a VAE/backbone, update weights, download assets or assess video quality.
-All native weights are compared exactly after BF16 conversion, followed by full
+All native weights are compared exactly in their execution dtype, followed by full
 model forward/backward checks. A supplied download_manifest.json is hash-checked.
 """
 from __future__ import annotations
@@ -41,8 +41,16 @@ def audit_checkpoint(model, directory):
     manifest_path = directory / "download_manifest.json"
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
     entries = {row["path"]: row for row in manifest.get("files", [])}
-    state = model.state_dict()
+    state = {}
+    for name, value in model.named_parameters():
+        name = name.replace(".impl.", ".")
+        if ".kv." in name:
+            for label, part in zip(("k", "v"), value.chunk(2, 0)):
+                state[name.replace(".kv.", f".{label}.")] = part
+        else:
+            state[name] = value
     seen, files, parameter_count = set(), [], 0
+    replaced = []
     for name in shards:
         path = directory / name
         with path.open("rb") as handle:
@@ -56,15 +64,20 @@ def audit_checkpoint(model, directory):
             for key in handle.keys():
                 assert key not in seen, f"Duplicate checkpoint key: {key}"
                 source = handle.get_tensor(key)
-                assert key in state and torch.equal(state[key], source.to(state[key].dtype)), key
+                assert key in state, key
+                if key == "text_embedding.0.weight" and state[key].shape != source.shape:
+                    assert state[key].shape == (model.dim, model.condition_dim)
+                    replaced.append(key)
+                else:
+                    assert torch.equal(state[key], source.to(state[key].dtype)), key
                 seen.add(key)
                 parameter_count += source.numel()
-    assert set(state) - seen == {"condition_proj.weight", "condition_proj.bias"}
+    assert set(state) == seen
     assert all(not p.is_meta for p in model.parameters())
     return {"repo": manifest.get("repo"), "revision": manifest.get("revision"), "files": files,
-            "native_tensors_exact_after_bfloat16_conversion": len(seen),
+            "native_tensors_exact_in_execution_dtype": len(seen) - len(replaced),
             "native_parameter_count": parameter_count,
-            "new_parameters": ["condition_proj.weight", "condition_proj.bias"]}
+            "reinitialized_parameters": replaced}
 
 
 def compare(actual, expected):
@@ -139,9 +152,9 @@ def check_backward(model, inputs):
         assert parameter.grad is not None, f"Missing gradient: {name}"
         checks.append(torch.isfinite(parameter.grad).all())
     assert bool(torch.stack(checks).all()), "Nonfinite parameter gradient"
-    names = ("condition_proj.weight", "patch_embedding.weight", "text_embedding.0.weight",
-             "time_embedding.0.weight", "time_projection.1.weight", "blocks.0.self_attn.q.weight",
-             "blocks.0.cross_attn.k.weight", f"blocks.{model.num_layers - 1}.self_attn.q.weight",
+    names = ("text_embedding.0.impl.weight", "patch_embedding.weight", "text_embedding.2.impl.weight",
+             "time_embedding.0.weight", "time_projection.1.weight", "blocks.0.self_attn.q.impl.weight",
+             "blocks.0.cross_attn.kv.impl.weight", f"blocks.{model.cfg.dit_layers - 1}.self_attn.q.impl.weight",
              "head.head.weight")
     return {"loss": loss.detach().item(), "gradient_checkpointing": model.gradient_checkpointing,
             "latent_gradient_norms": latent_norms, "valid_condition_gradient_norm": condition_norm,
@@ -154,7 +167,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--device", required=True, help="An actual accelerator, e.g. npu:0 or cuda:0")
-    parser.add_argument("--condition-dim", type=int, default=1024)
+    parser.add_argument("--condition-dim", type=int, default=2048)
     parser.add_argument("--report", type=Path, default=Path("output/wan21-validation/report.json"))
     args = parser.parse_args()
     started = time.monotonic()
@@ -165,6 +178,8 @@ def main():
     try:
         if args.device.startswith("npu"):
             import torch_npu
+            from distributed.megatron import prepare_npu
+            prepare_npu()
             report["torch_npu"] = torch_npu.__version__
         import diffusers
         report["diffusers"] = diffusers.__version__

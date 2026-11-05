@@ -1,14 +1,26 @@
 # UMM v3：Qwen3.5 + Wan2.1
 
-当前主链路支持单视频样本的 T2V/V2T 持续预训练和无缓存推理。Content/query 等长，文本 query 预测同位置 token，整段视频 query 只读取第一个 visual token 之前的前缀。Qwen 原生 ViT 提供 content；Wan 对整段视频 latent 联合建模。
+当前主链路支持单视频样本的 T2V/V2T 持续预训练和无缓存推理。训练只构造受监督的文本 query 和目标视频 query；文本 query 预测同位置 token，整段视频 query 只读取第一个 visual token 之前的前缀。Qwen 原生 ViT 提供 content；Wan 对整段视频 latent 联合建模。
 
-模型代码收敛为三个模块：
+模型与运行时按职责组织：
 
 | 模块 | 职责 |
 | --- | --- |
-| `models/backbone_qwen35.py` | 原生 Qwen3.5、ViT、原生 M-RoPE、标注的 CQ 分支和视频输入适配 |
-| `models/generator_wan21.py` | 原生 Wan2.1 权重布局、条件投影、视频 flow 前向和采样 |
-| `models/modeling_umm.py` | 组装两者，将文本 query 接 LM head、视频 query 接 Wan，提供无缓存生成 |
+| `models/backbone_qwen35.py` | 视频输入、原生 M-RoPE 和 CQ 布局适配 |
+| `models/qwen35_layers.py`、`models/wan_layers.py` | 与 main 相同的 Qwen/Wan 数值执行层 |
+| `ops/` | 融合算子、GDN、attention 布局、分块交叉熵和 Wan 几何 |
+| `models/vision_encoder.py` | 原生 ViT 包装、视频特征与 M-RoPE 接口 |
+| `models/decoding.py` | CQ 文本采样与解码 |
+| `models/generator_wan21.py` | 变长视频输入、权重加载与 flow 采样 |
+| `models/modeling_umm.py` | 组装模型，将文本 query 接 LM head、视频 query 接 Wan |
+| `distributed/megatron.py` | 与 main 相同的 TP 层、分布式优化器、FP32 梯度累积与 MC2 |
+| `training/runtime.py` | 视频训练的学习率、生命周期和状态保存 |
+| `distributed/communication.py` | 参数聚合与梯度同步调度 |
+| `utils/file_sync.py` | 跨 rank 文件读写结果与错误同步 |
+
+video 保留 **Qwen3.5-2B** 初始权重选择；main 使用 Qwen3.5-2B-Base。Wan 条件 adapter 直接使用 **2048 → 1536 → 1536** 两层 MLP（中间 GELU），没有额外 `condition_proj`。从官方 Wan 初始化时仅重新初始化维度不匹配的第一层输入矩阵，其余原生参数严格加载；两层 adapter 都使用 `projector_lr`，由 `train_adapter` 控制训练范围。
+
+训练 checkpoint、权重导出及恢复契约均使用 v2，旧训练结果和旧三层 adapter 直接拒绝加载，不转换权重、不补齐缺失的训练配置。
 
 原生参考文件保留在 `models/references/`，运行时不导入。已移除当前主链路不再使用的旧 Qwen3/Z2 图像路线备份。
 
@@ -44,7 +56,9 @@ TORCH_DEVICE_BACKEND_AUTOLOAD=0 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 \
 
 CPU 小模型测试显式选择 `distributed.backend=accelerate`、`training.device=cpu` 和原生计算后端；这条训练接口仅用于 CPU 回归。`accelerate` 包仍用于 MCore 的数据分片和 CPU 测试，不是 DeepSpeed 回退入口。需要真实设备的测试由各自的显式环境变量启用。
 
-视频配置还显式选择 `model.qwen_gdn_backend=mindspeed`，在 CQ 分支调用固定提交的官方 Triton GDN；通用配置的 `native` 保留原生 Torch 参考计算。两者没有静默回退。环境新增 Triton 3.2.0 / Triton-Ascend 3.2.1，安装脚本保证 Ascend wheel 最后覆盖共享文件。上游 NumPy 约束存在冲突：保留 CQ 的 1.26.0，并在锁文件记录 Triton-Ascend 要求 1.26.4 的元数据例外，`pip check` 并非全绿。
+默认 `model.qwen_gdn_backend=ascendc`，复用 main 验证过的 A2 GDN；也保留 `mindspeed` 对照接口。CPU 执行独立 Torch 参考，不能作为 NPU kernel 通过的证据。`model.content_visibility=visual_block` 表示图像组内双向、视频原生时间块内双向且块间 causal；`causal` 保留原生对照。Wan 始终对整个 clip 双向建模。
+
+NPU 使用与 main 相同的 `.deps/delta-ascendc/site-packages` 和 `.deps/delta64/site-packages` 固定算子安装，环境脚本设置 custom OPP、稳定 ABI 和 Triton 选项。该编译产物必须先准备好，普通 PyPI 依赖安装不会生成它。运行契约记录实际加载的 AscendC 二进制与源码摘要。
 
 `scripts/env_mindspeed.sh` 支持在 Bash 和 zsh 中直接 source。安装后及每次环境加载都会运行 `utils/triton_integrity.py`，按 Ascend 的 RECORD 校验共享文件及 NPU 自有文件的大小、SHA-256 和导入路径，发现覆盖或删除就报错返回。可用 `.venv-npu/bin/python utils/triton_integrity.py` 单独检查，无需初始化 NPU。
 
@@ -66,4 +80,4 @@ bash scripts/evaluate.sh --config /path/to/run.yaml --checkpoint /path/to/weight
 
 评估结果放在 `outputs/<exp_id>/evaluations/<eval_id>/`，日志放在 `logs/eval/<eval_id>/<attempt_id>/`；续跑复用结果但新建日志 attempt。评估进程数默认继承 `distributed.num_processes`，可由 `evaluation.num_processes` 覆盖。详细参数、输入视图和续跑规则见 [统一评估说明](docs/video_training.md#统一采样与评估)。[VBench 运行说明](evaluations/benchmarks/vbench/README.md) 保留原协议参考；本阶段明确接口，官方评分仍需单独配置 CUDA/VBench 环境，不声明已完成端到端评分适配。
 
-官方 MindSpeed GDN 与标准行索引接入后，四卡真实权重连续训练 4 步和中断后自动恢复至第 4 步已逐位一致：模型、FP32 master weights、Adam、RNG 和数据游标共 5,480 个张量全部相同。最近 N 个 checkpoint 清理、日志隔离及 CQ 无泄漏检查通过。完整设置、数值判据和依赖例外见验证记录；这属于短程链路验证，不代表长期收敛或生成质量评估。
+当前共享执行层迁移的 CPU 回归为 **270 passed、18 skipped**；跳过的是需显式开启设备的检查。main 同期回归为 157 passed、51 subtests passed。16 卡通过实际 AscendC/MindSpeed 算子、混合 V2T/T2V、GA=2、重计算和小模型精确恢复检查；完整 Qwen3.5-2B + Wan1.3B 初始权重完成两次更新。完整权重使用短合成视频，不代表长视频吞吐或质量评测。详细结果见 [验证记录](docs/validation.md) 和 [机器可读报告](docs/shared_runtime_validation_20261105.json)，历史四卡结果只适用于当时的实现。

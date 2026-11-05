@@ -27,11 +27,12 @@ DEFAULTS = {
         "freeze_vision": True,
         "gradient_checkpointing": True,
         "attn_implementation": "sdpa",
-        "qwen_gdn_backend": "native",
-        "wan_attention_backend": "sdpa",
+        "qwen_gdn_backend": "ascendc",
+        "content_visibility": "visual_block",
+        "wan_attention_backend": "auto",
         "train_language": True,
         "train_wan": True,
-        "train_condition_proj": True,
+        "train_adapter": True,
         "lambda_text": 0.05,
         "lambda_video": 1.0,
         "video_uncond_prob": 0.1,
@@ -233,8 +234,10 @@ def validate_config(config, *, purpose="train"):
         raise ValueError(
             f"Unknown model settings (legacy image configs are unsupported): {sorted(set(model) - allowed_model)}"
         )
-    if model["qwen_gdn_backend"] not in {"native", "mindspeed"}:
-        raise ValueError("model.qwen_gdn_backend must be native or mindspeed")
+    if model["content_visibility"] not in {"visual_block", "causal"}:
+        raise ValueError("model.content_visibility must be visual_block or causal")
+    if model["qwen_gdn_backend"] not in {"ascendc", "mindspeed"}:
+        raise ValueError("model.qwen_gdn_backend must be ascendc or mindspeed")
     if model["qwen_gdn_backend"] == "mindspeed" and (
         train["device"] != "npu" or train["mixed_precision"] != "bf16"
     ):

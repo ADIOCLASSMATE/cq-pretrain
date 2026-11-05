@@ -9,7 +9,7 @@ def read_weights(path):
     if path.is_dir():
         path = path / "weights.pt"
     payload = torch.load(path, map_location="cpu", weights_only=True)
-    if payload.get("schema") != "umm_weights_v1" or not isinstance(
+    if payload.get("schema") != "umm_weights_v2" or not isinstance(
         payload.get("model"), dict
     ):
         raise ValueError(
