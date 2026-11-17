@@ -385,6 +385,13 @@ def main():
     training_state['kernel_options']['cpu_noise_cast']=os.environ.get('PRETRAIN_CPU_NOISE_CAST','1')
     training_state['kernel_options']['moss_fused_pointwise']=os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
     training_state['kernel_options']['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
+    # A kernel switch that changes speed or numerics must be attributable from
+    # the run record alone, without recovering it from source hashes later.
+    import ops.cuda_fused as cuda_fused
+    training_state['kernel_options']['cuda_fused_norm']=(
+        cuda_fused._ENABLED if accel.BACKEND=='cuda' else None)
+    training_state['kernel_options']['backend']=accel.BACKEND
+    training_state['kernel_options']['grad_reduce_in_fp32']=not args.bf16_grad_reduce
     training_state['qwen35_assets']=text_manifest
     if ema is not None:
         training_state['renderer_ema']=dict(schema=ema.schema,module='renderer',decay=ema.decay,dtype='float32',

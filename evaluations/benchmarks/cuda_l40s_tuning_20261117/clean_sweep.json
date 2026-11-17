@@ -1,0 +1,94 @@
+{
+  "purpose": "Recompute depth at production shape with the fused-norm source frozen; supersedes the confounded partial-1117 sweep.",
+  "frozen_source_commit": "5598364",
+  "source_trees_observed": [
+    "2f718e739349621d8b5ae920"
+  ],
+  "comparable": true,
+  "shape": {
+    "world": 16,
+    "nodes": 2,
+    "tp": 1,
+    "dp": 16,
+    "sequence_length": 8192,
+    "global_batch": 128,
+    "grad_accum": 8,
+    "bf16_grad_reduce": true,
+    "gpu": "NVIDIA L40S (45GB)"
+  },
+  "runs": {
+    "bb22-dit26": {
+      "mean_seconds": 24.35477638244629,
+      "tokens_per_second": 43054.22408869914,
+      "peak_memory_gib": 26.402462005615234,
+      "dp": 16,
+      "tp": 1,
+      "grad_accum": 8,
+      "sequence_length": 8192,
+      "checkpoint_backbone": false,
+      "checkpoint_dit": false,
+      "checkpoint_backbone_layers": 22,
+      "checkpoint_dit_layers": 26,
+      "ranks_with_receipts": 16,
+      "source_tree": "2f718e739349621d8b5ae920"
+    },
+    "bb24-dit22": {
+      "mean_seconds": 24.600098927815754,
+      "tokens_per_second": 42624.86923637356,
+      "peak_memory_gib": 23.82630729675293,
+      "dp": 16,
+      "tp": 1,
+      "grad_accum": 8,
+      "sequence_length": 8192,
+      "checkpoint_backbone": false,
+      "checkpoint_dit": false,
+      "checkpoint_backbone_layers": 24,
+      "checkpoint_dit_layers": 22,
+      "ranks_with_receipts": 16,
+      "source_tree": "2f718e739349621d8b5ae920"
+    },
+    "full": {
+      "mean_seconds": 24.59878412882487,
+      "tokens_per_second": 42627.14752520138,
+      "peak_memory_gib": 22.1923885345459,
+      "dp": 16,
+      "tp": 1,
+      "grad_accum": 8,
+      "sequence_length": 8192,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true,
+      "checkpoint_backbone_layers": 0,
+      "checkpoint_dit_layers": 0,
+      "ranks_with_receipts": 16,
+      "source_tree": "2f718e739349621d8b5ae920"
+    },
+    "profile": {
+      "mean_seconds": 25.487197240193684,
+      "tokens_per_second": 41141.28321439677,
+      "peak_memory_gib": 22.1923885345459,
+      "dp": 16,
+      "tp": 1,
+      "grad_accum": 8,
+      "sequence_length": 8192,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true,
+      "checkpoint_backbone_layers": 0,
+      "checkpoint_dit_layers": 0,
+      "ranks_with_receipts": 16,
+      "source_tree": "2f718e739349621d8b5ae920"
+    }
+  },
+  "conclusions": [
+    "Recompute depth is worth 0-1% on this 2B+1.3B model: bb24-dit22 is -0.0% and bb22-dit26 is +1.0% against full recompute, while costing 1.6-4.2 GiB.",
+    "Keep full recompute: it is the fastest-or-tied configuration AND the cheapest in memory, leaving headroom for real-data packs whose image counts vary.",
+    "The earlier \"+25%\" attributed to partial recompute was entirely the fused norms (30.374 / 1.212 = 25.1s, close to the 24.3-24.6s measured post-fusion)."
+  ],
+  "production_end_to_end": {
+    "pre_fusion_mean_seconds": 30.374,
+    "pre_fusion_tokens_per_second": 34522,
+    "post_fusion_mean_seconds": 24.59878412882487,
+    "post_fusion_tokens_per_second": 42627.14752520138,
+    "speedup": 1.2348,
+    "note": "Pre-fusion baseline is prod-1117/recompute-full, same shape, earlier source tree. Confirms the controlled 2-card A/B (1.212x) at 16-card production scale."
+  }
+}
