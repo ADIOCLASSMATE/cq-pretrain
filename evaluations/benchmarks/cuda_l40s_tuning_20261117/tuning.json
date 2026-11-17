@@ -686,5 +686,50 @@
         }
       ]
     }
-  }
+  },
+  "production_recompute_sweep": {
+    "recompute-full": {
+      "peak_memory_gib": 22.317350387573242,
+      "mean_seconds": 30.374013264973957,
+      "aggregate_tokens_per_second": 34522.14203149684,
+      "per_card_tokens_per_second": 2157.6338769685526,
+      "world": 16,
+      "tp": 1,
+      "dp": 16,
+      "grad_accum": 8,
+      "sequence_length": 8192,
+      "global_batch": 128,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true,
+      "checkpoint_backbone_layers": 0,
+      "checkpoint_dit_layers": 0,
+      "ranks_with_step_receipts": 16
+    },
+    "recompute-none": {
+      "failed": true,
+      "reason": "CUDA OOM"
+    },
+    "recompute-dit": {
+      "failed": true,
+      "reason": "CUDA OOM"
+    },
+    "recompute-bb": {
+      "peak_memory_gib": 28.40938949584961,
+      "mean_seconds": 30.16253089904785,
+      "aggregate_tokens_per_second": 34764.19149008151,
+      "per_card_tokens_per_second": 2172.7619681300944,
+      "world": 16,
+      "tp": 1,
+      "dp": 16,
+      "grad_accum": 8,
+      "sequence_length": 8192,
+      "global_batch": 128,
+      "checkpoint_backbone": false,
+      "checkpoint_dit": false,
+      "checkpoint_backbone_layers": 24,
+      "checkpoint_dit_layers": 0,
+      "ranks_with_step_receipts": 16
+    }
+  },
+  "production_recompute_sweep_note": "16xL40S (2 nodes), Qwen3.5-2B-Base + Wan2.1-1.3B, seq 8192, TP1 DP16, global batch 128 (GA 8), --bf16-grad-reduce, synthetic batches. Full recompute is the only configuration that fits: dropping recompute from either the backbone or the DiT alone exhausts the 22 GiB of per-card headroom. Device-time only, no corpus I/O."
 }
