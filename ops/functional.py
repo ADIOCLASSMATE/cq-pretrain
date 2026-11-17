@@ -11,20 +11,30 @@ if _ATTENTION_LAYOUT not in ("SBH", "BNSD"):
 
 
 def modulated_norm(hidden, scale, shift, fused=True, eps=1e-6, upcast=False):
-    if _COMPILE_MODULATION and fused and hidden.device.type == "npu":
-        from ops.torchair import compiled
+    if _COMPILE_MODULATION and fused:
+        if hidden.device.type == "npu":
+            from ops.torchair import compiled
 
-        return compiled("modulated_norm")(hidden, scale, shift, eps, upcast)
+            return compiled("modulated_norm")(hidden, scale, shift, eps, upcast)
+        if hidden.device.type == "cuda":
+            from ops.cuda_compile import compiled
+
+            return compiled("modulated_norm")(hidden, scale, shift, eps, upcast)
     from ops.torchair import modulated_norm_reference
 
     return modulated_norm_reference(hidden, scale, shift, eps, upcast)
 
 
 def gated_add(hidden, branch, gate, fused=True):
-    if _COMPILE_MODULATION and fused and hidden.device.type == "npu":
-        from ops.torchair import compiled
+    if _COMPILE_MODULATION and fused:
+        if hidden.device.type == "npu":
+            from ops.torchair import compiled
 
-        return compiled("gated_add")(hidden, branch, gate)
+            return compiled("gated_add")(hidden, branch, gate)
+        if hidden.device.type == "cuda":
+            from ops.cuda_compile import compiled
+
+            return compiled("gated_add")(hidden, branch, gate)
     return hidden + branch * gate
 
 
