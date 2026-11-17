@@ -30,7 +30,13 @@ numpy==1.26.4
 packaging==26.3
 pillow==13.0.0
 pluggy==1.7.0
-pyarrow==26.0.1
+# pyarrow 26 hard-requires NumPy >= 2 at runtime (a check inside the compiled
+# extension, not in its metadata, so pip resolves the pair happily and then
+# import fails). This venv uses --system-site-packages over an NGC image that
+# ships NumPy 1.26.4, and torch there is built against the NumPy 1.x C API, so
+# moving the image to NumPy 2 would break torch interop. 25.0.1 is the newest
+# release without that gate.
+pyarrow==25.0.1
 pydantic==2.14.3
 pydantic-core==2.50.4
 pygments==2.21.0

@@ -1,0 +1,39 @@
+{
+  "what": "Inductor-fused backbone SwiGLU over the packed gate/up projection",
+  "why": "The SwiGLU chain was the largest remaining non-GEMM block in the all-on profile: aten::mul 3.6%, silu 1.2%, silu_backward 0.9% and the chunk-backward aten::cat 1.4%, about 7% of kernel time.",
+  "why_not_the_published_kernel": "fla.modules.activations.swiglu reads two contiguous inputs. Here gate/up are strided views of one packed [.., 2*ffn] projection (the official Qwen checkpoint layout) and that kernel returns wrong values on strided input without raising (measured relative error 1.414). Forcing contiguity copies ~400 MB per call and drops the kernel win from 1.77x to 1.15x. Inductor reads the strides directly.",
+  "kernel_speedup_fwd_bwd": 1.66,
+  "gate": {
+    "tolerance": 0.02,
+    "worst_output_error": 0.00285,
+    "worst_dx_error": 0.00283,
+    "covers": [
+      "strided input asserted, not merely accepted",
+      "reentrant checkpoint, which is how the model actually calls it",
+      "odd token count, for dynamic shapes"
+    ]
+  },
+  "end_to_end_2gpu": {
+    "seq": 8192,
+    "off_s": 2.666,
+    "on_s": 2.611,
+    "speedup": 1.0212,
+    "loss_drift": 0.0007813,
+    "noise_floor": 0.0009153
+  },
+  "production_16gpu": {
+    "off_s": 19.29922040303548,
+    "on_s": 18.741160710652668,
+    "off_tokens_per_second": 54332.55738325443,
+    "on_tokens_per_second": 55950.42997544857,
+    "speedup": 1.0298,
+    "peak_gib": 20.218618869781494,
+    "ranks_with_receipts": [
+      16,
+      16
+    ],
+    "all_finite": true
+  },
+  "cumulative_vs_pre_optimization": 1.6207,
+  "attribution": "PRETRAIN_CUDA_FUSED_SWIGLU is its own switch, split out of PRETRAIN_CUDA_FUSED_OPS so this A/B moves one variable and run.json records which one."
+}
