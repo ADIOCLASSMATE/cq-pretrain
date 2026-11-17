@@ -1,0 +1,46 @@
+{
+  "question": "copy/index is 10.7% of kernel time with every fusion on. Most of it is GatedDelta.forward gathering projected values into the CPU-planned event order, once per GDN layer, with a scatter-add for each gather's backward.",
+  "verdict": "Keep the current implementation. Three alternatives were slower.",
+  "measured_on": "NVIDIA L40S, real plan from fake_batch at sequence_length 8192",
+  "layout": {
+    "content_rows": 8192,
+    "event_rows": 17149,
+    "note": "Events outnumber content about 2:1 because read-only CQ query events interleave with content writes. That ratio is the CQ architecture, not an implementation choice.",
+    "nondecreasing_fraction": 0.567004919052124,
+    "locality": "The event index is only 56.7% nondecreasing, against 50.2% for a random permutation. An early benchmark assumed the plan was nearly monotonic because content is written in sigma order; interleaved query events scramble it, so the gather is latency-bound, running at about 92 GiB/s of this card's ~864 GB/s."
+  },
+  "variants": {
+    "current": {
+      "ms": 7.142121887207031,
+      "speedup": 1.0,
+      "value_max_abs": 0.0,
+      "grad_max_abs": 0.0
+    },
+    "merged": {
+      "ms": 7.8958076477050785,
+      "speedup": 0.905,
+      "value_max_abs": 0.0,
+      "grad_max_abs": 0.0
+    },
+    "masked": {
+      "ms": 8.52168960571289,
+      "speedup": 0.838,
+      "value_max_abs": 0.0,
+      "grad_max_abs": 0.0
+    },
+    "scattered": {
+      "ms": 7.0439506530761715,
+      "speedup": 1.014,
+      "value_max_abs": 0.0,
+      "grad_max_abs": 0.0
+    }
+  },
+  "why_each_alternative_lost": {
+    "merged": "One gather for k|v and one for g|beta instead of four. Same bytes moved, so it only saves kernel launches, and the contiguous copy of the strided k|v slice costs more than that. 0.90x.",
+    "masked": "Clamp the index and zero read-only rows instead of padding. The mask multiply touches every event row and needs its own backward, which costs more than the single padded row it removes. 0.84x.",
+    "scattered": "build_delta_plan numbers writes as ci = len(order), so write events carry exactly arange(nc) in order - verified True here. That makes the gather an identity on write positions, so content can be scattered into zeros instead. But allocating and zeroing the full event tensor costs about what the extra gather rows cost. 1.01x, inside noise."
+  },
+  "all_variants_bitwise_exact": true,
+  "exactness_note": "Every variant matched the current values and gradients to 0.0 absolute, so these are performance results, not accuracy tradeoffs.",
+  "remaining_if_revisited": "The cost is materializing event-ordered k/v/g/beta for the packed varlen kernel. Reducing it means changing what the kernel consumes, not how the tensors are built."
+}

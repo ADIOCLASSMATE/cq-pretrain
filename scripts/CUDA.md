@@ -480,3 +480,40 @@ against the reference, no exception raised. Copying first is correct but moves
 about 400 MB per call, leaving 1.15x, roughly 1% of a step. It is not wired, and
 `ops/cuda_fused.py` records why. If anything here ever uses that kernel, prove
 the inputs are contiguous first; the failure mode is wrong numbers, not a crash.
+
+## CQ event assembly: measured, left alone
+
+`copy/index` is 10.7% of kernel time with every fusion on, almost all of it
+`GatedDelta.forward` building event-ordered k/v/g/beta once per GDN layer.
+Three rewrites were measured against it on a real plan at sequence_length
+8192, all bitwise exact in values and gradients:
+
+| variant | ms | vs current |
+|---|---:|---:|
+| current (pad a zero row, four gathers) | 7.14 | 1.00x |
+| merged (one gather for k\|v, one for g\|beta) | 7.90 | 0.90x |
+| masked (clamp the index, zero read-only rows) | 8.52 | 0.84x |
+| scattered (scatter content into zeros) | 7.04 | 1.01x |
+
+Keep the current form. Two assumptions behind those rewrites were wrong and
+are worth recording so they are not retried:
+
+- **The event index is not nearly monotonic.** Content is written in sigma
+  order, so it looks like it should be; interleaved read-only query events
+  scramble it to 56.7% nondecreasing against 50.2% for a random permutation.
+  The gather is latency-bound at ~92 GiB/s of this card's ~864 GB/s, and a
+  first benchmark that used `torch.randint` indices happened to land on nearly
+  the same number for the wrong reason.
+- **Removing the padded row does not pay.** `cat`ing one zero row onto
+  `[8192, 2048]` is cheap; any scheme that replaces it with a mask or a memset
+  touches all 17149 event rows instead, in both directions.
+
+`build_delta_plan` numbers writes as `ci = len(order)`, so write events do
+carry exactly `arange(nc)` in order - asserted True by the benchmark. That
+makes the gather an identity on write positions, which is why the scatter
+variant is correct; it just is not faster.
+
+Events outnumber content roughly 2:1 because every CQ query is its own
+read-only event. That ratio is the architecture. Reducing this block means
+changing what the packed varlen kernel consumes, not how these tensors are
+built.
