@@ -34,6 +34,14 @@ class RMSNorm(nn.Module):
         )
 
 
+def _cuda_ops_enabled(x):
+    """True when the published fused SwiGLU / causal conv should run."""
+    if x.device.type != "cuda":
+        return False
+    from ops.cuda_fused import ops_enabled
+
+    return ops_enabled(x)
+
 class MLP(nn.Module):
     def __init__(self, cfg):
         super().__init__()
@@ -95,6 +103,10 @@ class CausalConv(nn.Module):
                 cu_seqlens=plan.content_cu,
                 cu_seqlens_cpu=plan.content_bounds,
             )[0]
+        if _cuda_ops_enabled(x):
+            from ops.cuda_fused import causal_conv1d as _cuda_conv
+
+            return _cuda_conv(x, self.weight[:, 0], plan.content_cu)
         results = []
         for a, b in zip(plan.content_bounds, plan.content_bounds[1:]):
             y = F.conv1d(

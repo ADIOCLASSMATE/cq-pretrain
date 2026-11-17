@@ -1,0 +1,439 @@
+{
+  "total_ms": 40535914.04699989,
+  "by_category": {
+    "GEMM": 16950523.735999916,
+    "elementwise": 6382762.515000299,
+    "copy/index": 4869704.408000057,
+    "other": 3713957.585999993,
+    "attention": 3389926.2580000125,
+    "GDN (FLA Triton)": 1908887.0099999972,
+    "NCCL collective": 1611802.8500000006,
+    "norm/reduce": 1056748.56599999,
+    "__gpu_memcpy": 638731.824000018,
+    "__gpu_memset": 12869.29400000007
+  },
+  "by_kernel": {
+    "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_tn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_tn_align8::Params)": 7956460.080000009,
+    "ampere_bf16_s16816gemm_bf16_256x128_ldg8_f2f_stages_32x3_nt": 2818759.5060000056,
+    "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x4_nn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x4_nn_align8::Params)": 2210390.8190000034,
+    "triton_tem_fused_zeros_1": 2013405.7060000002,
+    "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16)#1}>(at::TensorIteratorBase&, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16)#1} const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16)#1}>(at::TensorIteratorBase&, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#12}::operator()() const::{lambda(c10::BFloat16)#1} const&)::{lambda(int)#1})": 1876042.768999994,
+    "void at::native::vectorized_elementwise_kernel<8, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<char*, 3ul>)": 1541086.3720000244,
+    "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1})": 1401773.6690000026,
+    "triton_tem_fused_0": 1126621.3150000002,
+    "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nn": 926037.3570000018,
+    "void at::native::indexFuncLargeIndex<c10::BFloat16, long, unsigned int, 2, 2, -2, true, at::native::(anonymous namespace)::ReduceAdd>(at::cuda::detail::TensorInfo<c10::BFloat16, unsigned int>, at::cuda::detail::TensorInfo<c10::BFloat16 const, unsigned int>, at::cuda::detail::TensorInfo<long const, unsigned int>, int, int, unsigned int, unsigned int, long, long, at::native::(anonymous namespace)::ReduceAdd const&, c10::BFloat16)": 875809.1900000002,
+    "void at::native::indexFuncLargeIndex<c10::BFloat16, long, unsigned int, -1, -1, -1, true, at::native::(anonymous namespace)::ReduceAdd>(at::cuda::detail::TensorInfo<c10::BFloat16, unsigned int>, at::cuda::detail::TensorInfo<c10::BFloat16 const, unsigned int>, at::cuda::detail::TensorInfo<long const, unsigned int>, int, int, unsigned int, unsigned int, long, long, at::native::(anonymous namespace)::ReduceAdd const&, c10::BFloat16)": 818225.1950000002,
+    "ncclDevKernel_ReduceScatter_Sum_bf16_RING_LL(ncclDevKernelArgsStorage<4096ul>)": 816358.3729999998,
+    "ncclDevKernel_AllGather_RING_LL(ncclDevKernelArgsStorage<4096ul>)": 778466.0009999999,
+    "ampere_s1688gemm_bf16_128x128_ldg8_stages_32x1_nt": 756050.7069999996,
+    "void at::native::(anonymous namespace)::indexSelectLargeIndex<c10::BFloat16, long, unsigned int, 2, 2, -2, true>(at::cuda::detail::TensorInfo<c10::BFloat16, unsigned int>, at::cuda::detail::TensorInfo<c10::BFloat16 const, unsigned int>, at::cuda::detail::TensorInfo<long const, unsigned int>, int, int, unsigned int, unsigned int, long)": 720380.8140000022,
+    "ampere_bf16_s16816gemm_bf16_256x128_ldg8_f2f_stages_32x3_nn": 661620.5430000001,
+    "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::(anonymous namespace)::silu_kernel(at::TensorIteratorBase&)::{lambda()#1}::operator()() const::{lambda()#6}::operator()() const::{lambda(c10::BFloat16)#1}>(at::TensorIteratorBase&, at::native::(anonymous namespace)::silu_kernel(at::TensorIteratorBase&)::{lambda()#1}::operator()() const::{lambda()#6}::operator()() const::{lambda(c10::BFloat16)#1} const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::(anonymous namespace)::silu_kernel(at::TensorIteratorBase&)::{lambda()#1}::operator()() const::{lambda()#6}::operator()() const::{lambda(c10::BFloat16)#1}>(at::TensorIteratorBase&, at::native::(anonymous namespace)::silu_kernel(at::TensorIteratorBase&)::{lambda()#1}::operator()() const::{lambda()#6}::operator()() const::{lambda(c10::BFloat16)#1} const&)::{lambda(int)#1})": 656865.1319999995,
+    "Memcpy DtoD (Device -> Device)": 638704.8800000179,
+    "void at::native::vectorized_elementwise_kernel<8, at::native::FillFunctor<c10::BFloat16>, std::array<char*, 1ul> >(int, at::native::FillFunctor<c10::BFloat16>, std::array<char*, 1ul>)": 635930.7849999922,
+    "void at::native::elementwise_kernel<128, 4, at::native::gpu_kernel_impl_nocast<at::native::(anonymous namespace)::silu_backward_kernel(at::TensorIteratorBase&)::{lambda()#1}::operator()() const::{lambda()#4}::operator()() const::{lambda(c10::BFloat16, c10::BFloat16)#1}>(at::TensorIteratorBase&, at::native::(anonymous namespace)::silu_backward_kernel(at::TensorIteratorBase&)::{lambda()#1}::operator()() const::{lambda()#4}::operator()() const::{lambda(c10::BFloat16, c10::BFloat16)#1} const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::(anonymous namespace)::silu_backward_kernel(at::TensorIteratorBase&)::{lambda()#1}::operator()() const::{lambda()#4}::operator()() const::{lambda(c10::BFloat16, c10::BFloat16)#1}>(at::TensorIteratorBase&, at::native::(anonymous namespace)::silu_backward_kernel(at::TensorIteratorBase&)::{lambda()#1}::operator()() const::{lambda()#4}::operator()() const::{lambda(c10::BFloat16, c10::BFloat16)#1} const&)::{lambda(int)#1})": 610068.1829999998,
+    "void at::native::vectorized_elementwise_kernel<8, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16, c10::BFloat16, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul>)": 599283.8469999981,
+    "void at::native::(anonymous namespace)::CatArrayBatchedCopy_contig<at::native::(anonymous namespace)::OpaqueType<2u>, unsigned int, 3, 128, 1>(at::native::(anonymous namespace)::OpaqueType<2u>*, at::native::(anonymous namespace)::CatArrInputTensorMetadata<at::native::(anonymous namespace)::OpaqueType<2u>, unsigned int, 128, 1>, at::native::(anonymous namespace)::TensorSizeStride<unsigned int, 4u>, int, unsigned int)": 579644.4540000006,
+    "chunk_gated_delta_rule_fwd_kernel_h_blockdim64": 552224.8970000003,
+    "recompute_w_u_fwd_kernel": 474477.47599999985,
+    "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_nn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_nn_align8::Params)": 458419.17699999985,
+    "void at::native::(anonymous namespace)::CatArrayBatchedCopy_contig<at::native::(anonymous namespace)::OpaqueType<2u>, unsigned int, 2, 128, 1>(at::native::(anonymous namespace)::OpaqueType<2u>*, at::native::(anonymous namespace)::CatArrInputTensorMetadata<at::native::(anonymous namespace)::OpaqueType<2u>, unsigned int, 128, 1>, at::native::(anonymous namespace)::TensorSizeStride<unsigned int, 4u>, int, unsigned int)": 418524.34699999954,
+    "chunk_bwd_kernel_dqkwg": 410989.8930000003,
+    "void at::native::(anonymous namespace)::conv_depthwise2d_forward_kernel_generic<c10::BFloat16, int>(at::GenericPackedTensorAccessor<c10::BFloat16 const, 4ul, at::DefaultPtrTraits, int>, at::GenericPackedTensorAccessor<c10::BFloat16, 4ul, at::DefaultPtrTraits, int>, at::GenericPackedTensorAccessor<c10::BFloat16 const, 4ul, at::DefaultPtrTraits, int>, at::GenericPackedTensorAccessor<c10::BFloat16 const, 1ul, at::DefaultPtrTraits, int>, bool, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int)": 370392.23500000016,
+    "chunk_fwd_kernel_o": 349841.349,
+    "chunk_gated_delta_rule_bwd_kernel_dhu_blockdim64": 301030.387,
+    "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x4_nt_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x128_32x4_nt_align8::Params)": 276362.165,
+    "_layer_norm_fwd_1pass_kernel": 271655.18400000036,
+    "_layer_norm_bwd_kernel": 260866.66199999995,
+    "void at::native::(anonymous namespace)::CatArrayBatchedCopy<at::native::(anonymous namespace)::OpaqueType<2u>, unsigned int, 3, 64, 64>(at::native::(anonymous namespace)::OpaqueType<2u>*, at::native::(anonymous namespace)::CatArrInputTensorMetadata<at::native::(anonymous namespace)::OpaqueType<2u>, unsigned int, 64, 64>, at::native::(anonymous namespace)::TensorSizeStride<unsigned int, 4u>, int, unsigned int)": 260061.2049999998,
+    "prepare_wy_repr_bwd_kernel": 244669.14799999996,
+    "void at::native::(anonymous namespace)::indexSelectLargeIndex<c10::BFloat16, long, unsigned int, -1, -1, -1, true>(at::cuda::detail::TensorInfo<c10::BFloat16, unsigned int>, at::cuda::detail::TensorInfo<c10::BFloat16 const, unsigned int>, at::cuda::detail::TensorInfo<long const, unsigned int>, int, int, unsigned int, unsigned int, long)": 232446.5700000005,
+    "l2norm_fwd_kernel": 218263.70899999983,
+    "cross_entropy_bwd_kernel": 191780.09999999986,
+    "cross_entropy_fwd_kernel": 183042.6419999999,
+    "l2norm_bwd_kernel": 173253.27500000017,
+    "void at::native::(anonymous namespace)::conv_depthwise2d_backward_kernel<0, 1, c10::BFloat16, int>(at::GenericPackedTensorAccessor<c10::BFloat16 const, 4ul, at::DefaultPtrTraits, int>, at::GenericPackedTensorAccessor<c10::BFloat16, 4ul, at::DefaultPtrTraits, int>, at::GenericPackedTensorAccessor<c10::BFloat16 const, 4ul, at::DefaultPtrTraits, int>, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int)": 170404.23299999992,
+    "layer_norm_gated_fwd_kernel": 169440.675,
+    "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_tn": 159020.0369999999,
+    "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_nt_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_256x128_32x3_nt_align8::Params)": 156044.76399999997,
+    "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > >(at::TensorIteratorBase&, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> > const&)::{lambda(int)#1})": 155103.76799999826,
+    "void at::native::vectorized_elementwise_kernel<8, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul> >(int, at::native::bfloat16_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda(float)#1}, std::array<char*, 2ul>)": 152814.9159999979,
+    "ampere_bf16_s1688gemm_bf16_128x128_ldg8_f2f_stages_32x1_nt": 147407.61599999998,
+    "void cutlass::Kernel2<cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x256_32x3_tn_align8>(cutlass_80_tensorop_bf16_s16816gemm_relu_bf16_128x256_32x3_tn_align8::Params)": 145277.279,
+    "void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, 8, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1> >(int, at::native::direct_copy_kernel_cuda(at::TensorIteratorBase&)::{lambda()#3}::operator()() const::{lambda()#7}::operator()() const::{lambda(float)#1}, std::array<char*, 2ul>, TrivialOffsetCalculator<1, unsigned int>, TrivialOffsetCalculator<1, unsigned int>, at::native::memory::LoadWithCast<1>, at::native::memory::StoreWithCast<1>)": 138200.66599999854,
+    "layer_norm_gated_bwd_kernel": 129490.81599999993,
+    "chunk_bwd_kernel_dv_local": 128687.969,
+    "void at::native::vectorized_elementwise_kernel<4, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul> >(int, at::native::CUDAFunctor_add<float>, std::array<char*, 3ul>)": 127699.08899999938,
+    "void at::native::elementwise_kernel<128, 2, at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float> >(at::TensorIteratorBase&, at::native::CUDAFunctor_add<float> const&)::{lambda(int)#1}>(int, at::native::gpu_kernel_impl_nocast<at::native::CUDAFunctor_add<float> >(at::TensorIteratorBase&, at::native::CUDAFunctor_add<float> const&)::{lambda(int)#1})": 117118.10199999998,
+    "void at::native::(anonymous namespace)::conv_depthwise2d_grad_weight_kernel<c10::BFloat16, unsigned int>(at::GenericPackedTensorAccessor<c10::BFloat16 const, 4ul, at::DefaultPtrTraits, int>, at::GenericPackedTensorAccessor<c10::BFloat16 const, 4ul, at::DefaultPtrTraits, int>, at::GenericPackedTensorAccessor<c10::BFloat16, 4ul, at::DefaultPtrTraits, int>, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int, int)": 112749.2100000001,
+    "void pytorch_flash::flash_bwd_dq_dk_dv_loop_seqk_parallel_kernel<pytorch_flash::Flash_bwd_kernel_traits<128, 64, 64, 8, 4, 2, 2, true, false, cutlass::bfloat16_t, pytorch_flash::Flash_kernel_traits<128, 64, 64, 8, cutlass::bfloat16_t> >, false, false, false, false, true, true>(pytorch_flash::Flash_bwd_params)": 111443.33900000008,
+    "void at::native::reduce_kernel<128, 4, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::operator()(at::TensorIterator&)::{lambda(float, float)#1}>, unsigned int, c10::BFloat16, 4, 4> >(at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_t<c10::BFloat16, at::native::sum_functor<c10::BFloat16, float, c10::BFloat16>::operator()(at::TensorIterator&)::{lambda(float, float)#1}>, unsigned int, c10::BFloat16, 4, 4>)": 108292.83999999976,
+    "ampere_s1688gemm_bf16_128x128_ldg8_nt": 102390.76100000001,
+    "chunk_scaled_dot_kkt_fwd_kernel": 99450.59300000008,
+    "merge_16x16_to_64x64_inverse_kernel": 95308.02200000008,
+    "void at::native::vectorized_elementwise_kernel<4, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul> >(int, at::native::BinaryFunctor<float, float, float, at::native::binary_internal::MulFunctor<float> >, std::array<char*, 3ul>)": 94643.32800000026
+  },
+  "by_op": [
+    {
+      "op": "aten::mul",
+      "shapes": "[16382,1,6144][16382,1,6144]",
+      "category": "elementwise",
+      "ms": 1445511.2610000004
+    },
+    {
+      "op": "LinearWithGradAccumulationAndAsyncCommunicationBackward",
+      "shapes": "[16382,1,12288]",
+      "category": "GEMM",
+      "ms": 1353461.3149999997
+    },
+    {
+      "op": "aten::copy_",
+      "shapes": "[1,6144,8192][1,6144,8192]",
+      "category": "copy/index",
+      "ms": 860180.25
+    },
+    {
+      "op": "_FusedLinearCEBackward",
+      "shapes": "",
+      "category": "GEMM",
+      "ms": 858441.4679999999
+    },
+    {
+      "op": "aten::index_add_",
+      "shapes": "[8193,2048][8190][8190,2048]",
+      "category": "copy/index",
+      "ms": 818225.1950000002
+    },
+    {
+      "op": "aten::mm",
+      "shapes": "[16382,2048][2048,6144]",
+      "category": "GEMM",
+      "ms": 768791.8470000009
+    },
+    {
+      "op": "LinearWithGradAccumulationAndAsyncCommunicationBackward",
+      "shapes": "[16382,1,2048]",
+      "category": "GEMM",
+      "ms": 707032.3749999999
+    },
+    {
+      "op": "LinearWithGradAccumulationAndAsyncCommunicationBackward",
+      "shapes": "[16382,8224]",
+      "category": "GEMM",
+      "ms": 639318.117
+    },
+    {
+      "op": "aten::mm",
+      "shapes": "[1024,248320][248320,2048]",
+      "category": "GEMM",
+      "ms": 590542.0779999999
+    },
+    {
+      "op": "aten::cat",
+      "shapes": "[[16382, 1, 6144],[16382, 1, 6144]]",
+      "category": "other",
+      "ms": 573183.3270000004
+    },
+    {
+      "op": "aten::add",
+      "shapes": "[16382,1,2048][16382,1,2048]",
+      "category": "elementwise",
+      "ms": 522528.92899999995
+    },
+    {
+      "op": "aten::silu",
+      "shapes": "[16382,1,6144]",
+      "category": "elementwise",
+      "ms": 480733.5060000004
+    },
+    {
+      "op": "aten::cat",
+      "shapes": "[[1, 8192, 6144]]",
+      "category": "copy/index",
+      "ms": 400099.92199999955
+    },
+    {
+      "op": "aten::_conv_depthwise2d",
+      "shapes": "[1,6144,1,8192][6144,1,1,4]",
+      "category": "other",
+      "ms": 370392.23500000016
+    },
+    {
+      "op": "aten::index_add_",
+      "shapes": "[8193,16,128][16638][16638,16,128]",
+      "category": "copy/index",
+      "ms": 367240.03299999965
+    },
+    {
+      "op": "aten::silu_backward",
+      "shapes": "[16382,1,6144][16382,1,6144]",
+      "category": "elementwise",
+      "ms": 358446.20899999986
+    },
+    {
+      "op": "aten::cat",
+      "shapes": "[[16382, 6144],[16382, 2048],[16382, 16],[16382, 16]]",
+      "category": "other",
+      "ms": 302217.6159999999
+    },
+    {
+      "op": "aten::convolution_backward",
+      "shapes": "[1,6144,8195][1,6144,8192][6144,1,4]",
+      "category": "other",
+      "ms": 283153.44299999985
+    },
+    {
+      "op": "aten::silu_backward",
+      "shapes": "[1,6144,8192][1,6144,8192]",
+      "category": "elementwise",
+      "ms": 251621.97400000005
+    },
+    {
+      "op": "aten::add_",
+      "shapes": "[16382,6144][16382,6144]",
+      "category": "elementwise",
+      "ms": 249065.983
+    },
+    {
+      "op": "aten::mm",
+      "shapes": "[1024,1536][1536,1536]",
+      "category": "GEMM",
+      "ms": 237450.547
+    },
+    {
+      "op": "aten::index_select",
+      "shapes": "[8193,2048][8190]",
+      "category": "copy/index",
+      "ms": 232446.5700000005
+    },
+    {
+      "op": "aten::copy_",
+      "shapes": "[1,8192,6144][1,8192,6144]",
+      "category": "copy/index",
+      "ms": 224686.71300000008
+    },
+    {
+      "op": "aten::add_",
+      "shapes": "[248320,2048][248320,2048]",
+      "category": "elementwise",
+      "ms": 222964.77800000002
+    },
+    {
+      "op": "aten::fill_",
+      "shapes": "[16382,6144]",
+      "category": "elementwise",
+      "ms": 220833.55599999992
+    },
+    {
+      "op": "aten::index_add_",
+      "shapes": "[16382,6144][8192][8192,6144]",
+      "category": "copy/index",
+      "ms": 212920.5390000001
+    },
+    {
+      "op": "aten::index_select",
+      "shapes": "[8193,16,128][16638]",
+      "category": "copy/index",
+      "ms": 198475.01699999993
+    },
+    {
+      "op": "aten::index_select",
+      "shapes": "[16382,6144][8192]",
+      "category": "copy/index",
+      "ms": 192870.06999999983
+    },
+    {
+      "op": "aten::silu",
+      "shapes": "[1,6144,8192]",
+      "category": "elementwise",
+      "ms": 176131.62599999996
+    },
+    {
+      "op": "aten::mul",
+      "shapes": "[8190,2048][2048]",
+      "category": "elementwise",
+      "ms": 167697.41800000053
+    },
+    {
+      "op": "aten::mul",
+      "shapes": "[8190,2048][8190,2048]",
+      "category": "elementwise",
+      "ms": 150942.016
+    },
+    {
+      "op": "aten::cat",
+      "shapes": "[[8192, 16, 128],[8190, 16, 128]]",
+      "category": "other",
+      "ms": 137280.3029999999
+    },
+    {
+      "op": "aten::copy_",
+      "shapes": "[1024,1536][1024,1536]",
+      "category": "copy/index",
+      "ms": 137124.42599999942
+    },
+    {
+      "op": "aten::mul",
+      "shapes": "[1024,1536][1024,1536]",
+      "category": "elementwise",
+      "ms": 136941.05099999963
+    },
+    {
+      "op": "aten::add",
+      "shapes": "[8190,2048][8190,2048]",
+      "category": "elementwise",
+      "ms": 136163.96599999984
+    },
+    {
+      "op": "aten::index_select",
+      "shapes": "[16382,16,128][16638]",
+      "category": "copy/index",
+      "ms": 131352.17300000004
+    },
+    {
+      "op": "aten::cat",
+      "shapes": "[[8192, 16, 128],[1, 16, 128]]",
+      "category": "other",
+      "ms": 122780.90199999999
+    },
+    {
+      "op": "aten::index_add_",
+      "shapes": "[16382,16,128][16638][16638,16,128]",
+      "category": "copy/index",
+      "ms": 120713.571
+    },
+    {
+      "op": "aten::index_add_",
+      "shapes": "[16638,16,128][16382][16382,16,128]",
+      "category": "copy/index",
+      "ms": 120489.46800000004
+    },
+    {
+      "op": "aten::add_",
+      "shapes": "[8192,6144][8192,6144]",
+      "category": "elementwise",
+      "ms": 119509.26500000007
+    },
+    {
+      "op": "aten::index_select",
+      "shapes": "[16638,16,128][16382]",
+      "category": "copy/index",
+      "ms": 119170.90800000001
+    },
+    {
+      "op": "LinearWithGradAccumulationAndAsyncCommunicationBackward",
+      "shapes": "[16382,1,4096]",
+      "category": "GEMM",
+      "ms": 118947.699
+    },
+    {
+      "op": "aten::add_",
+      "shapes": "[16382,1,2048][16382,1,2048]",
+      "category": "elementwise",
+      "ms": 112904.71699999987
+    },
+    {
+      "op": "aten::copy_",
+      "shapes": "[16382,16,128][16382,16,128]",
+      "category": "copy/index",
+      "ms": 111794.76700000011
+    },
+    {
+      "op": "aten::cat",
+      "shapes": "[[8192, 2048],[8192, 2048],[8192, 2048]]",
+      "category": "other",
+      "ms": 109886.87500000006
+    },
+    {
+      "op": "aten::mul",
+      "shapes": "[16382,1,2048][16382,1,2048]",
+      "category": "elementwise",
+      "ms": 104733.58100000002
+    },
+    {
+      "op": "LinearWithGradAccumulationAndAsyncCommunicationBackward",
+      "shapes": "[1024,1536]",
+      "category": "GEMM",
+      "ms": 96107.75900000017
+    },
+    {
+      "op": "aten::_flash_attention_backward",
+      "shapes": "[1,1024,12,128][1,1024,12,128][1,1024,12,128]",
+      "category": "attention",
+      "ms": 92353.91300000012
+    },
+    {
+      "op": "aten::add",
+      "shapes": "[1024,6,1536][1,6,1536]",
+      "category": "elementwise",
+      "ms": 91173.30399999999
+    },
+    {
+      "op": "aten::fill_",
+      "shapes": "[248320,2048]",
+      "category": "elementwise",
+      "ms": 87987.28600000001
+    },
+    {
+      "op": "aten::mm",
+      "shapes": "[1024,8960][8960,1536]",
+      "category": "GEMM",
+      "ms": 78688.27899999997
+    },
+    {
+      "op": "aten::add_",
+      "shapes": "[1,16638,16,128][1,16638,16,128]",
+      "category": "elementwise",
+      "ms": 73789.24299999997
+    },
+    {
+      "op": "aten::copy_",
+      "shapes": "[248320,2048][248320,2048]",
+      "category": "copy/index",
+      "ms": 73107.765
+    },
+    {
+      "op": "aten::copy_",
+      "shapes": "[16382,2048][16382,2048]",
+      "category": "copy/index",
+      "ms": 71371.84099999996
+    },
+    {
+      "op": "aten::mm",
+      "shapes": "[766,248320][248320,2048]",
+      "category": "GEMM",
+      "ms": 71078.46499999998
+    },
+    {
+      "op": "aten::fill_",
+      "shapes": "[8192,6144]",
+      "category": "elementwise",
+      "ms": 70953.50699999997
+    },
+    {
+      "op": "aten::_flash_attention_forward",
+      "shapes": "[1,1024,12,128][1,1024,12,128][1,1024,12,128]",
+      "category": "attention",
+      "ms": 68854.20699999979
+    },
+    {
+      "op": "aten::index_select",
+      "shapes": "[16382,2048][8190]",
+      "category": "copy/index",
+      "ms": 68095.19299999996
+    },
+    {
+      "op": "aten::add",
+      "shapes": "[1024,1536][1024,1536]",
+      "category": "elementwise",
+      "ms": 67330.40700000025
+    },
+    {
+      "op": "aten::copy_",
+      "shapes": "[16382,1,8,256][16382,1,8,256]",
+      "category": "copy/index",
+      "ms": 66510.48499999996
+    }
+  ]
+}

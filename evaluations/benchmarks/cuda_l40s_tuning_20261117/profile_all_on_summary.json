@@ -1,0 +1,145 @@
+{
+  "what": "Kernel profile at production shape with fused norm + FlexAttention + fused CE all on",
+  "run": ".runs/prodce/profile (16x L40S, seq8192, tp1 dp16, GA8, bf16 grad reduce)",
+  "category_share_percent": {
+    "GEMM": 41.82,
+    "elementwise": 15.75,
+    "copy/index": 12.01,
+    "other": 9.16,
+    "attention": 8.36,
+    "GDN (FLA Triton)": 4.71,
+    "NCCL collective": 3.98,
+    "norm/reduce": 2.61,
+    "__gpu_memcpy": 1.58,
+    "__gpu_memset": 0.03
+  },
+  "history_percent": {
+    "note": "Same model and shape; each column is a later optimization state.",
+    "pre_optimization": {
+      "GEMM": 24.0,
+      "elementwise": 36.1,
+      "attention": 11.8,
+      "NCCL": 11.2,
+      "norm/reduce": 5.5,
+      "copy/index": 3.6,
+      "GDN": 3.0,
+      "other": 4.8
+    },
+    "after_fused_norm": {
+      "GEMM": 34.0,
+      "elementwise": 25.4,
+      "attention": 17.2,
+      "NCCL": 3.7,
+      "norm/reduce": 7.0,
+      "copy/index": 5.1,
+      "GDN": 4.1,
+      "other": 3.5
+    },
+    "all_on": {
+      "GEMM": 41.82,
+      "elementwise": 15.75,
+      "copy/index": 12.01,
+      "other": 9.16,
+      "attention": 8.36,
+      "GDN (FLA Triton)": 4.71,
+      "NCCL collective": 3.98,
+      "norm/reduce": 2.61,
+      "__gpu_memcpy": 1.58,
+      "__gpu_memset": 0.03
+    }
+  },
+  "categorization_correction": "FlexAttention compiles to Inductor template kernels (triton_tem_fused_*). They were first counted as 'other', which reported attention at 0.62%. They are the attention: with PRETRAIN_FLEX_ATTENTION=0 they are absent and fmha_cutlass* appear at the same share. The parser now classifies them.",
+  "findings": [
+    {
+      "finding": "GEMM is now the single largest category at 41.8%",
+      "implication": "Arithmetic, not framework overhead, now dominates. This is what FP8 would attack; see fp8_ceiling.json for the measured bound."
+    },
+    {
+      "finding": "NCCL fell from 11.2% to 4.0%",
+      "implication": "Multi-node data-parallel communication is not a bottleneck at GA=8 with BF16 gradient reduction. Per-card throughput rose from 2 to 16 cards."
+    },
+    {
+      "finding": "Two more CUDA reference fallbacks were still live: the backbone SwiGLU and the GDN causal convolution, both dispatching on device.type == 'npu'",
+      "implication": "The SwiGLU ran as chunk+silu+mul and the convolution ran a Python loop of F.conv1d per packed document. Both have published kernels in the same upstream library already supplying the GDN recurrence."
+    },
+    {
+      "finding": "copy/index reached 12% -- index_select/index_add/cat over the CQ event plan",
+      "implication": "This is the architecture's own layout machinery, not a port artifact. Reducing it would mean restructuring the GDN event gather, which is on the protected CPU-plan boundary."
+    }
+  ],
+  "top_launching_ops_percent": [
+    {
+      "op": "aten::mul",
+      "category": "elementwise",
+      "percent": 3.57,
+      "shapes": "[16382,1,6144][16382,1,6144]"
+    },
+    {
+      "op": "LinearWithGradAccumulationAndAsyncCommunicationBackward",
+      "category": "GEMM",
+      "percent": 3.34,
+      "shapes": "[16382,1,12288]"
+    },
+    {
+      "op": "aten::copy_",
+      "category": "copy/index",
+      "percent": 2.12,
+      "shapes": "[1,6144,8192][1,6144,8192]"
+    },
+    {
+      "op": "_FusedLinearCEBackward",
+      "category": "GEMM",
+      "percent": 2.12,
+      "shapes": ""
+    },
+    {
+      "op": "aten::index_add_",
+      "category": "copy/index",
+      "percent": 2.02,
+      "shapes": "[8193,2048][8190][8190,2048]"
+    },
+    {
+      "op": "aten::mm",
+      "category": "GEMM",
+      "percent": 1.9,
+      "shapes": "[16382,2048][2048,6144]"
+    },
+    {
+      "op": "LinearWithGradAccumulationAndAsyncCommunicationBackward",
+      "category": "GEMM",
+      "percent": 1.74,
+      "shapes": "[16382,1,2048]"
+    },
+    {
+      "op": "LinearWithGradAccumulationAndAsyncCommunicationBackward",
+      "category": "GEMM",
+      "percent": 1.58,
+      "shapes": "[16382,8224]"
+    },
+    {
+      "op": "aten::mm",
+      "category": "GEMM",
+      "percent": 1.46,
+      "shapes": "[1024,248320][248320,2048]"
+    },
+    {
+      "op": "aten::cat",
+      "category": "other",
+      "percent": 1.41,
+      "shapes": "[[16382, 1, 6144],[16382, 1, 6144]]"
+    },
+    {
+      "op": "aten::add",
+      "category": "elementwise",
+      "percent": 1.29,
+      "shapes": "[16382,1,2048][16382,1,2048]"
+    },
+    {
+      "op": "aten::silu",
+      "category": "elementwise",
+      "percent": 1.19,
+      "shapes": "[16382,1,6144]"
+    }
+  ],
+  "method": "torch.profiler chrome trace, kernels attributed to their launching aten op through correlation ids. Shares are of total GPU kernel time, not wall time; kernels overlap, so these do not sum to step time."
+}

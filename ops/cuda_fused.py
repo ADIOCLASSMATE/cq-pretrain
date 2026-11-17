@@ -61,3 +61,40 @@ def gated_rms_norm(x, gate, weight, eps):
         eps=eps,
     )
     return out.reshape(shape)
+
+
+_OPS_ENABLED = os.environ.get("PRETRAIN_CUDA_FUSED_OPS", "0") == "1"
+
+
+def ops_enabled(x, fused=True):
+    """Gate for the fused SwiGLU / causal convolution below."""
+    import torch
+
+    return (
+        _OPS_ENABLED
+        and fused
+        and x.device.type == "cuda"
+        and x.dtype in (torch.float16, torch.bfloat16)
+        and not torch.are_deterministic_algorithms_enabled()
+    )
+
+
+# Upstream also ships a fused SwiGLU. It is deliberately not wired here: it
+# reads its two inputs as contiguous, while this MLP's gate/up are strided
+# views of one packed gate_up projection, so passing them directly returns
+# silently wrong values (relative error 1.414, no exception raised). Copying
+# them first is correct but leaves only 1.15x over the reference pair, which
+# is not worth a kernel that fails quietly on this model's real layout.
+# Measured in evaluations/benchmarks/cuda_l40s_tuning_20261117/fused_ops.json.
+
+
+def causal_conv1d(x, weight, cu_seqlens):
+    """Depthwise causal convolution + silu over packed documents.
+
+    x is [1, T, D]; weight is [D, W]; cu_seqlens holds the same document
+    boundaries the reference loop iterates over, so documents stay independent
+    and no token reads across a document edge.
+    """
+    from fla.modules.convolution import causal_conv1d as _conv
+
+    return _conv(x, weight=weight, activation="silu", cu_seqlens=cu_seqlens)[0]

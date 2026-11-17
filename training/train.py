@@ -391,6 +391,8 @@ def main():
     training_state['kernel_options']['cuda_fused_norm']=(
         cuda_fused._ENABLED if accel.BACKEND=='cuda' else None)
     training_state['kernel_options']['backend']=accel.BACKEND
+    training_state['kernel_options']['cuda_fused_ops']=(
+        cuda_fused._OPS_ENABLED if accel.BACKEND=='cuda' else None)
     training_state['kernel_options']['grad_reduce_in_fp32']=not args.bf16_grad_reduce
     from ops import flex_cq as _flex
     training_state['kernel_options']['flex_attention']=_flex._ENABLED
