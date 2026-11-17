@@ -145,6 +145,28 @@ def rotary(x, cos, sin, fused=True):
     return x * cos + torch.cat((-second, first), -1) * sin
 
 
+_ALLOW_CACHE = {}
+
+
+def _allow_mask(mask):
+    """Cache ~mask per forbid-mask tensor; recompute if it is replaced or edited.
+
+    Identity plus _version is the same validity test AttentionPlan.matches uses,
+    so an in-place edit or a different mask object cannot return a stale inverse.
+    """
+    key = id(mask)
+    entry = _ALLOW_CACHE.get(key)
+    if entry is not None:
+        owner, version, allow = entry
+        if owner is mask and mask._version == version:
+            return allow
+    allow = ~mask
+    if len(_ALLOW_CACHE) > 16:
+        _ALLOW_CACHE.clear()
+    _ALLOW_CACHE[key] = (mask, mask._version, allow)
+    return allow
+
+
 def attention(q, k, v, mask=None, valid_rows=None, fused=True, scale=None):
     """Q/K/V: [sequence,batch,heads,dim]; bool mask True means forbidden."""
     ops = npu_ops(q, fused)
@@ -182,12 +204,26 @@ def attention(q, k, v, mask=None, valid_rows=None, fused=True, scale=None):
             )[0]
     else:
         query, key, value = (t.permute(1, 2, 0, 3) for t in (q, k, v))
-        # Explicit repeat only in the numerical reference, never in the NPU path.
         repeat = q.shape[2] // k.shape[2]
         if repeat != 1:
-            key, value = key.repeat_interleave(repeat, 1), value.repeat_interleave(repeat, 1)
+            if query.device.type == "cuda":
+                # GQA: broadcast the shared KV heads as a view. repeat_interleave
+                # would materialize 4x the K and V activations here (8 query
+                # heads over 2 KV heads), and SDPA accepts the expanded stride.
+                b, h, t, d = key.shape
+                key, value = (
+                    x[:, :, None].expand(b, h, repeat, t, d).reshape(b, h * repeat, t, d)
+                    for x in (key, value)
+                )
+            else:
+                # Explicit repeat in the CPU numerical reference only.
+                key, value = key.repeat_interleave(repeat, 1), value.repeat_interleave(repeat, 1)
+        # SDPA takes True = attend, the inverse of this project's forbid-mask.
+        # Inverting allocates another full [1,1,2S,S] bool (128 MB at S=8192)
+        # on every call, so reuse the per-batch inverse the CPU planner cached.
+        allow = None if mask is None else _allow_mask(mask)
         result = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=None if mask is None else ~mask, dropout_p=0.0, scale=scale
+            query, key, value, attn_mask=allow, dropout_p=0.0, scale=scale
         )
         result = result.permute(2, 0, 1, 3).flatten(-2).contiguous()
     if valid_rows is not None:
