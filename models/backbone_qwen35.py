@@ -32,6 +32,15 @@ class RMSNorm(nn.Module):
         )
 
 
+def _cuda_swiglu_enabled(x):
+    """True when the Inductor-fused SwiGLU should run instead of chunk+silu+mul."""
+    if x.device.type != "cuda":
+        return False
+    from ops.cuda_fused import swiglu_enabled
+
+    return swiglu_enabled(x)
+
+
 def _cuda_ops_enabled(x):
     """True when the published fused SwiGLU / causal conv should run."""
     if x.device.type != "cuda":
@@ -54,8 +63,13 @@ class MLP(nn.Module):
     def forward(self, x):
         if self.fused_projections:
             projected = self.gate_up_proj(x)
-            gate, up = projected.chunk(2, -1)
-            activated = F.silu(gate) * up
+            if _cuda_swiglu_enabled(projected):
+                from ops.cuda_fused import swiglu as _cuda_swiglu
+
+                activated = _cuda_swiglu(projected)
+            else:
+                gate, up = projected.chunk(2, -1)
+                activated = F.silu(gate) * up
             return self.down_proj(activated)
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 

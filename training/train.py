@@ -375,6 +375,8 @@ def main():
     training_state['kernel_options']['cuda_fused_norm']=(
         cuda_fused._ENABLED)
     training_state['kernel_options']['backend']=accel.BACKEND
+    training_state['kernel_options']['cuda_fused_swiglu']=(
+        cuda_fused._SWIGLU_ENABLED if accel.BACKEND=='cuda' else None)
     training_state['kernel_options']['cuda_fused_ops']=(
         cuda_fused._OPS_ENABLED)
     training_state['kernel_options']['grad_reduce_in_fp32']=not args.bf16_grad_reduce

@@ -64,6 +64,10 @@ def gated_rms_norm(x, gate, weight, eps):
 
 
 _OPS_ENABLED = os.environ.get("PRETRAIN_CUDA_FUSED_OPS", "0") == "1"
+# The SwiGLU fusion carries its own switch: sharing one with the causal
+# convolution would make any A/B measure both and leave run.json unable to
+# attribute the result to either.
+_SWIGLU_ENABLED = os.environ.get("PRETRAIN_CUDA_FUSED_SWIGLU", "0") == "1"
 
 
 def ops_enabled(x, fused=True):
@@ -98,3 +102,38 @@ def causal_conv1d(x, weight, cu_seqlens):
     from fla.modules.convolution import causal_conv1d as _conv
 
     return _conv(x, weight=weight, activation="silu", cu_seqlens=cu_seqlens)[0]
+
+
+@functools.lru_cache(maxsize=1)
+def _compiled_swiglu():
+    import torch
+    from torch.nn import functional as F
+
+    def swiglu(projected):
+        gate, up = projected.chunk(2, -1)
+        return F.silu(gate) * up
+
+    # Packed token counts vary per batch; static shapes would recompile for
+    # every new length. Inductor reads both strided halves in one pass.
+    return torch.compile(swiglu, dynamic=True, fullgraph=True)
+
+
+def swiglu_enabled(x):
+    """True when the Inductor SwiGLU fusion should replace the reference pair."""
+    import torch
+
+    return (
+        _SWIGLU_ENABLED
+        and x.device.type == "cuda"
+        and x.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        and not torch.are_deterministic_algorithms_enabled()
+    )
+
+
+def swiglu(projected):
+    """silu(gate) * up over a packed [.., 2*ffn] projection, fused by Inductor.
+
+    Same expression as the reference below it in models.backbone_qwen35.MLP;
+    this only changes how many passes over memory it takes.
+    """
+    return _compiled_swiglu()(projected)

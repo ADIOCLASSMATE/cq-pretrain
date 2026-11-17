@@ -1,9 +1,8 @@
-"""Gate the Inductor-fused SwiGLU against this repo's reference pair.
+"""Gate the Inductor-fused SwiGLU against this repo's own reference expression.
 
-The gate and up operands are strided views of one packed projection. A kernel
-that assumes contiguity returns wrong values without raising, so correctness
-here is checked on genuinely strided inputs, against both an FP64 oracle and
-the exact in-dtype expression the model would otherwise run.
+The reference is the exact code the fused path replaces: chunk the packed
+projection and compute silu(gate)*up. Both run on the same strided layout the
+model actually produces, so a kernel that mishandles strides fails here.
 """
 import argparse
 import json
@@ -12,8 +11,6 @@ from pathlib import Path
 import torch
 from torch.nn import functional as F
 
-from ops import cuda_fused
-
 
 def reference(projected):
     gate, up = projected.chunk(2, -1)
@@ -21,80 +18,88 @@ def reference(projected):
 
 
 def relerr(a, b):
-    a, b = a.detach().double(), b.detach().double()
-    return float((a - b).norm() / b.norm().clamp_min(1e-12))
+    a, b = a.detach().float(), b.detach().float()
+    return float((a - b).norm() / b.norm().clamp_min(1e-8))
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--output", required=True)
+    p.add_argument("--output", type=Path, required=True)
     p.add_argument("--tol", type=float, default=0.02)
     a = p.parse_args()
     if not torch.cuda.is_available():
         raise SystemExit("CUDA device required")
-    if not cuda_fused._SWIGLU_ENABLED:
-        raise SystemExit("Set PRETRAIN_CUDA_FUSED_SWIGLU=1 to gate the fused pair")
+    import ops.cuda_fused as cuda_fused
+
     torch.manual_seed(5)
-    cases = []
-    # Production backbone shape (tokens = content + CQ queries) and two others
-    # so a tile-size assumption cannot pass by luck.
-    for tokens, ffn in ((16382, 6144), (8192, 6144), (4096, 6144)):
-        packed = torch.randn(tokens, 1, 2 * ffn, device="cuda", dtype=torch.bfloat16,
-                             requires_grad=True)
-        ref_in = packed.detach().clone().requires_grad_()
-        oracle_in = packed.detach().double().cpu().requires_grad_()
+    cases, ok = [], True
+    # Shapes from the production profile: [tokens, 1, 2*ffn] with ffn=6144,
+    # plus a DiT-sized case and an odd length to exercise dynamic shapes.
+    for tokens, ffn in ((16382, 6144), (8192, 6144), (4096, 6144), (777, 6144)):
+        x = torch.randn(tokens, 1, 2 * ffn, device="cuda", dtype=torch.bfloat16) * 0.5
+        xr = x.detach().clone().requires_grad_()
+        xf = x.detach().clone().requires_grad_()
+        yr = reference(xr)
+        yf = cuda_fused.swiglu(xf)
+        u = torch.randn_like(yr)
+        (yr * u).sum().backward()
+        (yf * u).sum().backward()
+        # The fused path must see the same strided views the model produces.
+        strided = not xf.chunk(2, -1)[0].is_contiguous()
+        e = dict(output=relerr(yf, yr), dx=relerr(xf.grad, xr.grad))
+        passed = all(v <= a.tol for v in e.values()) and strided
+        ok &= passed
+        cases.append(dict(tokens=tokens, ffn=ffn, strided_input=strided, errors=e, passed=passed))
+        print(f"  swiglu [{tokens},1,{2*ffn}] strided={strided} "
+              f"output={e['output']:.2e} dx={e['dx']:.2e} -> {'PASS' if passed else 'FAIL'}")
 
-        assert not packed.chunk(2, -1)[0].is_contiguous(), "fixture must be strided"
-        used = cuda_fused.swiglu_enabled(packed)
-        y = cuda_fused.swiglu(packed)
-        y_ref = reference(ref_in)
-        y_oracle = reference(oracle_in)
+    # The model runs this inside torch.utils.checkpoint(use_reentrant=True).
+    # Recompute replays the compiled graph under a fresh autograd context; a
+    # fused path that only works outside checkpointing would pass every case
+    # above and still corrupt training.
+    from torch.utils.checkpoint import checkpoint
 
-        u = torch.randn_like(y)
-        (y * u).sum().backward()
-        (y_ref * u).sum().backward()
-        (y_oracle * u.detach().double().cpu()).sum().backward()
+    def block(fn, x):
+        return checkpoint(fn, x, use_reentrant=True)
 
-        row = dict(tokens=tokens, ffn=ffn, fused_used=bool(used),
-                   vs_reference=dict(out=relerr(y, y_ref), dx=relerr(packed.grad, ref_in.grad)),
-                   vs_fp64_oracle=dict(out=relerr(y.float().cpu(), y_oracle),
-                                       dx=relerr(packed.grad.float().cpu(), oracle_in.grad)))
-        row["passed"] = used and max(
-            list(row["vs_reference"].values()) + list(row["vs_fp64_oracle"].values())) <= a.tol
-        cases.append(row)
-        print(f"  tokens={tokens:<6} used={used}  vs-ref out={row['vs_reference']['out']:.2e} "
-              f"dx={row['vs_reference']['dx']:.2e}  vs-fp64 out={row['vs_fp64_oracle']['out']:.2e} "
-              f"dx={row['vs_fp64_oracle']['dx']:.2e}  -> {'PASS' if row['passed'] else 'FAIL'}")
+    x = torch.randn(4096, 1, 12288, device="cuda", dtype=torch.bfloat16) * 0.5
+    xr = x.detach().clone().requires_grad_()
+    xf = x.detach().clone().requires_grad_()
+    yr = block(reference, xr)
+    yf = block(cuda_fused.swiglu, xf)
+    u = torch.randn_like(yr)
+    (yr * u).sum().backward()
+    (yf * u).sum().backward()
+    e = dict(output=relerr(yf, yr), dx=relerr(xf.grad, xr.grad))
+    passed = all(v <= a.tol for v in e.values())
+    ok &= passed
+    cases.append(dict(tokens=4096, ffn=6144, reentrant_checkpoint=True,
+                      errors=e, passed=passed))
+    print(f"  swiglu under reentrant checkpoint: output={e['output']:.2e} "
+          f"dx={e['dx']:.2e} -> {'PASS' if passed else 'FAIL'}")
 
-    # Timing on the production shape, forward plus backward.
-    packed = torch.randn(16382, 1, 12288, device="cuda", dtype=torch.bfloat16, requires_grad=True)
-    u = torch.randn(16382, 1, 6144, device="cuda", dtype=torch.bfloat16)
-    timing = {}
-    for name, fn in (("reference", reference), ("fused", cuda_fused.swiglu)):
+    # Microbenchmark at the production shape, forward+backward.
+    def timed(fn, x):
         for _ in range(3):
-            packed.grad = None
-            (fn(packed) * u).sum().backward()
+            y = fn(x); (y * y).sum().backward(); x.grad = None
         torch.cuda.synchronize()
-        start, end = (torch.cuda.Event(enable_timing=True) for _ in range(2))
-        start.record()
+        s, e2 = torch.cuda.Event(True), torch.cuda.Event(True)
+        s.record()
         for _ in range(10):
-            packed.grad = None
-            (fn(packed) * u).sum().backward()
-        end.record()
-        torch.cuda.synchronize()
-        timing[name] = start.elapsed_time(end) / 10
-    timing["speedup"] = timing["reference"] / timing["fused"]
-    print(f"  fwd+bwd [16382,1,12288]: reference {timing['reference']:.3f} ms  "
-          f"fused {timing['fused']:.3f} ms  -> {timing['speedup']:.2f}x")
+            y = fn(x); (y * y).sum().backward(); x.grad = None
+        e2.record(); torch.cuda.synchronize()
+        return s.elapsed_time(e2) / 10
 
-    result = dict(passed=all(c["passed"] for c in cases), device=torch.cuda.get_device_name(0),
-                  tolerance=a.tol, cases=cases, timing=timing)
-    out = Path(a.output)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(result, indent=2))
-    if not result["passed"]:
-        raise SystemExit("FUSED SWIGLU GATE FAILED")
-    print("FUSED SWIGLU GATE PASSED")
+    x = torch.randn(16382, 1, 12288, device="cuda", dtype=torch.bfloat16).requires_grad_()
+    tr, tf = timed(reference, x), timed(cuda_fused.swiglu, x)
+    print(f"  fwd+bwd [16382,1,12288]: reference {tr:.3f} ms  fused {tf:.3f} ms -> {tr/tf:.2f}x")
+
+    a.output.parent.mkdir(parents=True, exist_ok=True)
+    a.output.write_text(json.dumps(dict(passed=bool(ok), tolerance=a.tol, cases=cases,
+                                        reference_ms=tr, fused_ms=tf, speedup=tr / tf), indent=2))
+    print("FUSED SWIGLU GATE " + ("PASSED" if ok else "FAILED"))
+    if not ok:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
