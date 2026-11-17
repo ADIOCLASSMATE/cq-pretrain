@@ -247,7 +247,6 @@ class GatedDelta(nn.Module):
                 g=g,
                 beta=beta,
                 cu_seqlens=plan.event_cu,
-                bounds=plan.event_bounds,
             )[0]
         else:
             y = recurrent_delta(q, k, v, g, beta, plan.event_bounds)

@@ -66,3 +66,4 @@ __pycache__/
 !/scripts/validation/
 
 !/environment.wan.txt
+!/environment.cuda.txt

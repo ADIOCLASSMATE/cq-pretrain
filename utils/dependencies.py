@@ -34,7 +34,7 @@ def installed_versions():
     from importlib.metadata import PackageNotFoundError, version
 
     result = {}
-    for package in ('torch', 'triton', 'flash-linear-attention', 'fla-core',
+    for package in ('torch', 'triton', 'pytorch-triton', 'flash-linear-attention', 'fla-core',
                     'megatron-core', 'apex', 'transformer-engine',
                     'transformers', 'diffusers', 'pyarrow', 'av'):
         try:
