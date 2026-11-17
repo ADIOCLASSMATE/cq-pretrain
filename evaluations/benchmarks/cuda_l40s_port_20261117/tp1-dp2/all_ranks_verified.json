@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "world": 2,
+  "nodes": 1,
+  "tp": 1,
+  "dp": 2,
+  "completed_steps": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "tokens_per_step": 4096,
+  "mean_seconds": 1.4195978939533234,
+  "tokens_per_second": 2885.3240889174476,
+  "peak_memory_gib": 42.5636305809021,
+  "per_rank": [
+    {
+      "rank": 0,
+      "hostname": "job-dc0a475a-7a40-4042-848e-59ff89546138-worker-0",
+      "final_step": 5,
+      "final_loss": 1.280853509902954,
+      "peak_memory_gib": 42.5636305809021
+    },
+    {
+      "rank": 1,
+      "hostname": "job-dc0a475a-7a40-4042-848e-59ff89546138-worker-0",
+      "final_step": 5,
+      "final_loss": 1.2593778371810913,
+      "peak_memory_gib": 42.56361198425293
+    }
+  ]
+}

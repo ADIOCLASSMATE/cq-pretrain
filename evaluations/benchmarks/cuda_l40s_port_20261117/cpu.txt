@@ -1,3 +1,7 @@
 ..................................................s................................................ [ 61%]
 .............s.............................................s.        [100%]
-157 passed, 3 skipped, 49 subtests passed in 33.54s
+=========================== short test summary info ============================
+SKIPPED [1] tests/test_document_packing.py:202: Pinned MCore source unavailable
+SKIPPED [1] ../unified-mm/.venv/lib/python3.12/site-packages/_pytest/unittest.py:523: Pinned official MOSS source is not installed
+SKIPPED [1] tests/test_wan_unified.py:199: Local native tokenizer fixture required
+157 passed, 3 skipped, 49 subtests passed in 39.74s

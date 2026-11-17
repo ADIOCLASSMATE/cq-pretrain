@@ -1,0 +1,12 @@
+{
+  "passed": true,
+  "base": "1545ef7",
+  "configuration_diff_empty": true,
+  "backbone_ast_unchanged_outside_cuda_dispatch": true,
+  "sha256": {
+    "ops/gated_delta_layout.py": "a20bf81bcdc48a3ae9ea3f41028f7ebda1e66a0cf90c03f390aaf90e7eaca8d9",
+    "data/batch_layout.py": "acb99db6a83e345cb0dd727357e2fc83b1040cfad982a4163710ce9abf36be71",
+    "configs/config.py": "1a211f79abeda1d78a886de307873559c0931b559af639b5f8991f7169e6d468",
+    "configs/qwen35_2b_wan.yaml": "035304ce6a722bf18e10c26915d90ba400b8f3c39f73c17f0e8372f123186c01"
+  }
+}
