@@ -49,6 +49,23 @@ def prepare_npu():
     fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32 = fused_wgrad
 
 
+def prepare_cuda():
+    """Standard CUDA stack: set device and initialize the FLA Triton GDN backend."""
+    torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
+    import ops.gated_delta_net as delta
+
+    delta.initialize()
+
+
+def prepare_accelerator():
+    import distributed.accel as accel
+
+    if accel.BACKEND == "npu":
+        prepare_npu()
+    else:
+        prepare_cuda()
+
+
 # Allow enough time for every process to load weights before rendezvous.
 def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, initialize_weights=True):
     global _active, _config, _optimizer_instances
@@ -56,12 +73,14 @@ def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, init
     local_heads = (model_config.linear_value_heads or model_config.linear_heads) // tp
     if model_config.linear_head_dim != 128 or local_heads not in (4, 8, 16, 32):
         raise ValueError("AscendC requires 128-dimensional GDN heads with a supported local head count")
-    prepare_npu()
+    prepare_accelerator()
     logging.getLogger("megatron.core.optimizer").setLevel(logging.WARNING)
     from megatron.core import parallel_state as ps
     from megatron.core.transformer.transformer_config import TransformerConfig
 
-    dist.init_process_group("hccl", timeout=timedelta(minutes=timeout_minutes))
+    import distributed.accel as accel
+
+    dist.init_process_group(accel.dist_backend(), timeout=timedelta(minutes=timeout_minutes))
     ps.initialize_model_parallel(
         tensor_model_parallel_size=tp,
         pipeline_model_parallel_size=1,

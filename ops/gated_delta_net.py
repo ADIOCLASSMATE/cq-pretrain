@@ -22,6 +22,9 @@ POINTWISE = os.getenv("DELTA_ASCENDC_POINTWISE", "1") == "1"
 
 
 def initialize():
+    import distributed.accel as accel
+    if accel.BACKEND == "cuda":
+        return
     if os.getenv("TRITON_ALL_BLOCKS_PARALLEL", "0") != "0":
         raise RuntimeError(
             "TRITON_ALL_BLOCKS_PARALLEL must be 0: 3.2.1 drops logical programs on this A2 path"
@@ -353,6 +356,11 @@ def recurrent(q, k, v, g, beta, state, out):
 
 
 def provenance():
+    import distributed.accel as accel
+    if accel.BACKEND == "cuda":
+        import fla
+        return dict(backend="cuda", fla=getattr(fla, "__version__", "unknown"),
+                    mode=MODE, pointwise=POINTWISE, calls=dict(CALLS))
     import hashlib
     from pathlib import Path
     import fla_npu

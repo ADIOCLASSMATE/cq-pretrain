@@ -1,0 +1,4 @@
+{
+  "runtime": {"stack": "cuda", "note": "L40S CUDA port; torch/CUDA/flash-attn/fla/megatron-core pinned at install"},
+  "sources": {}
+}

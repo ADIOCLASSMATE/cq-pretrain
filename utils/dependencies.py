@@ -7,8 +7,8 @@ PACKAGE = Path(__file__).resolve().parents[1]
 
 def name():
     value = os.environ.get('PRETRAIN_STACK', 'core17')
-    if value != 'core17':
-        raise ValueError(f'This project requires the pinned CANN 9.0/Core 0.17 stack; got {value!r}')
+    if value not in ('core17', 'cuda'):
+        raise ValueError(f'Unsupported PRETRAIN_STACK {value!r}; expected core17 or cuda')
     return value
 
 

@@ -53,7 +53,7 @@ def main():
         raise ValueError('All nodes must use the same sources and local world size')
     env = dict(os.environ, NNODES=str(args.nodes), NODE_RANK=str(args.node_rank),
         NPROC_PER_NODE=str(args.nproc_per_node), MASTER_ADDR=peers[0]['ip'], MASTER_PORT=port,
-        GLOO_SOCKET_IFNAME=interface, HCCL_SOCKET_IFNAME='='+interface,
+        GLOO_SOCKET_IFNAME=interface, NCCL_SOCKET_IFNAME=interface, HCCL_SOCKET_IFNAME='='+interface,
         HCCL_IF_IP=addresses[interface], HCCL_IF_BASE_PORT=str(args.hccl_base_port),
         PRETRAIN_PYTHON=sys.executable, OMP_NUM_THREADS=os.environ.get('OMP_NUM_THREADS', '4'),
         TORCH_EXTENSIONS_DIR=str(ROOT/'.deps/extensions-core17'))

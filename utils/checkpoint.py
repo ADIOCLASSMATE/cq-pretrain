@@ -74,7 +74,7 @@ def save(path, model, optimizer, step, config, topology, training_state=None, da
         _save_file(model.state_dict(), root / f'model_tp_{tp_rank:03d}.pt')
     schema=SCHEMA
     payload = dict(step=step, config=config.to_dict(), tp_rank=tp_rank,
-        topology=topology, cpu_rng=torch.get_rng_state(), npu_rng=torch.npu.get_rng_state(),
+        topology=topology, cpu_rng=torch.get_rng_state(), npu_rng=(torch.cuda if torch.cuda.is_available() else torch.npu).get_rng_state(),
         schema=schema, data_state=data_state, optimizer=[_optimizer_state(opt) for opt in _optimizers(optimizer)])
     if ema is not None:payload['ema']=ema.state_dict()
     _save_file(payload, root / f'rank_{rank:05d}.pt')
@@ -139,7 +139,7 @@ def load(path, model, optimizer, config, topology, training_state=None, data_sta
         ema.load_state_dict(saved['ema'])
         if ema.metadata()!=manifest['ema']:raise ValueError('EMA metadata differs across checkpoint shards')
     torch.set_rng_state(saved['cpu_rng'])
-    torch.npu.set_rng_state(saved['npu_rng'])
+    (torch.cuda if torch.cuda.is_available() else torch.npu).set_rng_state(saved['npu_rng'])
     return saved['step']
 
 

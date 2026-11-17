@@ -237,6 +237,19 @@ class GatedDelta(nn.Module):
                     cu_seqlens=plan.event_cu,
                     cu_seqlens_cpu=plan.event_bounds,
                 )[0]
+        elif x.device.type == "cuda":
+            from fla.ops.gated_delta_rule import chunk_gated_delta_rule
+
+            y = chunk_gated_delta_rule(
+                q,
+                k,
+                v,
+                g=g,
+                beta=beta.to(q.dtype),
+                use_qk_l2norm_in_kernel=True,
+                cu_seqlens=plan.event_cu,
+                head_first=False,
+            )[0]
         else:
             y = recurrent_delta(q, k, v, g, beta, plan.event_bounds)
         selected = y[0].index_select(0, plan.hidden_event).to(x.dtype)

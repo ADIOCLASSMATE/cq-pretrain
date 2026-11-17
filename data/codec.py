@@ -152,7 +152,7 @@ class DevicePreparer:
             # Mixed dtype + device Tensor.to is not an asynchronous DMA path
             # on the pinned NPU runtime. Round on CPU before pin/copy instead.
             randoms[1]=randoms[1].to(torch.bfloat16)
-        if self.device.startswith('npu'):
+        if self.device.startswith(('npu', 'cuda')):
             randoms = [x.pin_memory(device=self.device) if x.numel() else x for x in randoms]
         posterior_noise, noise, times = randoms
         self.stats['random_cpu_seconds']+=time.perf_counter()-begin
@@ -197,7 +197,7 @@ def prepare_wan(preparer,host_batch,generator):
     phase=(times*1000).double()[:,None]*frequencies
     features=torch.cat((phase.cos(),phase.sin()),-1).float()
     randoms=[noise,times,features]
-    if preparer.device.startswith('npu'):randoms=[x.pin_memory(device=preparer.device) for x in randoms]
+    if preparer.device.startswith(('npu', 'cuda')):randoms=[x.pin_memory(device=preparer.device) for x in randoms]
     preparer.stats['random_cpu_seconds']+=time.perf_counter()-began
     begin=time.perf_counter();batch=host_batch.to(preparer.device,non_blocking=True)
     preparer.stats['batch_transfer_enqueue_seconds']+=time.perf_counter()-begin

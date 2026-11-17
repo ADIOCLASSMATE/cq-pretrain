@@ -5,6 +5,7 @@ from dataclasses import dataclass, fields, is_dataclass
 import time
 
 import torch
+_DEV = torch.npu if (hasattr(torch, 'npu') and not torch.cuda.is_available()) else torch.cuda
 
 
 def tensors(value, seen=None):
@@ -50,10 +51,10 @@ class DeviceLoader:
             raise ValueError('Device prefetch must be nonnegative; zero is the synchronous control')
         self.host, self.preparer = host_loader, preparer
         self.limit, self.pending = prefetch, deque()
-        self.is_npu = preparer.device.startswith('npu')
-        self.stream = torch.npu.Stream(device=preparer.device) if self.is_npu and prefetch else None
+        self.is_npu = preparer.device.startswith(('npu', 'cuda'))
+        self.stream = _DEV.Stream(device=preparer.device) if self.is_npu and prefetch else None
         if self.stream is not None:
-            self.stream.wait_stream(torch.npu.current_stream(preparer.device))
+            self.stream.wait_stream(_DEV.current_stream(preparer.device))
         self.closed, self.stopped = False, False
         self.wait_events = []
         self.stats = dict(host_wait_seconds=0., acquired=0, not_ready_on_acquire=0,
@@ -61,7 +62,7 @@ class DeviceLoader:
                           future_submit_seconds=0.)
         def initialize():
             if self.is_npu:
-                torch.npu.set_device(preparer.device)
+                _DEV.set_device(preparer.device)
         self.pool = ThreadPoolExecutor(max_workers=1, initializer=initialize,
                                        thread_name_prefix='latent-prefetch') if prefetch else None
         self.waiting = deque()
@@ -71,9 +72,9 @@ class DeviceLoader:
         host_batch, receipt = item.batch, item.receipt
         begin = time.perf_counter()
         if self.stream is not None:
-            with torch.npu.stream(self.stream):
+            with _DEV.stream(self.stream):
                 batch, randoms = self.preparer.prepare(host_batch, receipt)
-                ready = torch.npu.Event()
+                ready = _DEV.Event()
                 ready.record(self.stream)
         else:
             batch, randoms = self.preparer.prepare(host_batch, receipt)
@@ -131,9 +132,9 @@ class DeviceLoader:
         item.host_keepalive=prepared.host_keepalive
         self.stats['prepare_enqueue_seconds']+=prepared.prepare_seconds
         if prepared.ready is not None:
-            stream = torch.npu.current_stream(self.preparer.device)
+            stream = _DEV.current_stream(self.preparer.device)
             self.stats['not_ready_on_acquire'] += int(not prepared.ready.query())
-            start, end = [torch.npu.Event(enable_timing=True) for _ in range(2)]
+            start, end = [_DEV.Event(enable_timing=True) for _ in range(2)]
             start.record(stream)
             stream.wait_event(prepared.ready)
             end.record(stream)
@@ -141,7 +142,7 @@ class DeviceLoader:
             # Objects can leave Python scope before forward/backward finishes.
             # Record every plan/vision/batch tensor on the consuming stream.
             for tensor in tensors(prepared.batch):
-                if tensor.device.type == 'npu' and tensor.numel():
+                if tensor.device.type in ('npu', 'cuda') and tensor.numel():
                     tensor.record_stream(stream)
         self.stats['acquired'] += 1
         self._fill()

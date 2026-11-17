@@ -17,6 +17,9 @@ ROOT=Path(__file__).resolve().parents[1]
 
 from data.batch import fake_batch
 import distributed.megatron as P
+import distributed.accel as accel
+ACCEL = accel.accel_type()
+DEV = accel.device_module()
 import utils.checkpoint as checkpoint_io
 from training.loss import compose_losses
 from training.renderer_schedule import backward_deferred_renderer
@@ -168,7 +171,7 @@ def main():
     budget=args.total_steps if args.total_steps is not None else args.steps
     if budget <= args.warmup or args.warmup<0 or args.micro_batch < 1 or args.grad_accum < 1:
         raise ValueError('Require steps > warmup and positive batch/accumulation sizes')
-    if args.profile:
+    if args.profile and accel.IS_NPU:
         # The profiler swallows callback-construction errors. Reject its
         # unsupported output characters before allocating the training model.
         from torch_npu.utils._path_manager import PathManager
@@ -237,9 +240,10 @@ def main():
     P.initialize(args.tp, cfg, optimizer_instances=args.optimizer_instances,
                  initialize_weights=not skip_initialization)
     from models.modeling_umm import JointModel
-    import torch_npu
+    if accel.IS_NPU:
+        import torch_npu
     torch.manual_seed(args.seed)
-    torch.npu.manual_seed_all(args.seed)
+    DEV.manual_seed_all(args.seed)
     rank, world = dist.get_rank(), dist.get_world_size()
     profile_ranks={int(r) for r in args.profile_ranks.split(',')}
     if args.profile and (not profile_ranks or min(profile_ranks)<0 or max(profile_ranks)>=world):
@@ -307,7 +311,7 @@ def main():
             startup.update(cross_attention_projections_initialized=initialized,
                            cross_attention_residual='ungated',
                            cross_attention_output_init_std=.02/(2*cfg.dit_layers)**.5)
-    model = model.to(device='npu').train()
+    model = model.to(device=ACCEL).train()
     if args.init_checkpoint and not args.resume:
         loaded_weights=checkpoint_io.initialize_model(args.init_checkpoint,model,cfg)
     startup['weights_to_device_seconds'] = time.perf_counter()-startup_begin
@@ -320,7 +324,7 @@ def main():
         if getattr(p, 'tensor_model_parallel', False) or P.state().get_tensor_model_parallel_rank() == 0]
     count = torch.tensor([sum(p.numel() for p in unique_parameters),
                           sum(p.numel() for p in unique_parameters if p.requires_grad)],
-                         device='npu', dtype=torch.int64)
+                         device=ACCEL, dtype=torch.int64)
     if args.tp > 1:
         dist.all_reduce(count, group=P.state().get_tensor_model_parallel_group())
     parameters,trainable_parameters = count.tolist()
@@ -430,31 +434,31 @@ def main():
             allow_development=args.allow_development_data,native_images=cfg.vision_encoder=='qwen35',
             image_size=cfg.image_size,cfg=cfg,sequence_length=args.sequence_length)
         packer = Packer(docs, cfg, args.sequence_length, data_tokens, resumed_data or None,
-                        pin_device=f'npu:{int(os.environ.get("LOCAL_RANK",0))}',
+                        pin_device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
                         max_images=args.max_images_per_pack,padding_multiple=args.pack_padding_multiple)
         host_loader = ConsumedLoader(packer, args.data_prefetch, resumed_data or None)
-        with torch.random.fork_rng(devices=[torch.npu.current_device()],device_type='npu'):
+        with torch.random.fork_rng(devices=[DEV.current_device()],device_type=ACCEL):
             preparer = DevicePreparer(cfg, args.vae_path if args.data_mode=='A' else None,
-                device=f'npu:{int(os.environ.get("LOCAL_RANK",0))}',
+                device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
                 vae_dtype=getattr(torch,args.vae_dtype), vae_chunk=args.vae_chunk,
                 encoder=args.latent_encoder if args.data_mode=='A' else None,encoder_options=args.latent_options)
         loader = DeviceLoader(host_loader, preparer, args.device_prefetch)
         ordered_buckets = OrderedGradientBuckets(wrapped)
         ordered_gathers = OrderedParameterGathers(wrapped)
         from data.runtime import empty_batch
-        padding_batch = empty_batch(cfg, data_tokens).to('npu')
+        padding_batch = empty_batch(cfg, data_tokens).to(ACCEL)
     elif not budget_already_complete:
         batch = fake_batch(cfg, args.sequence_length, args.micro_batch, args.images,
-                           seed=args.seed + P.dp_rank(), device='npu', dtype=torch.bfloat16)
-    environment = dict(torch=torch.__version__, torch_npu=torch_npu.__version__,
-        device=torch.npu.get_device_name(0), total_memory=torch.npu.get_device_properties(0).total_memory,
+                           seed=args.seed + P.dp_rank(), device=ACCEL, dtype=torch.bfloat16)
+    environment = dict(torch=torch.__version__, torch_npu=(torch_npu.__version__ if accel.IS_NPU else None),
+        device=DEV.get_device_name(0), total_memory=DEV.get_device_properties(0).total_memory,
         world_size=world, topology=topology, model=cfg.to_dict(), parameters=parameters,
         trainable_parameters=trainable_parameters,frozen_parameters=parameters-trainable_parameters,
         training_scope=training_scope,
         arguments={k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()}, global_batch=global_batch,
         capacity_slots_per_update_upper_bound=global_batch*args.sequence_length,
         training_backend='MindSpeed Core + Megatron Core distributed optimizer',
-        attention_backend=f'{cfg.layers-cfg.layers//4} {cfg.gdn_backend} GatedDeltaNet + {cfg.layers//4} torch_npu gated fusion attention', measured_on='Ascend NPU',
+        attention_backend=f'{cfg.layers-cfg.layers//4} {cfg.gdn_backend} GatedDeltaNet + {cfg.layers//4} torch_npu gated fusion attention', measured_on=accel.accel_type(),
         pretrained_weights=loaded_weights,qwen35_assets=text_manifest,startup=startup)
     if ema is not None:
         environment['renderer_ema']=dict(**ema.metadata(),local_storage_bytes=ema.local_bytes,
@@ -497,7 +501,7 @@ def main():
         (output / 'run.json').write_text(json.dumps(environment, indent=2))
         print(json.dumps(environment), flush=True)
     profile = nullcontext()
-    profile_this_rank = args.profile and rank in profile_ranks and not budget_already_complete
+    profile_this_rank = args.profile and rank in profile_ranks and not budget_already_complete and accel.IS_NPU
     if profile_this_rank:
         profile = torch_npu.profiler.profile(
             activities=[torch_npu.profiler.ProfilerActivity.CPU, torch_npu.profiler.ProfilerActivity.NPU],
@@ -510,7 +514,7 @@ def main():
             record_shapes=True, profile_memory=True, with_stack=False,
             experimental_config=torch_npu.profiler._ExperimentalConfig(
                 profiler_level=torch_npu.profiler.ProfilerLevel.Level1))
-    torch.npu.synchronize()
+    DEV.synchronize()
     completed_step = start_step
     last_saved_step = start_step if args.resume else -1
     def save_checkpoint(step):
@@ -562,7 +566,7 @@ def main():
                                 weight_sources=weights)
         finally:
             if hooks:wrapped.enable_forward_pre_hook()
-        torch.npu.synchronize();dist.barrier()
+        DEV.synchronize();dist.barrier()
         event['sampling_seconds']=event['seconds']
         event['seconds']=time.perf_counter()-validation_begin
         event['step']=step
@@ -587,7 +591,7 @@ def main():
     with profile as profiler:
         for local_step in range(args.steps):
             if local_step == args.warmup:
-                torch.npu.synchronize()
+                DEV.synchronize()
                 dist.barrier()
                 measured_begin = time.perf_counter()
             lr = learning_rate(start_step + local_step, args)
@@ -597,11 +601,11 @@ def main():
             optimizer.zero_grad()
             wrapped.zero_grad_buffer()
             if ordered_buckets: ordered_buckets.begin()
-            torch.npu.reset_peak_memory_stats()
+            DEV.reset_peak_memory_stats()
             begin = time.perf_counter()
             phase_events = []
             renderer_forward_events = []
-            loss_totals=[torch.zeros((),device='npu',dtype=torch.float32) for _ in range(3)]
+            loss_totals=[torch.zeros((),device=ACCEL,dtype=torch.float32) for _ in range(3)]
             consumed_receipts=[]; data_wait_seconds=0.; data_prepare_seconds=0.
             if loader:
                 wait_begin=time.perf_counter()
@@ -623,7 +627,7 @@ def main():
                     sum(x[1].get('i2t_null_candidates',0) for x in micro_batches if x),
                     sum(x[1].get('i2t_null_images',0) for x in micro_batches if x),
                     sum(x[1]['condition_query_tokens'] for x in micro_batches if x),
-                    sum(x[1]['unconditional_images'] for x in micro_batches if x)],device='npu',dtype=torch.int64)
+                    sum(x[1]['unconditional_images'] for x in micro_batches if x)],device=ACCEL,dtype=torch.int64)
                 dist.all_reduce(counts,group=P.state().get_data_parallel_group())
                 counts=counts.tolist()
                 if counts[4]==0:
@@ -651,7 +655,7 @@ def main():
                 context = wrapped.no_sync() if micro_step + 1 < accumulation_steps else nullcontext()
                 with context:
                     if args.phase_timing:
-                        events = [torch.npu.Event(enable_timing=True) for _ in range(3)]
+                        events = [DEV.Event(enable_timing=True) for _ in range(3)]
                         renderer_forward_events.append([])
                         events[0].record()
                     deferred=bool(batch.generation is not None and batch.generation.microbatches)
@@ -681,13 +685,13 @@ def main():
             if ordered_buckets: ordered_buckets.finish()
             P.finish_grad_sync(wrapped)
             if args.phase_timing:
-                optimizer_events = [torch.npu.Event(enable_timing=True) for _ in range(2)]
+                optimizer_events = [DEV.Event(enable_timing=True) for _ in range(2)]
                 optimizer_events[0].record()
             updated, grad_norm, _ = optimizer.step()
             if ema is not None and updated and math.isfinite(float(grad_norm)):ema.update()
             if args.phase_timing:
                 optimizer_events[1].record()
-            torch.npu.synchronize()
+            DEV.synchronize()
             data_device_wait_seconds=loader.device_wait_seconds() if loader else 0.
             local_seconds=time.perf_counter()-begin
             if args.phase_timing:
@@ -713,10 +717,10 @@ def main():
                     for pack,fwd,bwd,rfwd in zip(rank_row['packs'],pack_forward_ms,pack_backward_ms,renderer_forward_ms):
                         pack.update(forward_ms=fwd,backward_ms=bwd,deferred_renderer_forward_ms=rfwd)
                 with (output/f'timing_rank_{rank:05d}.jsonl').open('a') as f:f.write(json.dumps(rank_row)+'\n')
-            elapsed = torch.tensor(local_seconds, device='npu', dtype=torch.float32)
+            elapsed = torch.tensor(local_seconds, device=ACCEL, dtype=torch.float32)
             dist.all_reduce(elapsed, op=dist.ReduceOp.MAX)
             seconds = elapsed.item()
-            memory = torch.tensor(torch.npu.max_memory_allocated(), device='npu', dtype=torch.int64)
+            memory = torch.tensor(DEV.max_memory_allocated(), device=ACCEL, dtype=torch.int64)
             dist.all_reduce(memory, op=dist.ReduceOp.MAX)
             values = torch.stack(loss_totals)
             dist.all_reduce(values, group=P.state().get_data_parallel_group())
@@ -739,7 +743,7 @@ def main():
                 row['capacity_slots_per_second']=row.pop('tokens_per_second')
                 row['capacity_slots_per_second']=counts[4]*args.sequence_length/seconds
                 resource_values=torch.tensor([data_wait_seconds,data_prepare_seconds,data_device_wait_seconds,
-                    resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/2**20],device='npu')
+                    resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/2**20],device=ACCEL)
                 dist.all_reduce(resource_values,op=dist.ReduceOp.MAX)
                 row.update(body_tokens=counts[2],occupied_tokens=counts[3],images_consumed=counts[1],
                            generation_images=counts[12],i2t_null_candidates=counts[13],i2t_null_images=counts[14],
@@ -758,7 +762,7 @@ def main():
                            body_tokens_per_second=counts[2]/seconds,occupied_tokens_per_second=counts[3]/seconds)
             if args.phase_timing:
                 phases = torch.tensor([sum(pack_forward_ms),sum(pack_backward_ms),
-                    optimizer_events[0].elapsed_time(optimizer_events[1])], device='npu')
+                    optimizer_events[0].elapsed_time(optimizer_events[1])], device=ACCEL)
                 dist.all_reduce(phases, op=dist.ReduceOp.MAX)
                 row.update(zip(('forward_ms','backward_ms','optimizer_ms'), phases.tolist()))
             if rank == 0:
@@ -782,8 +786,8 @@ def main():
         if args.save_final and completed_step > last_saved_step:
             save_checkpoint(completed_step)
         # Includes gradient zeroing, metric collectives and logging/checkpoints.
-        torch.npu.synchronize()
-        wall_seconds = torch.tensor(time.perf_counter() - (measured_begin or begin), device='npu')
+        DEV.synchronize()
+        wall_seconds = torch.tensor(time.perf_counter() - (measured_begin or begin), device=ACCEL)
         dist.all_reduce(wall_seconds, op=dist.ReduceOp.MAX)
         wall_seconds = wall_seconds.item()
     if rank == 0:
