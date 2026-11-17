@@ -69,6 +69,10 @@ def rms_norm(x, weight, eps, fused=True):
         if torch.are_deterministic_algorithms_enabled():
             return _DeterministicRMSNorm.apply(x, weight, eps)
         return ops.npu_rms_norm(x, weight, epsilon=eps)[0]
+    from ops.cuda_fused import enabled as _cuda_fused, rms_norm as _cuda_rms_norm
+
+    if _cuda_fused(x, fused):
+        return _cuda_rms_norm(x, weight, eps)
     normalized = (x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + eps)).to(x.dtype)
     return normalized * weight
 

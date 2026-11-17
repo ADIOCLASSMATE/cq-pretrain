@@ -23,6 +23,12 @@ class RMSNorm(nn.Module):
         weight = 1 + self.weight.float()
         if x.device.type == "npu" and fused:
             return K.rms_norm(x, weight, self.eps, True)
+        from ops.cuda_fused import enabled as _cuda_fused, rms_norm as _cuda_rms_norm
+
+        if _cuda_fused(x, fused):
+            # Published Triton RMSNorm; the offset weight convention is applied
+            # here, exactly as in the explicit reference below.
+            return _cuda_rms_norm(x, weight, self.eps)
         return (x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + self.eps) * weight).to(
             x.dtype
         )
@@ -109,6 +115,11 @@ class GatedNorm(nn.Module):
             from ops.gated_delta_net import gated_norm
 
             return gated_norm(x, z, self.weight)
+        from ops.cuda_fused import enabled as _cuda_fused, gated_rms_norm as _cuda_gated_norm
+
+        if _cuda_fused(x):
+            # Same upstream FLA entry point the Ascend backend calls.
+            return _cuda_gated_norm(x, z, self.weight, self.eps)
         compute = x if x.dtype == torch.float64 else x.float()
         normalized = compute * torch.rsqrt(compute.square().mean(-1, keepdim=True) + self.eps)
         return (normalized.to(x.dtype) * self.weight * F.silu(z.to(compute.dtype))).to(x.dtype)
