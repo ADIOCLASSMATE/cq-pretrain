@@ -183,11 +183,6 @@ def main():
     budget=args.total_steps if args.total_steps is not None else args.steps
     if budget <= args.warmup or args.warmup<0 or args.micro_batch < 1 or args.grad_accum < 1:
         raise ValueError('Require steps > warmup and positive batch/accumulation sizes')
-    if args.profile and accel.IS_NPU:
-        # The profiler swallows callback-construction errors. Reject its
-        # unsupported output characters before allocating the training model.
-        from torch_npu.utils._path_manager import PathManager
-        PathManager._input_path_common_check(str(Path(args.output).resolve()))
     if args.config and args.tiny:raise ValueError('Select either an explicit model config or the tiny validation model')
     cfg = (tiny_config(linear_heads=16,linear_head_dim=128) if args.tiny else
            RunConfig.load(args.config or ROOT/'configs/qwen35_2b_wan.yaml'))
@@ -247,11 +242,7 @@ def main():
         vision_manifest=json.loads((asset_path(cfg.vision_assets)/'manifest.json').read_text())
         asset_manifest(cfg.vision_assets)
     if args.deterministic:
-        if accel.IS_NPU:
-            os.environ['HCCL_DETERMINISTIC']='True'
-            os.environ['CLOSE_MATMUL_K_SHIFT']='1'
-        else:
-            os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
+        os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
         torch.use_deterministic_algorithms(True)
     complete_pretrained = (cfg.renderer in ('moss','wan') and bool(cfg.text_assets)
         and cfg.vision_encoder == 'qwen35' and not args.random_init)
@@ -259,8 +250,6 @@ def main():
     P.initialize(args.tp, cfg, optimizer_instances=args.optimizer_instances,
                  initialize_weights=not skip_initialization)
     from models.modeling_umm import JointModel
-    if accel.IS_NPU:
-        import torch_npu
     torch.manual_seed(args.seed)
     DEV.manual_seed_all(args.seed)
     rank, world = dist.get_rank(), dist.get_world_size()
@@ -371,28 +360,23 @@ def main():
     training_state['renderer_schedule_sha256']=hashlib.sha256((Path(__file__).parent/'renderer_schedule.py').read_bytes()).hexdigest()
     training_state['initialization_checkpoint']=str(args.init_checkpoint) if args.init_checkpoint else None
     training_state['deterministic']=args.deterministic
-    if not accel.IS_NPU:
-        training_state['optimizer_offload_fraction']=args.optimizer_offload_fraction
-        training_state['cuda_gdn_sha256']=hashlib.sha256((ROOT/'ops/cuda_gated_delta.py').read_bytes()).hexdigest()
-    training_state['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
+    training_state['optimizer_offload_fraction']=args.optimizer_offload_fraction
+    training_state['cuda_gdn_sha256']=hashlib.sha256((ROOT/'ops/cuda_gated_delta.py').read_bytes()).hexdigest()
     training_state['grad_reduce_in_fp32']=not args.bf16_grad_reduce
-    from ops.functional import _ATTENTION_LAYOUT, _COMPILE_MODULATION
-    from ops.cross_entropy import _FUSED_CE
-    training_state['kernel_options'] = dict(fused_ce=_FUSED_CE,
+    from ops.functional import _COMPILE_MODULATION
+    training_state['kernel_options'] = dict(
         compile_modulation=_COMPILE_MODULATION,
-        attention_tile=os.environ.get('PRETRAIN_ATTENTION_TILE','0'),
-        attention_layout=_ATTENTION_LAYOUT)
+        attention_tile=os.environ.get('PRETRAIN_ATTENTION_TILE','0'))
     training_state['kernel_options']['cpu_noise_cast']=os.environ.get('PRETRAIN_CPU_NOISE_CAST','1')
     training_state['kernel_options']['moss_fused_pointwise']=os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
-    training_state['kernel_options']['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
     # A kernel switch that changes speed or numerics must be attributable from
     # the run record alone, without recovering it from source hashes later.
     import ops.cuda_fused as cuda_fused
     training_state['kernel_options']['cuda_fused_norm']=(
-        cuda_fused._ENABLED if accel.BACKEND=='cuda' else None)
+        cuda_fused._ENABLED)
     training_state['kernel_options']['backend']=accel.BACKEND
     training_state['kernel_options']['cuda_fused_ops']=(
-        cuda_fused._OPS_ENABLED if accel.BACKEND=='cuda' else None)
+        cuda_fused._OPS_ENABLED)
     training_state['kernel_options']['grad_reduce_in_fp32']=not args.bf16_grad_reduce
     from ops import flex_cq as _flex
     training_state['kernel_options']['flex_attention']=_flex._ENABLED
@@ -401,7 +385,7 @@ def main():
         if _flex._ENABLED and accel.BACKEND=='cuda' else None)
     from ops import cuda_cross_entropy as _fused_ce
     training_state['kernel_options']['cuda_fused_ce']=(
-        _fused_ce._ENABLED if accel.BACKEND=='cuda' else None)
+        _fused_ce._ENABLED)
     training_state['qwen35_assets']=text_manifest
     if ema is not None:
         training_state['renderer_ema']=dict(schema=ema.schema,module='renderer',decay=ema.decay,dtype='float32',
@@ -418,9 +402,11 @@ def main():
         training_state['moss_pointwise'] = os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
     training_state['backbone_adapter_sha256']=hashlib.sha256(b''.join(
         (ROOT/name).read_bytes() for name in
-        ('models/backbone_qwen35.py','ops/gated_delta_layout.py','models/cq_backbone.py','ops/gated_delta_net.py',
+        ('models/backbone_qwen35.py','ops/gated_delta_layout.py','models/cq_backbone.py',
          'models/modeling_umm.py','data/batch_layout.py','models/cq_layout.py','ops/attention.py',
-         'ops/attention_layout.py','ops/torchair.py','training/renderer_schedule.py','training/loss.py','ops/cross_entropy.py','ops/functional.py','distributed/megatron.py','distributed/mc2.py'))).hexdigest()
+         'ops/attention_layout.py','ops/flex_cq.py','ops/cuda_gated_delta.py','ops/cuda_fused.py',
+         'ops/cuda_cross_entropy.py','ops/cuda_compile.py',
+         'training/renderer_schedule.py','training/loss.py','ops/cross_entropy.py','ops/functional.py','distributed/megatron.py'))).hexdigest()
     if vision_manifest is not None:
         training_state['vision_assets']=vision_manifest
         training_state['vision_adapter_sha256']=hashlib.sha256(
@@ -492,7 +478,7 @@ def main():
     elif not budget_already_complete:
         batch = fake_batch(cfg, args.sequence_length, args.micro_batch, args.images,
                            seed=args.seed + P.dp_rank(), device=ACCEL, dtype=torch.bfloat16)
-    environment = dict(torch=torch.__version__, torch_npu=(torch_npu.__version__ if accel.IS_NPU else None),
+    environment = dict(torch=torch.__version__,
         device=DEV.get_device_name(DEV.current_device()),
         total_memory=DEV.get_device_properties(DEV.current_device()).total_memory,
         world_size=world, topology=topology, model=cfg.to_dict(), parameters=parameters,
@@ -500,9 +486,8 @@ def main():
         training_scope=training_scope,
         arguments={k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()}, global_batch=global_batch,
         capacity_slots_per_update_upper_bound=global_batch*args.sequence_length,
-        training_backend=('MindSpeed + Megatron Core / HCCL' if accel.IS_NPU else 'Megatron Core / NCCL'),
-        attention_backend=(f'{cfg.gdn_backend} GatedDeltaNet + torch_npu fusion attention' if accel.IS_NPU
-                           else 'upstream flash-linear-attention GatedDeltaNet + PyTorch SDPA'),
+        training_backend=('Megatron Core / NCCL'),
+        attention_backend=('upstream flash-linear-attention GatedDeltaNet + PyTorch SDPA'),
         measured_on=accel.accel_type(), cuda=torch.version.cuda, synthetic=not bool(args.data_snapshot),
         pretrained_weights=loaded_weights,qwen35_assets=text_manifest,startup=startup)
     if ema is not None:
@@ -525,44 +510,19 @@ def main():
     environment['stack'] = stack.name()
     environment['dependencies'] = json.loads(stack.lock_path().read_text())
     environment['installed_versions'] = stack.installed_versions()
-    if not accel.IS_NPU:
-        environment['nccl'] = torch.cuda.nccl.version()
+    environment['nccl'] = torch.cuda.nccl.version()
     host = dict(rank=rank, local_rank=int(os.environ.get('LOCAL_RANK', 0)),
         hostname=socket.gethostname(), tp_rank=P.state().get_tensor_model_parallel_rank(),
         dp_rank=P.dp_rank())
     hosts = [None] * world
     dist.all_gather_object(hosts, host)
     environment['rank_placement'] = hosts
-    cann_root = Path(os.environ.get('ASCEND_HOME_PATH', '/usr/local/Ascend/ascend-toolkit/latest'))
-    version_file = next((p for p in (cann_root/'x86_64-linux/ascend_toolkit_install.info',
-                                    cann_root/'share/info/runtime/version.info',
-                                    cann_root/'version.cfg', cann_root/'runtime/version.info',
-                                    cann_root/'version.info') if p.is_file()), cann_root/'version.info')
-    environment['cann'] = version_file.read_text() if version_file.exists() else 'unknown'
-    environment['cann_manifest_path'] = str(version_file.resolve())
-    maps = Path('/proc/self/maps')
-    environment['cann_runtime_library_paths'] = sorted({line.split()[-1]
-        for line in (maps.read_text().splitlines() if maps.exists() else [])
-        if any(library in line for library in
-               ('libascendcl.so', 'libruntime.so', 'libopapi.so', 'libatb.so'))})
     if rank == 0:
         (output / 'run.json').write_text(json.dumps(environment, indent=2))
         print(json.dumps(environment), flush=True)
     profile = nullcontext()
     profile_this_rank = args.profile and rank in profile_ranks and not budget_already_complete
-    if profile_this_rank and accel.IS_NPU:
-        profile = torch_npu.profiler.profile(
-            activities=[torch_npu.profiler.ProfilerActivity.CPU, torch_npu.profiler.ProfilerActivity.NPU],
-            schedule=torch_npu.profiler.schedule(wait=args.warmup, warmup=1, active=2, repeat=1),
-            # Record during training; parse after all HCCL work has ended.
-            # Synchronous mid-step parsing can make other ranks wait
-            # long enough to hit the collective execution timeout.
-            on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(
-                str(output / 'profile' / f'rank{rank}'),analyse_flag=False),
-            record_shapes=True, profile_memory=True, with_stack=False,
-            experimental_config=torch_npu.profiler._ExperimentalConfig(
-                profiler_level=torch_npu.profiler.ProfilerLevel.Level1))
-    elif profile_this_rank:
+    if profile_this_rank:
         profile = torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
             schedule=torch.profiler.schedule(wait=args.warmup, warmup=1, active=2, repeat=1),
@@ -592,7 +552,7 @@ def main():
         from utils.eval_snapshot import save
         provenance=dict(source_sha256=environment['source_sha256'],
             dependencies=environment['dependencies'],
-            runtime={key:environment[key] for key in ('torch','torch_npu','stack','cann')},
+            runtime={key:environment[key] for key in ('torch','stack','cuda')},
             assets={key:training_state[key] for key in ('qwen35_assets','vision_assets','moss_assets','wan_assets')
                     if key in training_state},
             inference_inputs={key:training_state.get('data',{}).get(key) for key in
@@ -928,16 +888,8 @@ def main():
                    packing_stats=packer.stats,preparer_stats=preparer.stats,
                    device_stats=loader.stats,image_stats=docs.image_reader.stats() if docs.image_reader else {})
         (output/f'data_rank_{rank:05d}.json').write_text(json.dumps(stats))
-    from ops.gated_delta_net import provenance
-    (output/f'backend_rank_{rank:05d}.json').write_text(json.dumps(provenance(),indent=2))
     dist.barrier()
     dist.destroy_process_group()
-    if profile_this_rank and accel.IS_NPU:
-        from torch_npu.profiler.profiler import analyse
-        profile_root=output/'profile'/f'rank{rank}'
-        analyse(str(profile_root),max_process_number=4)
-        if not list(profile_root.glob('*/ASCEND_PROFILER_OUTPUT/op_statistic.csv')):
-            raise RuntimeError(f'Profiling did not export rank {rank}; inspect offline parser errors')
 
 
 if __name__ == '__main__':

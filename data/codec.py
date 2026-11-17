@@ -22,42 +22,16 @@ class FrozenKL16(nn.Module):
         self.requires_grad_(False).eval().to(device=device, dtype=dtype)
         self.scale, self.chunk = float(scale), int(chunk)
         self.dtype, self.device = dtype, device
-        if str(device).startswith('npu') and dtype==torch.float32:
-            torch.npu.conv.allow_hf32=False
-            torch.npu.matmul.allow_hf32=False
 
-    def norm_silu(self, x, norm):
-        import torch_npu
-        return torch_npu.npu_group_norm_silu(x,norm.weight,norm.bias,norm.num_groups,eps=norm.eps)[0]
 
-    def resblock(self, x, block):
-        h=block.conv1(self.norm_silu(x,block.norm1))
-        h=block.conv2(self.norm_silu(h,block.norm2))
-        if block.in_channels!=block.out_channels:
-            x=block.conv_shortcut(x) if block.use_conv_shortcut else block.nin_shortcut(x)
-        return x+h
 
-    def fast_encoder(self, x):
-        # The original frozen encoder retains an unused list of every hidden
-        # state. Release each level immediately and fuse GroupNorm + SiLU.
-        enc=self.encoder;h=enc.conv_in(x)
-        for level in range(enc.num_resolutions):
-            stage=enc.down[level]
-            for i in range(enc.num_res_blocks):
-                h=self.resblock(h,stage.block[i])
-                if len(stage.attn):h=stage.attn[i](h)
-            if level!=enc.num_resolutions-1:h=stage.downsample(h)
-        h=self.resblock(h,enc.mid.block_1)
-        h=enc.mid.attn_1(h)
-        h=self.resblock(h,enc.mid.block_2)
-        return enc.conv_out(self.norm_silu(h,enc.norm_out))
 
     @torch.no_grad()
     def encode(self, pixels):
         moments = []
         for start in range(0, len(pixels), self.chunk):
             x = pixels[start:start+self.chunk].to(self.dtype)
-            encoded=self.fast_encoder(x) if x.device.type=='npu' else self.encoder(x)
+            encoded=self.encoder(x)
             moments.append(self.quant_conv(encoded).float())
         result = torch.cat(moments)
         mean, logvar = result.chunk(2, 1)

@@ -74,7 +74,7 @@ def save(path, model, optimizer, step, config, topology, training_state=None, da
         _save_file(model.state_dict(), root / f'model_tp_{tp_rank:03d}.pt')
     schema=SCHEMA
     payload = dict(step=step, config=config.to_dict(), tp_rank=tp_rank,
-        topology=topology, cpu_rng=torch.get_rng_state(), npu_rng=(torch.cuda if torch.cuda.is_available() else torch.npu).get_rng_state(),
+        topology=topology, cpu_rng=torch.get_rng_state(), device_rng=torch.cuda.get_rng_state(),
         schema=schema, data_state=data_state, optimizer=[_optimizer_state(opt) for opt in _optimizers(optimizer)])
     if ema is not None:payload['ema']=ema.state_dict()
     _save_file(payload, root / f'rank_{rank:05d}.pt')
@@ -139,7 +139,8 @@ def load(path, model, optimizer, config, topology, training_state=None, data_sta
         ema.load_state_dict(saved['ema'])
         if ema.metadata()!=manifest['ema']:raise ValueError('EMA metadata differs across checkpoint shards')
     torch.set_rng_state(saved['cpu_rng'])
-    (torch.cuda if torch.cuda.is_available() else torch.npu).set_rng_state(saved['npu_rng'])
+    # Checkpoints written before the NPU backend was removed used 'npu_rng'.
+    torch.cuda.set_rng_state(saved['device_rng'] if 'device_rng' in saved else saved['npu_rng'])
     return saved['step']
 
 
@@ -158,7 +159,7 @@ def initialization_model_config(config):
         # It allocates no learned tensor: queries reuse the shared image-mask
         # embedding and the backbone/DiT weights are identical at any Q. A new
         # stage may therefore change Q with a fresh optimizer and data cursor.
-        'image_condition_queries','visual_query_mode','visual_cache','gdn_backend'}
+        'image_condition_queries','visual_query_mode','visual_cache'}
     return {k:v for k,v in config.items() if k not in execution}
 
 

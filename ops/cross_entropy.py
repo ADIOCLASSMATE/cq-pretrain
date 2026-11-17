@@ -11,9 +11,6 @@ import torch.distributed as dist
 import distributed.megatron as parallel
 from ops.functional import fused_wgrad
 
-_FUSED_CE = os.environ.get("PRETRAIN_FUSED_CE", "1") == "1"
-
-
 def logits_and_probabilities(hidden, weight, targets, group, rank, size):
     logits = torch.nn.functional.linear(hidden, weight).float()
     maxima = logits.max(-1).values
@@ -42,24 +39,14 @@ class _LinearCE(torch.autograd.Function):
         size = parallel.tp_size()
         group = ps.get_tensor_model_parallel_group() if ps else None
         rank = ps.get_tensor_model_parallel_rank() if ps else 0
-        fused_ce = hidden.device.type == "npu" and size == 1 and _FUSED_CE
         total = hidden.new_zeros((), dtype=torch.float32)
         for start in range(0, hidden.shape[0], chunk):
-            if fused_ce:
-                import torch_npu
-
-                logits = torch.nn.functional.linear(hidden[start : start + chunk], weight).float()
-                loss = torch_npu.npu_cross_entropy_loss(
-                    logits, targets[start : start + chunk], reduction="sum"
-                )[0]
-            else:
-                loss, _, _, _ = logits_and_probabilities(
-                    hidden[start : start + chunk], weight, targets[start : start + chunk], group, rank, size
-                )
+            loss, _, _, _ = logits_and_probabilities(
+                hidden[start : start + chunk], weight, targets[start : start + chunk], group, rank, size
+            )
             total += loss.sum()
         ctx.save_for_backward(hidden, weight, targets)
         ctx.chunk, ctx.group, ctx.rank, ctx.size = chunk, group, rank, size
-        ctx.fused_ce = fused_ce
         ctx.main_grad = (
             getattr(weight, "main_grad", None)
             if getattr(weight, "_ce_direct_accumulation", False)
@@ -79,26 +66,15 @@ class _LinearCE(torch.autograd.Function):
         factor = grad_output.float() / max(1, hidden.shape[0])
         for start in range(0, hidden.shape[0], ctx.chunk):
             h = hidden[start : start + ctx.chunk]
-            if ctx.fused_ce:
-                import torch_npu
-
-                logits = torch.nn.functional.linear(h, weight).float()
-                chunk_targets = targets[start : start + ctx.chunk]
-                _, log_prob, _, _ = torch_npu.npu_cross_entropy_loss(logits, chunk_targets, reduction="sum")
-                gradient = torch_npu.npu_cross_entropy_loss_backward(
-                    factor.reshape(1), log_prob, chunk_targets, reduction="sum"
-                ).to(hidden.dtype)
-                del logits, log_prob
-            else:
-                _, prob, index, owned = logits_and_probabilities(
-                    h, weight, targets[start : start + ctx.chunk], ctx.group, ctx.rank, ctx.size
-                )
-                prob.scatter_add_(1, index[:, None], -owned[:, None].to(prob.dtype))
-                gradient = (prob * factor).to(hidden.dtype)
+            _, prob, index, owned = logits_and_probabilities(
+                h, weight, targets[start : start + ctx.chunk], ctx.group, ctx.rank, ctx.size
+            )
+            prob.scatter_add_(1, index[:, None], -owned[:, None].to(prob.dtype))
+            gradient = (prob * factor).to(hidden.dtype)
             dh[start : start + ctx.chunk] = gradient @ weight
             # Vendor GEMM accumulates BF16 products directly into FP32, with no
             # full FP32 cast or separately materialized dW for each chunk.
-            if hidden.device.type in ("npu", "cuda"):
+            if hidden.device.type == "cuda":
                 fused_wgrad(h, gradient, dw)
             else:
                 dw.addmm_(gradient.float().T, h.float())

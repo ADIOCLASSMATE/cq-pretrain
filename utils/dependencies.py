@@ -6,23 +6,10 @@ PACKAGE = Path(__file__).resolve().parents[1]
 
 
 def name():
-    from distributed.accel import IS_NPU
-
-    value = os.environ.get('PRETRAIN_STACK', 'core17' if IS_NPU else 'cuda')
-    # Existing model YAMLs describe the Ascend stack. Device dispatch selects
-    # CUDA without rewriting their model or CPU planning configuration.
-    if value == 'core17' and not IS_NPU:
-        value = 'cuda'
-    if value not in ('core17', 'cuda'):
-        raise ValueError(f'Unsupported PRETRAIN_STACK {value!r}; expected core17 or cuda')
+    value = os.environ.get('PRETRAIN_STACK', 'cuda')
+    if value != 'cuda':
+        raise ValueError(f'Unsupported PRETRAIN_STACK {value!r}; this branch is CUDA-only')
     return value
-
-
-def source_directories():
-    deps = PACKAGE / '.deps'
-    name()
-    return [deps / 'core17' / component for component in
-            ('Megatron-LM', 'MegatronAdaptor', 'TransformerEngineNPU', 'MindSpeed')]
 
 
 def lock_path():

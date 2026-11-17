@@ -1,0 +1,104 @@
+{
+  "question": "Is deleting the Ascend NPU backend neutral for the CUDA training path?",
+  "method": [
+    "Fold every `device.type == \"npu\"` / accel.IS_NPU branch as a compile-time False constant via AST, then cut the exact line ranges out of the original text so comments and formatting survive byte-for-byte.",
+    "Delete modules whose entire subject is Ascend (AscendC GDN, MC2, TorchAIR, MindSpeed setup, the pinned core17 lock) after verifying each carries Ascend markers.",
+    "Compare against a separate git worktree at the pre-removal commit. The live tree is never mutated by the comparison (an earlier `git stash` round-trip on the shared tree was the wrong tool and produced one misread result)."
+  ],
+  "scale": {
+    "files_deleted": 31,
+    "files_modified": 23,
+    "dead_branches_folded": 36,
+    "npu_guards_before": 27,
+    "npu_guards_after": 0
+  },
+  "tests": {
+    "before": {
+      "passed": 136,
+      "failed": 1,
+      "skipped": 2,
+      "collected_results": 139
+    },
+    "after": {
+      "passed": 134,
+      "failed": 1,
+      "skipped": 1,
+      "collected_results": 136
+    },
+    "removed_tests_all_had_their_subject_deleted": [
+      "tests/test_mc2.py::MC2GradientTests::test_fp32_buffer_and_hook_gradient",
+      "tests/test_mc2.py::MC2GradientTests::test_fragmented_topology_cannot_use_mc2",
+      "tests/test_mc2.py::MC2GradientTests::test_local_chain_rule",
+      "tests/test_cuda_backend.py::test_cuda_disables_mc2_before_any_npu_probe_or_collective",
+      "tests/test_cuda_backend.py::test_unchanged_ascend_yaml_resolves_cuda_runtime_lock"
+    ],
+    "added_tests": [
+      "tests/test_cuda_backend.py::test_no_ascend_runtime_remains_on_the_training_path",
+      "tests/test_cuda_backend.py::test_only_the_cuda_stack_is_accepted"
+    ],
+    "outcome_changes_for_tests_present_in_both": {
+      "tests/test_document_packing.py::test_mcore_post_hooks_accumulate_all_chunks_but_ready_only_once": "SKIPPED -> PASSED: it pointed at the Ascend-only .deps/core17/Megatron-LM checkout, which never exists on CUDA, so it was vacuously skipped. It now parses the real installed megatron.core.distributed and actually exercises the hook contract."
+    },
+    "accounting": "139 - 5 + 2 = 136",
+    "failure_in_both_trees": "tests/test_wan_unified.py (pre-existing pyarrow/NumPy clash, reproduced identically on the pre-removal commit)"
+  },
+  "numerics": {
+    "config": "synthetic, seq 8192, tp1 dp2, GA1, bf16-grad-reduce, seed 42, 6 steps",
+    "before_losses": [
+      1.313961,
+      1.312687,
+      1.306893,
+      1.288794,
+      1.24905,
+      1.237731
+    ],
+    "after_losses": [
+      1.313961,
+      1.312624,
+      1.307209,
+      1.289121,
+      1.249081,
+      1.238141
+    ],
+    "cross_tree_drift": 0.0004101,
+    "self_drift_same_tree_same_seed_matched_config": 0.0009152889251708984,
+    "control_runs": {
+      "a": [
+        1.3140921592712402,
+        1.3131940364837646,
+        1.3072764873504639,
+        1.2893717288970947,
+        1.2488709688186646,
+        1.2378952503204346
+      ],
+      "b": [
+        1.3139612674713135,
+        1.3122787475585938,
+        1.307586908340454,
+        1.2889260053634644,
+        1.2488675117492676,
+        1.2378737926483154
+      ]
+    },
+    "verdict": "Neutral. Run-to-run self-drift exceeds the cross-tree drift, so the difference is nondeterministic reduction order (CUDA atomics in the CQ event index_add_/scatter_add_, plus NCCL), not a changed code path. Step 1 is bit-identical across trees; divergence only appears after the first optimizer update, which is the signature of accumulated atomics.",
+    "confirmed_by_inspection": "diff of ops/functional.py shows every removed line sits inside the `if ops:` NPU branch or an NPU-only autograd class; the surviving CUDA code is textually unchanged."
+  },
+  "performance": {
+    "time_ratio_before_over_after": 0.99,
+    "peak_memory_delta_gib": 0.0
+  },
+  "config_keys_removed_from_qwen35_2b_wan.yaml": [
+    "gdn_backend: ascendc",
+    "PRETRAIN_STACK: core17",
+    "PRETRAIN_ATTENTION_LAYOUT: SBH",
+    "PRETRAIN_FUSED_CE",
+    "PRETRAIN_MC2_ROW",
+    "HCCL_EXEC_TIMEOUT",
+    "HCCL_CONNECT_TIMEOUT"
+  ],
+  "config_keys_deliberately_kept": {
+    "PRETRAIN_ATTENTION_TILE": "2048 still drives CPU query tiling for the dense fallback",
+    "PRETRAIN_COMPILE_MODULATION": "0; the Inductor DiT pointwise fusion measured slower"
+  },
+  "behaviour_change_on_purpose": "PRETRAIN_STACK=core17 now raises instead of silently resolving to the CUDA lock. utils/dependencies.py always promised never to fall back to another stack silently."
+}

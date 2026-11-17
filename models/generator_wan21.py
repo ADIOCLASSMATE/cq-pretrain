@@ -57,23 +57,6 @@ class RMSNorm(nn.Module):
 
 def packed_attention(q, k, v, q_ends, k_ends):
     q, k = q.to(v.dtype), k.to(v.dtype)
-    if q.device.type == "npu":
-        import torch_npu
-
-        return torch_npu.npu_fusion_attention(
-            q.contiguous(),
-            k.contiguous(),
-            v.contiguous(),
-            q.shape[1],
-            input_layout="TND",
-            scale=q.shape[-1] ** -0.5,
-            keep_prob=1.0,
-            sparse_mode=0,
-            pre_tockens=2147483647,
-            next_tockens=2147483647,
-            actual_seq_qlen=q_ends,
-            actual_seq_kvlen=k_ends,
-        )[0]
     result = []
     qa = ka = 0
     for qb, kb in zip(q_ends, k_ends):

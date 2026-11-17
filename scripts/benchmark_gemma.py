@@ -179,7 +179,7 @@ class SoftcapCE(torch.autograd.Function):
             prob.scatter_add_(1, index[:, None], -owned[:, None].to(prob.dtype))
             dy = (prob * (1-tanh.square()) * (grad.float()/len(h))).to(h.dtype)
             dh[i:i+ctx.chunk] = dy @ w
-            if h.device.type == 'npu': K.fused_wgrad(x, dy, dw)
+            if h.device.type == 'cuda': K.fused_wgrad(x, dy, dw)
             else: dw.addmm_(dy.float().T, x.float())
         if P.tp_size() > 1: torch.distributed.all_reduce(dh, group=P.state().get_tensor_model_parallel_group())
         return dh, dw.to(w.dtype), None, None, None

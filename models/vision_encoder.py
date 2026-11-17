@@ -66,37 +66,18 @@ class VisionAttention(nn.Module):
     def forward(self, x, layout, fused):
         q, k, v = self.qkv(x).reshape(len(x), 3, self.heads, self.dim).unbind(1)
         q, k = rotary(q, layout.cos, layout.sin), rotary(k, layout.cos, layout.sin)
-        if x.device.type == "npu" and fused:
-            import torch_npu
-
-            result = torch_npu.npu_fusion_attention(
-                q.contiguous(),
-                k.contiguous(),
-                v.contiguous(),
-                self.heads,
-                input_layout="TND",
-                scale=self.dim**-0.5,
-                keep_prob=1.0,
-                pre_tockens=2147483647,
-                next_tockens=2147483647,
-                sparse_mode=0,
-                actual_seq_qlen=layout.ends,
-                actual_seq_kvlen=layout.ends,
-            )[0]
-        else:
-            # Reference/CPU path. Never mix keys from different packed images.
-            outputs = []
-            for qi, ki, vi in zip(q.split(layout.lengths), k.split(layout.lengths), v.split(layout.lengths)):
-                outputs.append(
-                    F.scaled_dot_product_attention(
-                        qi.transpose(0, 1)[None],
-                        ki.transpose(0, 1)[None],
-                        vi.transpose(0, 1)[None],
-                        dropout_p=0.0,
-                        is_causal=False,
-                    )[0].transpose(0, 1)
-                )
-            result = torch.cat(outputs)
+        outputs = []
+        for qi, ki, vi in zip(q.split(layout.lengths), k.split(layout.lengths), v.split(layout.lengths)):
+            outputs.append(
+                F.scaled_dot_product_attention(
+                    qi.transpose(0, 1)[None],
+                    ki.transpose(0, 1)[None],
+                    vi.transpose(0, 1)[None],
+                    dropout_p=0.0,
+                    is_causal=False,
+                )[0].transpose(0, 1)
+            )
+        result = torch.cat(outputs)
         return self.proj(result.reshape(len(x), -1))
 
 

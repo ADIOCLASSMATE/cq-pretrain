@@ -21,8 +21,6 @@ class RMSNorm(nn.Module):
         if x.dtype == torch.float64:
             return x * torch.rsqrt(x.square().mean(-1, keepdim=True) + self.eps) * (1 + self.weight)
         weight = 1 + self.weight.float()
-        if x.device.type == "npu" and fused:
-            return K.rms_norm(x, weight, self.eps, True)
         from ops.cuda_fused import enabled as _cuda_fused, rms_norm as _cuda_rms_norm
 
         if _cuda_fused(x, fused):
@@ -56,13 +54,8 @@ class MLP(nn.Module):
     def forward(self, x):
         if self.fused_projections:
             projected = self.gate_up_proj(x)
-            if x.device.type == "npu":
-                import torch_npu
-
-                activated = torch_npu.npu_swiglu(projected, dim=-1)
-            else:
-                gate, up = projected.chunk(2, -1)
-                activated = F.silu(gate) * up
+            gate, up = projected.chunk(2, -1)
+            activated = F.silu(gate) * up
             return self.down_proj(activated)
         return self.down_proj(F.silu(self.gate_proj(x)) * self.up_proj(x))
 
@@ -93,16 +86,6 @@ class CausalConv(nn.Module):
         nn.init.uniform_(self.weight, -0.5, 0.5)
 
     def forward(self, x, plan):
-        if x.device.type == "npu":
-            import ops.gated_delta_net as delta_ascendc
-
-            return delta_ascendc.conv(
-                x,
-                self.weight[:, 0],
-                activation="silu",
-                cu_seqlens=plan.content_cu,
-                cu_seqlens_cpu=plan.content_bounds,
-            )[0]
         if _cuda_ops_enabled(x):
             from ops.cuda_fused import causal_conv1d as _cuda_conv
 
@@ -123,10 +106,6 @@ class GatedNorm(nn.Module):
         self.eps = eps
 
     def forward(self, x, z):
-        if x.device.type == "npu":
-            from ops.gated_delta_net import gated_norm
-
-            return gated_norm(x, z, self.weight)
         from ops.cuda_fused import enabled as _cuda_fused, gated_rms_norm as _cuda_gated_norm
 
         if _cuda_fused(x):
@@ -218,12 +197,7 @@ class GatedDelta(nn.Module):
         if cache is not None:
             if torch.is_grad_enabled():
                 raise ValueError("CQ state caching is inference-only")
-            if x.device.type == "npu":
-                from ops.gated_delta_net import prefill
-
-                y, state = prefill(q, k, v, g, beta, plan.event_bounds)
-            else:
-                y, state = recurrent_delta(q, k, v, g, beta, plan.event_bounds, True)
+            y, state = recurrent_delta(q, k, v, g, beta, plan.event_bounds, True)
             # Recurrent decode uses value-first state; only real C enters history.
             cache["state"] = state.transpose(-1, -2).contiguous()
             count = cfg.linear_conv_kernel - 1
@@ -232,34 +206,6 @@ class GatedDelta(nn.Module):
             if len(tail):
                 history[0, -len(tail) :].copy_(tail)
             cache["conv"] = history
-        elif x.device.type == "npu":
-            import ops.gated_delta_net as delta_ascendc
-
-            if cfg.gdn_backend == "mindspeed":
-                from mindspeed.core.ssm.npu_chunk_gated_delta_rule import chunk_gated_delta_rule
-
-                y = chunk_gated_delta_rule(
-                    q,
-                    k,
-                    v,
-                    g=g,
-                    beta=beta.to(q.dtype),
-                    use_qk_l2norm_in_kernel=True,
-                    cu_seqlens=plan.event_cu,
-                    chunk_size=64,
-                    head_first=False,
-                )[0]
-            else:
-                y = delta_ascendc.delta(
-                    q,
-                    k,
-                    v,
-                    g,
-                    beta,
-                    use_qk_l2norm_in_kernel=True,
-                    cu_seqlens=plan.event_cu,
-                    cu_seqlens_cpu=plan.event_bounds,
-                )[0]
         elif x.device.type == "cuda":
             from ops.cuda_gated_delta import chunk_gated_delta
 

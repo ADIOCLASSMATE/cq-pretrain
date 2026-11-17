@@ -1,74 +1,57 @@
-"""Published accelerator operators and explicit PyTorch numerical references."""
+"""CUDA training operators and their explicit PyTorch numerical references.
+
+Each entry point has one fused path and one reference implementation. The
+reference is not dead code: it is the oracle every GPU gate compares against
+and the only path on CPU, so it stays a literal transcription of the math.
+"""
 
 import os
 import torch
 from torch.nn import functional as F
 
 _COMPILE_MODULATION = os.environ.get("PRETRAIN_COMPILE_MODULATION", "0") == "1"
-_ATTENTION_LAYOUT = os.environ.get("PRETRAIN_ATTENTION_LAYOUT", "SBH")
-if _ATTENTION_LAYOUT not in ("SBH", "BNSD"):
-    raise ValueError("PRETRAIN_ATTENTION_LAYOUT must be SBH or BNSD")
+
+
+def modulated_norm_reference(hidden, scale, shift, eps=1e-6, upcast=False):
+    normalized = F.layer_norm(hidden.float() if upcast else hidden, (hidden.shape[-1],), eps=eps).to(
+        hidden.dtype
+    )
+    return normalized * (1 + scale) + shift
+
+
+def gated_add_reference(hidden, branch, gate):
+    return hidden + gate * branch
 
 
 def modulated_norm(hidden, scale, shift, fused=True, eps=1e-6, upcast=False):
-    if _COMPILE_MODULATION and fused:
-        if hidden.device.type == "npu":
-            from ops.torchair import compiled
+    if _COMPILE_MODULATION and fused and hidden.device.type == "cuda":
+        from ops.cuda_compile import compiled
 
-            return compiled("modulated_norm")(hidden, scale, shift, eps, upcast)
-        if hidden.device.type == "cuda":
-            from ops.cuda_compile import compiled
-
-            return compiled("modulated_norm")(hidden, scale, shift, eps, upcast)
-    from ops.torchair import modulated_norm_reference
-
+        return compiled("modulated_norm")(hidden, scale, shift, eps, upcast)
     return modulated_norm_reference(hidden, scale, shift, eps, upcast)
 
 
 def gated_add(hidden, branch, gate, fused=True):
-    if _COMPILE_MODULATION and fused:
-        if hidden.device.type == "npu":
-            from ops.torchair import compiled
+    if _COMPILE_MODULATION and fused and hidden.device.type == "cuda":
+        from ops.cuda_compile import compiled
 
-            return compiled("gated_add")(hidden, branch, gate)
-        if hidden.device.type == "cuda":
-            from ops.cuda_compile import compiled
-
-            return compiled("gated_add")(hidden, branch, gate)
-    return hidden + branch * gate
+        return compiled("gated_add")(hidden, branch, gate)
+    return gated_add_reference(hidden, branch, gate)
 
 
 def fused_wgrad(total_input, grad_output, main_grad):
-    """Accumulate BF16 GEMM into FP32 through the selected vendor's binding."""
-    if total_input.device.type == "cuda":
-        import fused_weight_gradient_mlp_cuda
-
-        if total_input.numel() and grad_output.numel():
-            fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(
-                total_input.contiguous(), grad_output.contiguous(), main_grad)
-        return
-    import torch_npu
+    """Accumulate the BF16 GEMM product straight into MCore's FP32 buffer."""
+    import fused_weight_gradient_mlp_cuda
 
     if total_input.numel() and grad_output.numel():
-        torch_npu._npu_matmul_add_fp32(grad_output.contiguous(), total_input.contiguous(), main_grad)
-
-
-def npu_ops(x, fused=True):
-    if fused and x.device.type == "npu":
-        import torch_npu
-
-        return torch_npu
-    return None
+        fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(
+            total_input.contiguous(), grad_output.contiguous(), main_grad
+        )
 
 
 def rms_norm(x, weight, eps, fused=True):
     if not x.numel():
         return x * weight.to(x.dtype)
-    ops = npu_ops(x, fused)
-    if ops:
-        if torch.are_deterministic_algorithms_enabled():
-            return _DeterministicRMSNorm.apply(x, weight, eps)
-        return ops.npu_rms_norm(x, weight, epsilon=eps)[0]
     from ops.cuda_fused import enabled as _cuda_fused, rms_norm as _cuda_rms_norm
 
     if _cuda_fused(x, fused):
@@ -77,74 +60,9 @@ def rms_norm(x, weight, eps, fused=True):
     return normalized * weight
 
 
-class _DeterministicRMSNorm(torch.autograd.Function):
-    """Avoid CANN 9.0's deterministic BF16 small-head dgamma error.
-
-    The ordinary training path uses native BF16 autograd. Deterministic
-    validation retains fused dx and explicitly reduces dgamma in FP32.
-    Switching deterministic mode after warming a kernel is not a valid probe:
-    this runtime caches its initial kernel selection.
-    """
-
-    @staticmethod
-    def forward(ctx, x, weight, eps):
-        import torch_npu
-
-        y, rstd = torch_npu.npu_rms_norm(x, weight, epsilon=eps)
-        ctx.save_for_backward(x, weight, rstd)
-        return y
-
-    @staticmethod
-    def backward(ctx, grad):
-        import torch_npu
-
-        x, weight, rstd = ctx.saved_tensors
-        dx, _ = torch_npu.npu_rms_norm_backward(grad.contiguous(), x, weight, rstd)
-        dw = (grad.float() * x.float() * rstd).reshape(-1, x.shape[-1]).sum(0)
-        return dx.to(x.dtype), dw.to(weight.dtype), None
-
-
-class _AddRMSNorm(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, x, residual, weight, eps):
-        import torch_npu
-
-        norm, rstd, summed = torch_npu.npu_add_rms_norm(x, residual, weight, epsilon=eps)
-        ctx.save_for_backward(summed, weight, rstd)
-        return norm, summed
-
-    @staticmethod
-    def backward(ctx, grad_norm, grad_sum):
-        import torch_npu
-
-        summed, weight, rstd = ctx.saved_tensors
-        dx, dw = torch_npu.npu_rms_norm_backward(grad_norm.contiguous(), summed, weight, rstd)
-        dx = dx + grad_sum
-        return dx, dx, dw, None
-
-
-def add_rms_norm(x, residual, weight, eps, fused=True):
-    ops = npu_ops(x, fused)
-    if ops:
-        # torch_npu 2.6 exposes the forward kernel without an autograd formula.
-        # Supply its exact residual chain rule using the fused RMSNorm backward.
-        return _AddRMSNorm.apply(x, residual, weight, eps)
-    summed = x + residual
-    return rms_norm(summed, weight, eps, False), summed
-
-
-def swiglu(x, fused=True):
-    ops = npu_ops(x, fused)
-    if ops:
-        return ops.npu_swiglu(x, dim=-1)
-    gate, value = x.chunk(2, -1)
-    return F.silu(gate) * value
-
-
 def rotary(x, cos, sin, fused=True):
-    ops = npu_ops(x, fused)
-    if ops:
-        return ops.npu_rotary_mul(x, cos, sin)
+    # `fused` is kept so call sites can still request reference mode explicitly;
+    # this rotate-half form is both the reference and the only implementation.
     first, second = x.chunk(2, -1)
     return x * cos + torch.cat((-second, first), -1) * sin
 
@@ -173,63 +91,30 @@ def _allow_mask(mask):
 
 def attention(q, k, v, mask=None, valid_rows=None, fused=True, scale=None):
     """Q/K/V: [sequence,batch,heads,dim]; bool mask True means forbidden."""
-    ops = npu_ops(q, fused)
     scale = q.shape[-1] ** -0.5 if scale is None else scale
-    if ops:
-        if _ATTENTION_LAYOUT == "BNSD":
-            query, key, value = (t.permute(1, 2, 0, 3).contiguous() for t in (q, k, v))
-            result = (
-                ops.npu_fusion_attention(
-                    query,
-                    key,
-                    value,
-                    head_num=q.shape[2],
-                    input_layout="BNSD",
-                    atten_mask=mask,
-                    scale=scale,
-                    keep_prob=1.0,
-                    sparse_mode=0,
-                )[0]
-                .permute(2, 0, 1, 3)
-                .flatten(-2)
-                .contiguous()
+    query, key, value = (t.permute(1, 2, 0, 3) for t in (q, k, v))
+    repeat = q.shape[2] // k.shape[2]
+    if repeat != 1:
+        if query.device.type == "cuda":
+            # GQA: broadcast the shared KV heads as a view. repeat_interleave
+            # would materialize 4x the K and V activations here (8 query heads
+            # over 2 KV heads), and SDPA accepts the expanded stride.
+            b, h, t, d = key.shape
+            key, value = (
+                x[:, :, None].expand(b, h, repeat, t, d).reshape(b, h * repeat, t, d)
+                for x in (key, value)
             )
         else:
-            result = ops.npu_fusion_attention(
-                q.flatten(-2).contiguous(),
-                k.flatten(-2).contiguous(),
-                v.flatten(-2).contiguous(),
-                head_num=q.shape[2],
-                input_layout="SBH",
-                atten_mask=mask,
-                scale=scale,
-                keep_prob=1.0,
-                sparse_mode=0,
-            )[0]
-    else:
-        query, key, value = (t.permute(1, 2, 0, 3) for t in (q, k, v))
-        repeat = q.shape[2] // k.shape[2]
-        if repeat != 1:
-            if query.device.type == "cuda":
-                # GQA: broadcast the shared KV heads as a view. repeat_interleave
-                # would materialize 4x the K and V activations here (8 query
-                # heads over 2 KV heads), and SDPA accepts the expanded stride.
-                b, h, t, d = key.shape
-                key, value = (
-                    x[:, :, None].expand(b, h, repeat, t, d).reshape(b, h * repeat, t, d)
-                    for x in (key, value)
-                )
-            else:
-                # Explicit repeat in the CPU numerical reference only.
-                key, value = key.repeat_interleave(repeat, 1), value.repeat_interleave(repeat, 1)
-        # SDPA takes True = attend, the inverse of this project's forbid-mask.
-        # Inverting allocates another full [1,1,2S,S] bool (128 MB at S=8192)
-        # on every call, so reuse the per-batch inverse the CPU planner cached.
-        allow = None if mask is None else _allow_mask(mask)
-        result = F.scaled_dot_product_attention(
-            query, key, value, attn_mask=allow, dropout_p=0.0, scale=scale
-        )
-        result = result.permute(2, 0, 1, 3).flatten(-2).contiguous()
+            # Explicit repeat in the CPU numerical reference only.
+            key, value = key.repeat_interleave(repeat, 1), value.repeat_interleave(repeat, 1)
+    # SDPA takes True = attend, the inverse of this project's forbid-mask.
+    # Inverting allocates another full [1,1,2S,S] bool (128 MB at S=8192) on
+    # every call, so reuse the per-batch inverse the CPU planner cached.
+    allow = None if mask is None else _allow_mask(mask)
+    result = F.scaled_dot_product_attention(
+        query, key, value, attn_mask=allow, dropout_p=0.0, scale=scale
+    )
+    result = result.permute(2, 0, 1, 3).flatten(-2).contiguous()
     if valid_rows is not None:
         result = result * valid_rows.transpose(0, 1).unsqueeze(-1).to(result.dtype)
     return result

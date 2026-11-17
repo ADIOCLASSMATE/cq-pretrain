@@ -202,8 +202,10 @@ class DocumentPackingTests(unittest.TestCase):
     def test_mcore_post_hooks_accumulate_all_chunks_but_ready_only_once(self):
         # Execute the installed MCore hook implementation, without initializing
         # its NPU runtime. This tests its real counting/FP32-main-grad contract.
-        deps=Path(__file__).resolve().parents[1]/'.deps/core17/Megatron-LM/megatron/core/distributed'
-        if not deps.is_dir():self.skipTest('Pinned MCore source unavailable')
+        try:
+            import megatron.core.distributed as _mcore_distributed
+            deps=Path(_mcore_distributed.__file__).resolve().parent
+        except ImportError:self.skipTest('Megatron Core unavailable')
         def method(filename,name):
             tree=ast.parse((deps/filename).read_text())
             node=next(n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name==name)

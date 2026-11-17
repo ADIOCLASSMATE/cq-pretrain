@@ -442,7 +442,7 @@ class ConsumedLoader:
         if prefetch < 1: raise ValueError('Prefetch must be positive')
         self.packer, self.limit = packer, prefetch
         self.pool = ThreadPoolExecutor(max_workers=1,
-            initializer=(lambda:(torch.cuda if torch.cuda.is_available() else torch.npu).set_device(self.packer.pin_device)) if self.packer.pin_device else None)
+            initializer=(lambda:torch.cuda.set_device(self.packer.pin_device)) if self.packer.pin_device else None)
         self.pending, self.delivered = deque(), deque()
         self.consumed = copy.deepcopy(state or packer.state_dict())
         self.closed = False

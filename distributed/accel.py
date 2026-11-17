@@ -1,37 +1,21 @@
-"""Accelerator backend selection: CUDA (default) or Ascend NPU.
+"""The single place this branch names its accelerator.
 
-Chosen once at import. PRETRAIN_BACKEND forces it; otherwise torch_npu presence
-decides. All model code keeps its existing ``device.type`` checks; this only
-drives distributed init, device-module and the GDN kernel dispatch.
+Only CUDA is supported here; the Ascend NPU backend and its HCCL/MindSpeed
+stack were removed. Call sites go through ``device_module()`` rather than
+hard-coding ``torch.cuda`` so the indirection survives if that ever changes.
 """
-import os
 import torch
 
-
-def _detect():
-    b = os.environ.get("PRETRAIN_BACKEND", "").lower()
-    if b in ("cuda", "npu"):
-        return b
-    try:
-        import torch_npu  # noqa: F401
-        if torch.npu.is_available():
-            return "npu"
-    except Exception:
-        pass
-    return "cuda"
-
-
-BACKEND = _detect()
-IS_NPU = BACKEND == "npu"
+BACKEND = "cuda"
 
 
 def device_module():
-    return torch.npu if IS_NPU else torch.cuda
+    return torch.cuda
 
 
 def dist_backend():
-    return "hccl" if IS_NPU else "nccl"
+    return "nccl"
 
 
 def accel_type():
-    return "npu" if IS_NPU else "cuda"
+    return "cuda"

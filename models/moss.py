@@ -31,23 +31,14 @@ class RMSNorm(nn.Module):
 
 def situ(hidden,gate):
     # SITU is part of the pretrained architecture; do not replace with SwiGLU.
-    if FUSED_POINTWISE and 'situ' in POINTWISE_KINDS and hidden.device.type=='npu':
-        from models.moss_kernels import situ as fused
-        return fused(hidden,gate)
     return (4*torch.tanh(gate/4)*torch.sigmoid(gate))*(25*torch.tanh(hidden/25))
 
 
 def affine(hidden,scale,shift):
-    if FUSED_POINTWISE and 'affine' in POINTWISE_KINDS and hidden.device.type=='npu':
-        from models.moss_kernels import affine as fused
-        return fused(hidden,scale,shift)
     return hidden*(1+scale)+shift
 
 
 def gated_add(hidden,branch,gate):
-    if FUSED_POINTWISE and 'gated_add' in POINTWISE_KINDS and hidden.device.type=='npu':
-        from models.moss_kernels import gated_add as fused
-        return fused(hidden,branch,gate)
     return hidden+branch*gate
 
 
@@ -58,18 +49,11 @@ def packed_attention(q,k,v,rope,heads,ends):
     # rotary_mul expects [S,B,N,D]; retain the fused exact rotate-half kernel.
     q=K.rotary(q[:,None].contiguous(),cos[:,None],sin[:,None])[:,0]
     k=K.rotary(k[:,None].contiguous(),cos[:,None],sin[:,None])[:,0]
-    if q.device.type=='npu':
-        import torch_npu
-        y=torch_npu.npu_fusion_attention(q.contiguous(),k.contiguous(),v.contiguous(),heads,
-            input_layout='TND',scale=dim**-.5,keep_prob=1.,sparse_mode=0,
-            pre_tockens=2147483647,next_tockens=2147483647,
-            actual_seq_qlen=ends,actual_seq_kvlen=ends)[0]
-    else:
-        rows=[];start=0
-        for end in ends:
-            a,b,c=(x[start:end].transpose(0,1)[None] for x in (q,k,v))
-            rows.append(F.scaled_dot_product_attention(a,b,c)[0].transpose(0,1));start=end
-        y=torch.cat(rows)
+    rows=[];start=0
+    for end in ends:
+        a,b,c=(x[start:end].transpose(0,1)[None] for x in (q,k,v))
+        rows.append(F.scaled_dot_product_attention(a,b,c)[0].transpose(0,1));start=end
+    y=torch.cat(rows)
     return y.flatten(1)
 
 
@@ -132,18 +116,11 @@ def cross_packed_attention(q,k,v,heads,layout):
     """Per-image blocks: image i's latents see only image i's conditions."""
     dim=q.shape[-1]//heads
     q=q.reshape(-1,heads,dim);k=k.reshape(-1,heads,dim);v=v.reshape(-1,heads,dim)
-    if q.device.type=='npu':
-        import torch_npu
-        y=torch_npu.npu_fusion_attention(q.contiguous(),k.contiguous(),v.contiguous(),heads,
-            input_layout='TND',scale=dim**-.5,keep_prob=1.,sparse_mode=0,
-            pre_tockens=2147483647,next_tockens=2147483647,
-            actual_seq_qlen=layout.video_ends,actual_seq_kvlen=layout.text_ends)[0]
-    else:
-        rows=[];qs=0;ks=0
-        for qe,ke in zip(layout.video_ends,layout.text_ends):
-            a,b,c=(x.transpose(0,1)[None] for x in (q[qs:qe],k[ks:ke],v[ks:ke]))
-            rows.append(F.scaled_dot_product_attention(a,b,c)[0].transpose(0,1));qs=qe;ks=ke
-        y=torch.cat(rows)
+    rows=[];qs=0;ks=0
+    for qe,ke in zip(layout.video_ends,layout.text_ends):
+        a,b,c=(x.transpose(0,1)[None] for x in (q[qs:qe],k[ks:ke],v[ks:ke]))
+        rows.append(F.scaled_dot_product_attention(a,b,c)[0].transpose(0,1));qs=qe;ks=ke
+    y=torch.cat(rows)
     return y.flatten(1)
 
 

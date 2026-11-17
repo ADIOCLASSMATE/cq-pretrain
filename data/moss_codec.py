@@ -39,8 +39,6 @@ class FrozenMOSS(nn.Module):
         # Encoding needs no decoder parameters or device memory.
         self.vae.decoder.to('cpu');self.vae.post_quant_conv.to('cpu')
         self.dtype,self.chunk=dtype,chunk
-        if str(device).startswith('npu') and dtype==torch.float32:
-            torch.npu.conv.allow_hf32=False;torch.npu.matmul.allow_hf32=False
 
     @torch.no_grad()
     def encode(self,pixels):

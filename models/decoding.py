@@ -22,28 +22,14 @@ def delta_step(layer, x, cache):
     raw, z, a, b = layer.project(x[:, 0])
     weight = layer.conv1d.weight[:, 0]
     history = cache["conv"][0]
-    if x.device.type == "npu":
-        from fla_npu.ops import ascendc
-
-        convolved = F.silu(
-            ascendc.causal_conv1d_update(
-                raw[:1].contiguous(),
-                cache["conv"],
-                cache["conv_weight"],
-                activation=None,
-                null_block_id=-1,
-                out=cache["conv_out"],
-            )[0]
-        )
-    else:
-        convolved = raw[0] * weight[:, -1]
-        for j in range(len(history)):
-            convolved = convolved + history[j] * weight[:, j]
-        convolved = F.silu(convolved)
-        for j in range(len(history) - 1):
-            history[j].copy_(history[j + 1])
-        if len(history):
-            history[-1].copy_(raw[0])
+    convolved = raw[0] * weight[:, -1]
+    for j in range(len(history)):
+        convolved = convolved + history[j] * weight[:, j]
+    convolved = F.silu(convolved)
+    for j in range(len(history) - 1):
+        history[j].copy_(history[j + 1])
+    if len(history):
+        history[-1].copy_(raw[0])
     cq, k, v = convolved.split((size, size, h * d), -1)
     query = raw[1, :size] * weight[:size, -1]
     for j in range(len(history)):
@@ -57,24 +43,12 @@ def delta_step(layer, x, cache):
     g = -layer.A_log.to(dtype).exp() * F.softplus(a[:1].to(dtype) + layer.dt_bias.to(dtype))
     beta = b[:1].sigmoid()
     state = cache["state"]
-    if x.device.type == "npu":
-        from ops.gated_delta_net import call, recurrent
-
-        q = call("l2_fwd", q.contiguous())[0]
-        k = call("l2_fwd", k.contiguous())[0]
-        # Persistent two-event buffers: C writes, Q has exactly zero gates/K/V.
-        cache["k"][0].copy_(k[0])
-        cache["v"][0].copy_(v[0])
-        cache["g"][0].copy_(g[0])
-        cache["beta"][0].copy_(beta[0])
-        y = recurrent(q, cache["k"], cache["v"], cache["g"], cache["beta"], state, cache["out"])
-    else:
-        q = q * torch.rsqrt(q.square().sum(-1, keepdim=True) + 1e-6) * d**-0.5
-        k = k * torch.rsqrt(k.square().sum(-1, keepdim=True) + 1e-6)
-        state.mul_(g.exp()[..., None, None])
-        residual = v - torch.matmul(state, k[..., None]).squeeze(-1)
-        state.add_((residual * beta[..., None])[..., None] * k[..., None, :])
-        y = torch.matmul(state[0], q[..., None]).squeeze(-1).to(x.dtype)
+    q = q * torch.rsqrt(q.square().sum(-1, keepdim=True) + 1e-6) * d**-0.5
+    k = k * torch.rsqrt(k.square().sum(-1, keepdim=True) + 1e-6)
+    state.mul_(g.exp()[..., None, None])
+    residual = v - torch.matmul(state, k[..., None]).squeeze(-1)
+    state.add_((residual * beta[..., None])[..., None] * k[..., None, :])
+    y = torch.matmul(state[0], q[..., None]).squeeze(-1).to(x.dtype)
     return layer.out_proj(layer.norm(y, z.reshape(2, h, d)).flatten(-2))[:, None]
 
 
@@ -137,18 +111,6 @@ class CQDecoder:
             positions = torch.cat((positions[:1], positions))
         self.rope = tuple(t.to(device=device, dtype=dtype) for t in position_rope(positions, cfg))
         self.ids = torch.tensor([[0, cfg.text_mask_token_id]], device=device)
-        for layer, cache in zip(model.layers, self.layers):
-            if hasattr(layer, "linear_attn") and device.type == "npu":
-                attn = layer.linear_attn
-                h = cache["state"].shape[1]
-                d = cfg.linear_head_dim
-                cache["conv_weight"] = attn.conv1d.weight[:, 0].T.contiguous()
-                cache["conv_out"] = torch.empty(1, attn.conv1d.weight.shape[0], device=device, dtype=dtype)
-                for key in ("k", "v"):
-                    cache[key] = torch.zeros(2, h, d, device=device, dtype=dtype)
-                cache["out"] = torch.empty(2, h, d, device=device, dtype=dtype)
-                cache["g"] = torch.zeros(2, h, device=device, dtype=torch.float32)
-                cache["beta"] = torch.zeros(2, h, device=device, dtype=dtype)
 
     @torch.no_grad()
     def advance(self, token):

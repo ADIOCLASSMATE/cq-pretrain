@@ -11,7 +11,6 @@ from pathlib import Path
 
 @dataclass
 class RuntimeConfig:
-    gdn_backend: str = "ascendc"
     ce_chunk: int = 256
     checkpoint_backbone: bool = False
     checkpoint_dit: bool = False
@@ -104,8 +103,6 @@ class ModelConfig(RuntimeConfig):
         q = self.image_condition_queries
         if self.visual_query_mode not in ("fixed", "native"):
             raise ValueError("visual_query_mode must be fixed or native")
-        if self.gdn_backend not in ("ascendc", "mindspeed"):
-            raise ValueError("gdn_backend must be ascendc or mindspeed")
         if self.renderer == "wan" and (self.flow_draws != 1 or self.latent_channels != 16):
             raise ValueError("Wan uses one flow draw and 16-channel latents")
         if q < 1 or (self.renderer != "wan" and math.isqrt(q) ** 2 != q):
