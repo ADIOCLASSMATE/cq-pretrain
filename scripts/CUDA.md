@@ -377,3 +377,72 @@ GEMM-time-weighted ceiling: **1.54x**. This is an upper
 bound with pre-quantized inputs and fixed scales; real FP8 training adds a cast
 of every activation and weight, amax reduction and scale updates, and changes
 numerics enough to need a long loss-curve comparison rather than a six-step A/B.
+
+## Where the time goes, with every optimization enabled
+
+Profiled at production shape (16 x L40S, seq 8192, TP1 DP16, GA8, BF16 gradient
+reduction) with fused norms, FlexAttention and fused CE all on. Shares are of
+total GPU kernel time; kernels overlap, so they do not sum to step time.
+
+| category | before any of this | after fused norms | all on |
+|---|---:|---:|---:|
+| GEMM | 24.0% | 34.0% | **41.8%** |
+| elementwise | 36.1% | 25.4% | 15.8% |
+| copy/index | 3.6% | 5.1% | 12.0% |
+| other | 4.8% | 3.5% | 9.2% |
+| attention | 11.8% | 17.2% | 8.4% |
+| GDN recurrence | 3.0% | 4.1% | 4.7% |
+| NCCL | 11.2% | 3.7% | 4.0% |
+| norm/reduce | 5.5% | 7.0% | 2.6% |
+
+Read the attention row carefully. FlexAttention compiles to Inductor *template*
+kernels named `triton_tem_fused_*`; a parser that does not know this reports
+attention at 0.6% and inflates "other". The A/B is unambiguous: with
+`PRETRAIN_FLEX_ATTENTION=0` those kernels are absent and `fmha_cutlass*` appear
+at the same share. `scripts/validation/profile_summary.py` classifies them, and
+also attributes each kernel to its launching aten op, which is what exposed the
+two fallbacks below.
+
+Each profile so far has overturned the previous priority list, so re-profile
+after a change rather than working down a stale ranking. Current reads:
+
+- **GEMM now dominates at 41.8%.** Arithmetic, not framework overhead. This is
+  the only remaining category large enough for a step-level win, and FP8 is the
+  one lever on it; see the ceiling measurement above.
+- **NCCL fell to 4.0%.** Multi-node data parallelism is not a bottleneck at
+  GA=8 with BF16 gradient reduction. Per-card throughput *rose* from 2 cards to
+  16 (2023 -> 2158 tok/s), because GA amortizes the all-reduce.
+- **copy/index reached 12%**: `index_select` / `index_add` / `cat` over the CQ
+  event plan. This is the architecture's own layout machinery, not a port
+  artifact. Reducing it means restructuring the GDN event gather, which sits on
+  the protected CPU-plan boundary.
+
+## Two more CUDA reference fallbacks
+
+Both dispatched on `device.type == "npu"`, so CUDA silently took the explicit
+numerical reference. This is the same bug shape as the cross entropy, and worth
+grepping for after any port: a reference path that is correct and slow produces
+no error, only a bad profile.
+
+**Wired: the GDN causal convolution.** CUDA ran a Python loop calling
+`F.conv1d` once per packed document, with a transpose into and out of each call
+and a concatenation at the end. `fla.modules.convolution.causal_conv1d` takes
+the document boundaries the plan already carries (`plan.content_cu`), which is
+exactly what the Ascend path hands its own fused convolution. **6.41x** on the
+operator ([1,8192,6144], 4 documents, forward+backward: 8.709 ms -> 1.360 ms).
+
+`scripts/validation/validate_fused_ops.py` checks it against the reference loop
+and, separately, that the properties the loop existed to guarantee survive:
+perturbing every later document leaves earlier outputs **bitwise** unchanged,
+and perturbing a token leaves outputs before it **bitwise** unchanged, while
+that token's own output moves. Document independence and causality are verified,
+not assumed.
+
+**Rejected: the fused SwiGLU.** Upstream ships one, and it is 1.77x over the
+reference pointwise pair -- but it reads its two inputs as contiguous, while
+this MLP's gate and up are strided views of one packed `gate_up` projection.
+Passing them directly returns **silently wrong values**: relative error 1.414
+against the reference, no exception raised. Copying first is correct but moves
+about 400 MB per call, leaving 1.15x, roughly 1% of a step. It is not wired, and
+`ops/cuda_fused.py` records why. If anything here ever uses that kernel, prove
+the inputs are contiguous first; the failure mode is wrong numbers, not a crash.

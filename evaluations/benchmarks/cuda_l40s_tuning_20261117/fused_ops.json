@@ -1,0 +1,69 @@
+{
+  "what": "Two CUDA reference fallbacks found by the all-on profile; one wired, one rejected.",
+  "accepted": {
+    "op": "GDN causal convolution",
+    "was": "models/backbone_qwen35.py CausalConv.forward dispatched on device.type == 'npu'; CUDA ran a Python loop calling F.conv1d once per packed document, with a transpose in and out of each call and a final concatenation.",
+    "now": "fla.modules.convolution.causal_conv1d, varlen over plan.content_cu -- the same boundaries the Ascend path passes to its own fused convolution.",
+    "operator_speedup": 6.41,
+    "operator_benchmark": "[1,8192,6144], 4 documents, forward+backward: 8.709 ms -> 1.360 ms",
+    "gate": {
+      "passed": true,
+      "device": "NVIDIA L40S",
+      "tolerance": 0.02,
+      "cases": [
+        {
+          "op": "causal_conv1d",
+          "length": 2048,
+          "documents": 1,
+          "errors": {
+            "output": 0.00293119157507348,
+            "dx": 0.0027106207389533815,
+            "dweight": 0.002550037430955096
+          },
+          "isolation": {
+            "cross_document_leak": 0.0,
+            "acausal_leak": 0.0,
+            "own_token_effect": 3.5625
+          },
+          "passed": true
+        },
+        {
+          "op": "causal_conv1d",
+          "length": 3072,
+          "documents": 1,
+          "errors": {
+            "output": 0.002929966555656773,
+            "dx": 0.0027039963268154104,
+            "dweight": 0.0025450477342224033
+          },
+          "isolation": {
+            "cross_document_leak": 0.0,
+            "acausal_leak": 0.0,
+            "own_token_effect": 3.359375
+          },
+          "passed": true
+        }
+      ]
+    },
+    "isolation_note": "cross_document_leak and acausal_leak are exactly 0.0: perturbing every later document leaves earlier outputs bitwise unchanged, and perturbing a token leaves outputs before it bitwise unchanged, while that token's own output moves. Document independence and causality survive."
+  },
+  "rejected": {
+    "op": "backbone MLP SwiGLU",
+    "candidate": "fla.modules.activations.swiglu",
+    "operator_speedup_if_inputs_were_contiguous": 1.77,
+    "operator_speedup_as_actually_callable": 1.15,
+    "reason": "The kernel reads its two inputs as contiguous. This MLP's gate and up are strided views of one packed gate_up projection, so passing them directly returns silently wrong values -- relative error 1.414 against the reference, with no exception. Calling .contiguous() first is correct but copies about 400 MB per call, leaving 1.15x, roughly 1% of a step. Not worth a kernel that fails quietly on the real layout.",
+    "evidence": {
+      "3D chunk (strided)": 1.414,
+      "2D chunk (strided)": 1.414,
+      "2D chunk + contiguous": 0.002887,
+      "3D -> 2D contiguous": 0.002887,
+      "convention": "swiglu(x, y) = silu(x) * y, same as the reference and npu_swiglu"
+    },
+    "caution": "Any future use of this kernel in this repo must prove its inputs are contiguous; the failure mode is wrong numbers, not an error."
+  },
+  "still_unfused_by_choice": {
+    "elementwise 15.8% of kernel time": "Largest single op is aten::mul [16382,1,6144] at 3.6%, the SwiGLU pair above. Fusing it needs either a contiguity copy or a change to the packed gate_up projection layout, which is a checkpoint convention.",
+    "copy/index 12.0% of kernel time": "index_select / index_add / cat over the CQ event plan. This is the architecture's own layout machinery, not a port artifact; reducing it means restructuring the GDN event gather, which sits on the protected CPU-plan boundary."
+  }
+}
