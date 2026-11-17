@@ -326,6 +326,7 @@ class GatedAttention(nn.Module):
             plan.cq_valid,
             None if reference else plan.cq_plan,
             cfg.fused and not reference,
+            None if reference else plan.cq_predicate,
         )
         if g:
             kg = torch.cat((k[: plan.prefix], k[s:keys]))

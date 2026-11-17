@@ -2,9 +2,14 @@
 
 import torch
 from ops import functional as K
+from ops import flex_cq
 
 
-def attend(q, k, v, mask, valid, plan, fused):
+def attend(q, k, v, mask, valid, plan, fused, predicate=None):
+    # The predicate is the same visibility rule as `mask`, so this only changes
+    # which kernel evaluates it; `fused=False` keeps the numerical reference.
+    if fused and flex_cq.usable(q, predicate, mask):
+        return flex_cq.attention(q, k, v, predicate, valid)
     if plan is None:
         return K.attention(q, k, v, mask, valid, fused)
     return tiled_attention(q, k, v, mask, valid, plan, fused)

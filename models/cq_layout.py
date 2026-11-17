@@ -32,6 +32,7 @@ class MainlinePlan:
     rope_cos: torch.Tensor | None = None
     rope_sin: torch.Tensor | None = None
     query_unconditional: torch.Tensor | None = None  # [queries], no C reads; target positions stay intact
+    cq_predicate: object = None  # CQPredicate: same mask, as vectors instead of [1,1,2S,S]
 
     def _map_tensors(self, fn):
         return replace(
@@ -51,6 +52,8 @@ class MainlinePlan:
                 setattr(out, name + "_plan", plan.bind(out.gen_suffix_mask if name == "gen" else out.cq_mask))
         if self.delta_plan is not None:
             out.delta_plan = self.delta_plan.to(device, non_blocking=non_blocking)
+        if self.cq_predicate is not None:
+            out.cq_predicate = self.cq_predicate.to(device, non_blocking=non_blocking)
         return out
 
     def pin_memory(self, device):
@@ -72,6 +75,8 @@ class MainlinePlan:
                 )
         if self.delta_plan is not None:
             out.delta_plan = self.delta_plan.pin_memory(device)
+        if self.cq_predicate is not None:
+            out.cq_predicate = self.cq_predicate.pin_memory(device)
         return out
 
     def __deepcopy__(self, memo):
@@ -82,4 +87,5 @@ class MainlinePlan:
             if plan is not None:
                 setattr(out, name + "_plan", plan.bind(out.gen_suffix_mask if name == "gen" else out.cq_mask))
         out.delta_plan = copy.deepcopy(self.delta_plan, memo)
+        out.cq_predicate = copy.deepcopy(self.cq_predicate, memo)
         return out

@@ -4,7 +4,7 @@ from dataclasses import replace
 import math
 import os
 import torch
-from ops.attention_layout import plan_attention, document_cq_mask
+from ops.attention_layout import plan_attention, document_cq_mask, cq_mask_vectors
 from models.cq_layout import MainlinePlan
 from ops.gated_delta_layout import build_delta_plan, rope_tables
 
@@ -22,6 +22,12 @@ def safe_mask(allowed):
     mask[:, :, 0] &= valid
     return mask[:, None].contiguous(), valid
 
+
+
+def attach_cq_predicate(batch, plan, valid, unconditional=None):
+    """Same mask, expressed as vectors so a kernel need not read a dense tensor."""
+    plan.cq_predicate = cq_mask_vectors(batch, plan.query_positions, valid, unconditional)
+    return plan
 
 
 def finalize_plan(batch, cfg, plan):
@@ -278,6 +284,8 @@ def build_native_plan(batch, cfg):
         gen_mask[:, :, prefix:].contiguous(),
         output_size=s + len(spans) * q,
     )
+    if cfg.preserve_documents:
+        attach_cq_predicate(batch, plan, cq_valid)
     return finalize_plan(batch, cfg, plan)
 
 
@@ -383,4 +391,5 @@ def build_visual_plan(batch, cfg):
         output_size=offset,
         query_unconditional=unconditional,
     )
+    attach_cq_predicate(batch, plan, valid, unconditional)
     return finalize_plan(batch, cfg, plan)

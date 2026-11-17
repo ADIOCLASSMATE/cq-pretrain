@@ -1,6 +1,6 @@
 """Exact CPU query tiling and reusable device masks."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import torch
 
 
@@ -100,3 +100,86 @@ def document_cq_mask(batch, query_positions, query_unconditional=None):
     # Same finite sentinel as safe_mask; invalid rows are zeroed after FA.
     mask[~valid, 0] = False
     return mask[None, None], valid[None]
+
+
+def cq_mask_vectors(batch, query_positions, valid, query_unconditional=None):
+    """Per-row/key values reproducing `document_cq_mask` as a pointwise predicate.
+
+    Rows are the concatenation [content(s) ; queries(nq)] and keys are the s
+    content positions, exactly as in the dense mask. `valid` is that function's
+    own second return value, so the sentinel column agrees by construction.
+
+    allowed(q, k) = (row_segment[q] == key_segment[k] and row_segment[q] >= 0
+                     and not row_unconditional[q]
+                     and key_sigma[k] <  row_sigma[q]   if q is a query row
+                     and key_sigma[k] <= row_sigma[q]   if q is a content row)
+                    or (row_invalid[q] and k == 0)
+    """
+    s = batch.ids.shape[1]
+    segments = batch.segments[0]
+    sigma = batch.sigma[0]
+    nq = len(query_positions)
+    rows = s + nq
+    row_unconditional = torch.zeros(rows, dtype=torch.bool)
+    if query_unconditional is not None:
+        if len(query_unconditional) != nq:
+            raise ValueError("Unconditional flags must cover every query row")
+        row_unconditional[s:] = query_unconditional
+    return CQPredicate(
+        key_sigma=sigma.to(torch.int32),
+        key_segment=segments.to(torch.int32),
+        row_sigma=torch.cat((sigma, sigma[query_positions])).to(torch.int32),
+        row_segment=torch.cat((segments, segments[query_positions])).to(torch.int32),
+        row_is_query=torch.cat(
+            (torch.zeros(s, dtype=torch.bool), torch.ones(nq, dtype=torch.bool))
+        ),
+        row_unconditional=row_unconditional,
+        row_invalid=~valid[0],
+        content_length=s,
+    )
+
+
+@dataclass
+class CQPredicate:
+    """Small int/bool vectors; the dense [1,1,2S,S] mask is never built from these."""
+
+    key_sigma: torch.Tensor
+    key_segment: torch.Tensor
+    row_sigma: torch.Tensor
+    row_segment: torch.Tensor
+    row_is_query: torch.Tensor
+    row_unconditional: torch.Tensor
+    row_invalid: torch.Tensor
+    content_length: int
+    block_mask: object = None  # device BlockMask, cached per batch across layers
+
+    def _map(self, fn):
+        values = {
+            f.name: (fn(v) if isinstance(v := getattr(self, f.name), torch.Tensor) else v)
+            for f in fields(self)
+        }
+        values["block_mask"] = None
+        return CQPredicate(**values)
+
+    def to(self, device, non_blocking=False):
+        return self._map(lambda t: t.to(device, non_blocking=non_blocking))
+
+    def pin_memory(self, device):
+        return self._map(lambda t: t.pin_memory(device=device) if t.numel() else t)
+
+    def allowed(self, q_idx, kv_idx):
+        """Reference evaluation of the predicate; used by the equivalence test."""
+        same = (self.row_segment[q_idx] == self.key_segment[kv_idx]) & (
+            self.row_segment[q_idx] >= 0
+        )
+        strict = self.key_sigma[kv_idx] < self.row_sigma[q_idx]
+        loose = self.key_sigma[kv_idx] <= self.row_sigma[q_idx]
+        ok = torch.where(self.row_is_query[q_idx], strict, loose)
+        value = same & ok & ~self.row_unconditional[q_idx]
+        return value | (self.row_invalid[q_idx] & (kv_idx == 0))
+
+    def dense(self):
+        """Materialize the dense forbidden-mask; for validation only."""
+        q = torch.arange(len(self.row_sigma))[:, None]
+        k = torch.arange(len(self.key_sigma))[None, :]
+        return ~self.allowed(q, k)[None, None]
