@@ -1,0 +1,48 @@
+{
+  "question": "Is FP8 worth adopting for this model on L40S?",
+  "verdict": "No, not as the next move.",
+  "gemm_share_of_kernel_time_percent": 41.8,
+  "measurements": [
+    {
+      "level": "ceiling",
+      "what": "torch._scaled_mm on pre-quantized operands, fixed scales, forward only",
+      "gemm_gain": 1.543,
+      "implied_step_bound": 1.17,
+      "why_optimistic": "A training step never has pre-quantized activations."
+    },
+    {
+      "level": "with activation cast",
+      "what": "cast the activation each call; weight cast amortized over GA",
+      "gemm_gain": 1.462,
+      "implied_step_bound": 1.15
+    },
+    {
+      "level": "with cast and amax",
+      "what": "add the amax pass delayed scaling needs for the next step's scale",
+      "gemm_gain": 1.034,
+      "implied_step_bound": 1.014,
+      "note": "Two shapes went slower than BF16. This is a naive bolt-on; TE does better."
+    },
+    {
+      "level": "TransformerEngine, as it would actually be adopted",
+      "what": "te.Linear under fp8_autocast with DelayedScaling(HYBRID), forward+backward, against the torch BF16 Linear the model uses today",
+      "gemm_gain": 1.226,
+      "implied_step_bound": 1.083
+    }
+  ],
+  "reasoning": [
+    "The headline 1.54x is a forward-only bound on pre-quantized operands. TE's own FP8 Linear, measured forward+backward with delayed scaling, gives 1.23x on these shapes -- the backward needs transposed FP8 operands and the scale bookkeeping is not free.",
+    "L40S has 864 GB/s against its FP8 arithmetic rate, so the extra memory traffic from casting absorbs much of the arithmetic win. The all-on profile already shows this model is not arithmetic-starved: elementwise plus copy/index is 27.8% of kernel time.",
+    "1.083x is an upper bound that assumes every GEMM converts. Reaching it means replacing P.ColumnLinear / P.RowLinear, which carry MCore's main_grad protocol, gradient_accumulation_fusion, the mark_sharded attributes checkpoint_shard depends on, and the _ce_direct_accumulation contract on the output head -- plus the CE path, which is now a fused kernel that would have to be given up.",
+    "Unlike every change made so far, FP8 changes numerics. None of the gates used here would validate it: agreement with an FP64 oracle is not the question, loss-curve equivalence over a long run is, and that costs far more than the 1.08x it could buy."
+  ],
+  "if_revisited": [
+    "Do it on a machine whose FP8 advantage is larger relative to its bandwidth, or at a model size where GEMM share is higher than 41.8%.",
+    "Convert the backbone MLP and attention projections only; they are the largest shapes and keep the GDN, CE and DiT paths untouched.",
+    "Budget a long loss-curve comparison against BF16, not a six-step throughput A/B."
+  ],
+  "better_next_targets": {
+    "elementwise 15.8%": "Largest op is the SwiGLU pair; fusing it needs a contiguity copy or a change to the packed gate_up layout (a checkpoint convention).",
+    "copy/index 12.0%": "CQ event-plan gather/scatter. Architecture-specific, and on the protected CPU-plan boundary."
+  }
+}

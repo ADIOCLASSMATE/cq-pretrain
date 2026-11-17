@@ -378,6 +378,40 @@ bound with pre-quantized inputs and fixed scales; real FP8 training adds a cast
 of every activation and weight, amax reduction and scale updates, and changes
 numerics enough to need a long loss-curve comparison rather than a six-step A/B.
 
+
+### Verdict: not the next move
+
+The 1.54x above is forward-only on pre-quantized operands, which a training step
+never has. Charging what a step actually pays changes the answer:
+
+| measured as | GEMM gain | step bound |
+|---|---:|---:|
+| pre-quantized, fixed scales, forward only | 1.54x | 1.17x |
+| + cast the activation each call | 1.46x | 1.15x |
+| + the amax pass delayed scaling needs | 1.03x | 1.01x |
+| **TransformerEngine `te.Linear`, fwd+bwd, DelayedScaling** | **1.23x** | **1.08x** |
+
+The last row is the honest one: TE's own FP8 Linear, measured against the torch
+BF16 Linear this model uses today. The backward needs transposed FP8 operands
+and the scale bookkeeping is not free. L40S also has only 864 GB/s against its
+FP8 arithmetic rate, so the extra traffic from casting absorbs much of the math
+win -- and the all-on profile already shows this model is not arithmetic
+starved, with elementwise plus copy/index at 27.8% of kernel time.
+
+1.08x is additionally an *upper* bound that assumes every GEMM converts. Getting
+there means replacing `P.ColumnLinear` / `P.RowLinear`, which carry MCore's
+`main_grad` protocol, `gradient_accumulation_fusion`, the `mark_sharded`
+attributes `checkpoint_shard` depends on, and the `_ce_direct_accumulation`
+contract on the output head -- and giving up the fused CE kernel.
+
+It is also the one change here that alters numerics. None of the gates used in
+this port would validate it: agreement with an FP64 oracle is not the question,
+loss-curve equivalence over a long run is, and that costs more than the 1.08x
+could return. Revisit it on hardware with a larger FP8 advantage relative to its
+bandwidth, or at a model size where GEMM share exceeds 41.8%; convert the
+backbone MLP and attention projections only, and budget a long comparison
+against BF16 rather than a six-step throughput A/B.
+
 ## Where the time goes, with every optimization enabled
 
 Profiled at production shape (16 x L40S, seq 8192, TP1 DP16, GA8, BF16 gradient
