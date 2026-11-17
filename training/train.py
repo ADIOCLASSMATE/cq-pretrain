@@ -392,6 +392,11 @@ def main():
         cuda_fused._ENABLED if accel.BACKEND=='cuda' else None)
     training_state['kernel_options']['backend']=accel.BACKEND
     training_state['kernel_options']['grad_reduce_in_fp32']=not args.bf16_grad_reduce
+    from ops import flex_cq as _flex
+    training_state['kernel_options']['flex_attention']=_flex._ENABLED
+    training_state['kernel_options']['flex_tiles']=(
+        _flex.tile_options(cfg.head_dim,'sm%d%d'%torch.cuda.get_device_capability())
+        if _flex._ENABLED and accel.BACKEND=='cuda' else None)
     training_state['qwen35_assets']=text_manifest
     if ema is not None:
         training_state['renderer_ema']=dict(schema=ema.schema,module='renderer',decay=ema.decay,dtype='float32',

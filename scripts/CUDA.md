@@ -251,3 +251,66 @@ bash scripts/freeze_source.sh .runs/<run>/source
 
 `run.json` records `source_sha256` and `kernel_options`; compare both before
 comparing timings, and treat runs from different trees as incomparable.
+
+## CQ attention: predicate + FlexAttention
+
+The CQ visibility rule is structured, not arbitrary, so it does not need a dense
+mask. `ops/attention_layout.py` exposes the same rule as small int/bool vectors
+(`cq_mask_vectors` -> `CQPredicate`) and `ops/flex_cq.py` evaluates it as a
+FlexAttention `mask_mod`:
+
+```
+allowed(q, k) = row_segment[q] == key_segment[k] and row_segment[q] >= 0
+                and not row_unconditional[q]
+                and (key_sigma[k] <  row_sigma[q]  if q is a query row
+                     key_sigma[k] <= row_sigma[q]  if q is a content row)
+             or (row_invalid[q] and k == 0)          # same finite sentinel
+```
+
+`tests/test_cq_predicate.py` requires the predicate to rebuild the dense mask
+**bitwise**, over single and multi-document packs, padding rows, tied-sigma
+image blocks (bidirectional inside the group), unconditional queries, real plan
+builder layouts and randomized layouts. The dense path stays the reference:
+`reference=True` never takes this route, and an unrecorded GPU falls back.
+
+Two gates run on device: `validate_flex_cq.py` compares forward and dq/dk/dv
+against the dense path *through the real `attend()` dispatch*, and
+`validate_flex_unconditional.py` forces every visual query unconditional and
+checks behaviourally that perturbing all content moves those rows by exactly
+zero while conditional rows do move. CFG dropout is the case where a wrong mask
+stays silent -- every loss still looks finite.
+
+### Tiles are probed offline, never searched at runtime
+
+FlexAttention's default tiles assume far more shared memory than Ada provides.
+L40S (sm89) has ~99 KiB per SM; at this backbone's `head_dim=256` the default
+forward kernel asks for 213 KiB and cannot compile. Measured costs on this
+kernel: `BLOCK_N` ~2 KiB per unit, `BLOCK_M` ~0.7 KiB per unit.
+
+| BLOCK_M | BLOCK_N | stages | shared memory | result |
+|---|---|---|---|---|
+| 128 | 64 | default | 213120 B | fails |
+| 128 | 32 | default | 147584 B | fails |
+| 64 | 64 | default | 172032 B | fails |
+| 64 | 32 | default | 102400 B | fails by 1024 B |
+| **64** | **32** | **2** | fits | **10.53x fwd+bwd** |
+| 32 | 32 | default | fits | 10.38x fwd+bwd |
+| 16 | 16 | default | fits | 6.45x fwd+bwd |
+
+Bigger tiles are not uniformly better: `(128,32)` at one stage compiles but
+collapses to 1.00x. The configuration is measured, not derived, and recorded in
+`configs/flex_tiles.json` keyed by capability and head size.
+
+**Do not search for a tile inside the training process.** Inductor's async
+compile worker pool does not recover after a kernel raises `OutOfResources`: a
+retry ladder deadlocks (observed as a live process at ~1% CPU, idle GPU and no
+new compile artifacts) instead of falling back. Probe candidates offline with
+`scripts/validation/probe_flex_tile.py`, one isolated process per candidate with
+a hard timeout, and record the winner:
+
+```bash
+.venv-cuda/bin/python scripts/validation/probe_flex_tile.py --block-m 64 --block-n 32 --num-stages 2
+```
+
+Enable with `PRETRAIN_FLEX_ATTENTION=1`; it is opt-in and recorded in
+`run.json`'s `kernel_options`.
