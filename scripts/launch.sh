@@ -11,6 +11,12 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 export PYTHONUNBUFFERED=1
 export TORCH_EXTENSIONS_DIR="${TORCH_EXTENSIONS_DIR:-${PRETRAIN_ROOT}/.deps/extensions-cuda}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${PRETRAIN_ROOT}/.deps/triton-cache}"
+# Measured on L40S and gated against FP64/dense references; each falls back on
+# its own when it is not applicable (TP>1, another GPU, deterministic mode).
+# run.json records the effective value under kernel_options.
+export PRETRAIN_CUDA_FUSED_NORM="${PRETRAIN_CUDA_FUSED_NORM:-1}"
+export PRETRAIN_FLEX_ATTENTION="${PRETRAIN_FLEX_ATTENTION:-1}"
+export PRETRAIN_CUDA_FUSED_CE="${PRETRAIN_CUDA_FUSED_CE:-1}"
 export PYTHONPATH="${PRETRAIN_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"

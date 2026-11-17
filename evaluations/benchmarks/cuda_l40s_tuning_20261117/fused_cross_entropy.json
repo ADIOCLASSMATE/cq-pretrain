@@ -1,0 +1,545 @@
+{
+  "what": "Text cross entropy moved to flash-attn Triton CE on single-rank CUDA",
+  "kernel_source": "flash_attn.ops.triton.cross_entropy (in the NGC image); no kernel authored",
+  "unchanged": [
+    "chunking",
+    "backward recompute",
+    "MCore direct main_grad protocol",
+    "vocabulary tensor parallelism (stays on the original all-reduce path)"
+  ],
+  "why_equivalent": "F.linear on BF16 inputs rounds logits to BF16 before the old path upcast them, so the fused kernel reduces the same values in FP32",
+  "microbenchmark": {
+    "device": "NVIDIA L40S",
+    "width": 2048,
+    "vocab": 248320,
+    "chunk": 1024,
+    "results": [
+      {
+        "rows": 4096,
+        "direct": false,
+        "name": "baseline",
+        "ms": 224.9499051249586,
+        "peak_gib": 5.71583366394043,
+        "loss": 12.424762725830078
+      },
+      {
+        "rows": 4096,
+        "direct": false,
+        "name": "flash_triton_ce",
+        "ms": 105.42144573992118,
+        "peak_gib": 3.8203134536743164,
+        "loss": 12.424762725830078,
+        "vs_baseline": {
+          "loss": 0.0,
+          "dh": 1.6473335563205183e-05,
+          "dw": 9.988458486986929e-07
+        },
+        "speedup": 2.133815406780882
+      },
+      {
+        "rows": 4096,
+        "direct": false,
+        "name": "liger_flce",
+        "ms": 410.3136975027155,
+        "peak_gib": 1.9554023742675781,
+        "loss": 12.424763679504395,
+        "vs_baseline": {
+          "loss": 7.675593791611313e-08,
+          "dh": 0.0025489383842796087,
+          "dw": 0.0003765346482396126
+        },
+        "speedup": 0.5482388389519213
+      },
+      {
+        "rows": 4096,
+        "direct": true,
+        "name": "baseline",
+        "ms": 219.37710110796615,
+        "peak_gib": 3.8213024139404297,
+        "loss": 12.424762725830078
+      },
+      {
+        "rows": 4096,
+        "direct": true,
+        "name": "flash_triton_ce",
+        "ms": 102.60282747913152,
+        "peak_gib": 1.9257822036743164,
+        "loss": 12.424762725830078,
+        "vs_baseline": {
+          "loss": 0.0,
+          "dh": 1.6473335563205183e-05,
+          "dw": 1.126378634808134e-07
+        },
+        "speedup": 2.138119450485762
+      },
+      {
+        "rows": 6144,
+        "direct": false,
+        "name": "baseline",
+        "ms": 332.1988303796388,
+        "peak_gib": 5.73145866394043,
+        "loss": 12.427992820739746
+      },
+      {
+        "rows": 6144,
+        "direct": false,
+        "name": "flash_triton_ce",
+        "ms": 155.23051499621943,
+        "peak_gib": 3.8359384536743164,
+        "loss": 12.427992820739746,
+        "vs_baseline": {
+          "loss": 0.0,
+          "dh": 2.1404086510301568e-05,
+          "dw": 6.364155979099451e-06
+        },
+        "speedup": 2.140035613408416
+      },
+      {
+        "rows": 6144,
+        "direct": false,
+        "name": "liger_flce",
+        "ms": 612.647518486483,
+        "peak_gib": 1.9710369110107422,
+        "loss": 12.427992820739746,
+        "vs_baseline": {
+          "loss": 0.0,
+          "dh": 0.00341034890152514,
+          "dw": 0.001156116253696382
+        },
+        "speedup": 0.5422348419860092
+      },
+      {
+        "rows": 6144,
+        "direct": true,
+        "name": "baseline",
+        "ms": 327.0311217638664,
+        "peak_gib": 3.8369274139404297,
+        "loss": 12.427992820739746
+      },
+      {
+        "rows": 6144,
+        "direct": true,
+        "name": "flash_triton_ce",
+        "ms": 155.47476388746873,
+        "peak_gib": 1.9414072036743164,
+        "loss": 12.427992820739746,
+        "vs_baseline": {
+          "loss": 0.0,
+          "dh": 2.1404086510301568e-05,
+          "dw": 9.952862711770649e-08
+        },
+        "speedup": 2.1034353974035853
+      },
+      {
+        "rows": 8192,
+        "direct": false,
+        "name": "baseline",
+        "ms": 441.06342672603205,
+        "peak_gib": 5.74708366394043,
+        "loss": 12.42634391784668
+      },
+      {
+        "rows": 8192,
+        "direct": false,
+        "name": "flash_triton_ce",
+        "ms": 217.21367511781864,
+        "peak_gib": 3.8515634536743164,
+        "loss": 12.42634391784668,
+        "vs_baseline": {
+          "loss": 0.0,
+          "dh": 1.5539340893155895e-05,
+          "dw": 2.450914053042652e-06
+        },
+        "speedup": 2.0305509148390186
+      },
+      {
+        "rows": 8192,
+        "direct": false,
+        "name": "liger_flce",
+        "ms": 425.4201997537166,
+        "peak_gib": 2.0162734985351562,
+        "loss": 12.42634391784668,
+        "vs_baseline": {
+          "loss": 0.0,
+          "dh": 0.0025370290968567133,
+          "dw": 0.0005435227649286389
+        },
+        "speedup": 1.036771236959062
+      },
+      {
+        "rows": 8192,
+        "direct": true,
+        "name": "baseline",
+        "ms": 436.3413261307869,
+        "peak_gib": 3.8525524139404297,
+        "loss": 12.42634391784668
+      },
+      {
+        "rows": 8192,
+        "direct": true,
+        "name": "flash_triton_ce",
+        "ms": 215.29426125925966,
+        "peak_gib": 1.9570322036743164,
+        "loss": 12.42634391784668,
+        "vs_baseline": {
+          "loss": 0.0,
+          "dh": 1.5539340893155895e-05,
+          "dw": 1.130817608441248e-07
+        },
+        "speedup": 2.0267206546919523
+      }
+    ]
+  },
+  "rejected_alternative": {
+    "name": "liger-kernel 0.8.5 fused_linear_cross_entropy",
+    "reason": "slower at these shapes despite lower peak memory",
+    "measured": {
+      "rows_4096": {
+        "ms": 410.3136975027155,
+        "peak_gib": 1.9554023742675781,
+        "speedup": 0.5482388389519213
+      },
+      "rows_6144": {
+        "ms": 612.647518486483,
+        "peak_gib": 1.9710369110107422,
+        "speedup": 0.5422348419860092
+      },
+      "rows_8192": {
+        "ms": 425.4201997537166,
+        "peak_gib": 2.0162734985351562,
+        "speedup": 1.036771236959062
+      }
+    },
+    "note": "present in .venv-cuda but deliberately not referenced by the training path"
+  },
+  "correctness_gate": {
+    "passed": true,
+    "tolerance": 0.02,
+    "fp64_cases": [
+      {
+        "rows": 61,
+        "width": 96,
+        "vocab": 320,
+        "chunk": 17,
+        "direct": false,
+        "errors": {
+          "loss": 8.63433451212892e-07,
+          "dhidden": 0.0018584000201252993,
+          "dweight": 0.0018970897316784756
+        },
+        "passed": true
+      },
+      {
+        "rows": 61,
+        "width": 96,
+        "vocab": 320,
+        "chunk": 17,
+        "direct": true,
+        "errors": {
+          "loss": 8.63433451212892e-07,
+          "dhidden": 0.0018584000201252993,
+          "dweight": 0.0009163468864676598
+        },
+        "passed": true,
+        "grad_added_to_main_grad": true,
+        "returned_gradient_is_zero": true
+      },
+      {
+        "rows": 128,
+        "width": 128,
+        "vocab": 2048,
+        "chunk": 64,
+        "direct": false,
+        "errors": {
+          "loss": 6.30004890621641e-07,
+          "dhidden": 0.002405768692326726,
+          "dweight": 0.0016823982120859494
+        },
+        "passed": true
+      },
+      {
+        "rows": 128,
+        "width": 128,
+        "vocab": 2048,
+        "chunk": 64,
+        "direct": true,
+        "errors": {
+          "loss": 6.30004890621641e-07,
+          "dhidden": 0.002405768692326726,
+          "dweight": 0.0004909944558998906
+        },
+        "passed": true,
+        "grad_added_to_main_grad": true,
+        "returned_gradient_is_zero": true
+      },
+      {
+        "rows": 32,
+        "width": 256,
+        "vocab": 248320,
+        "chunk": 16,
+        "direct": false,
+        "errors": {
+          "loss": 2.294791544973022e-07,
+          "dhidden": 0.0014431313193844712,
+          "dweight": 2.2516397684986e-05
+        },
+        "passed": true
+      },
+      {
+        "rows": 32,
+        "width": 256,
+        "vocab": 248320,
+        "chunk": 16,
+        "direct": true,
+        "errors": {
+          "loss": 2.294791544973022e-07,
+          "dhidden": 0.0014431313193844712,
+          "dweight": 5.8204672843565745e-06
+        },
+        "passed": true,
+        "grad_added_to_main_grad": true,
+        "returned_gradient_is_zero": true
+      }
+    ],
+    "baseline_cases": [
+      {
+        "rows": 2048,
+        "width": 2048,
+        "vocab": 248320,
+        "chunk": 1024,
+        "direct": false,
+        "errors": {
+          "loss": 7.674036401945154e-08,
+          "dhidden": 1.2211286198844674e-05,
+          "dweight": 6.218469519796437e-07
+        },
+        "passed": true
+      },
+      {
+        "rows": 2048,
+        "width": 2048,
+        "vocab": 248320,
+        "chunk": 1024,
+        "direct": true,
+        "errors": {
+          "loss": 7.674036401945154e-08,
+          "dhidden": 1.2211286198844674e-05,
+          "dweight": 1.0577575302932618e-07
+        },
+        "passed": true
+      },
+      {
+        "rows": 4096,
+        "width": 2048,
+        "vocab": 248320,
+        "chunk": 1024,
+        "direct": false,
+        "errors": {
+          "loss": 0.0,
+          "dhidden": 1.110648348967053e-05,
+          "dweight": 8.521394848249731e-07
+        },
+        "passed": true
+      },
+      {
+        "rows": 4096,
+        "width": 2048,
+        "vocab": 248320,
+        "chunk": 1024,
+        "direct": true,
+        "errors": {
+          "loss": 0.0,
+          "dhidden": 1.110648348967053e-05,
+          "dweight": 1.0487245471916221e-07
+        },
+        "passed": true
+      }
+    ],
+    "dispatch_rules": {
+      "declines_when_disabled": true,
+      "declines_tensor_parallel": true,
+      "declines_cpu": true,
+      "declines_deterministic": true,
+      "accepts_single_rank_cuda": true,
+      "public_entry_routes_to_fused": true
+    }
+  },
+  "end_to_end_2gpu": {
+    "e2e-ce0": {
+      "mean_seconds": 2.9992772340774536,
+      "tokens_per_second": 5462.649405612398,
+      "peak_memory_gib": 38.2093391418457,
+      "world": 2,
+      "tp": 1,
+      "dp": 2,
+      "grad_accum": 1,
+      "sequence_length": 8192,
+      "ranks_with_receipts": 2,
+      "losses": [
+        1.3140757083892822,
+        1.3128447532653809,
+        1.307003378868103,
+        1.2890503406524658,
+        1.249117374420166,
+        1.2379591464996338
+      ],
+      "kernel_options": {
+        "fused_ce": true,
+        "compile_modulation": false,
+        "attention_tile": "2048",
+        "attention_layout": "SBH",
+        "cpu_noise_cast": "1",
+        "moss_fused_pointwise": "0",
+        "mc2_row": "0",
+        "cuda_fused_norm": true,
+        "backend": "cuda",
+        "grad_reduce_in_fp32": false,
+        "flex_attention": true,
+        "flex_tiles": {
+          "BLOCK_M": 64,
+          "BLOCK_N": 32,
+          "BLOCK_M1": 32,
+          "BLOCK_N1": 32,
+          "BLOCK_M2": 32,
+          "BLOCK_N2": 32,
+          "num_stages": 2
+        },
+        "cuda_fused_ce": false
+      },
+      "source_commit": null
+    },
+    "e2e-ce1": {
+      "mean_seconds": 2.7771809101104736,
+      "tokens_per_second": 5899.507641131042,
+      "peak_memory_gib": 37.697556018829346,
+      "world": 2,
+      "tp": 1,
+      "dp": 2,
+      "grad_accum": 1,
+      "sequence_length": 8192,
+      "ranks_with_receipts": 2,
+      "losses": [
+        1.3140581846237183,
+        1.3126317262649536,
+        1.307302713394165,
+        1.2890393733978271,
+        1.249038815498352,
+        1.2376213073730469
+      ],
+      "kernel_options": {
+        "fused_ce": true,
+        "compile_modulation": false,
+        "attention_tile": "2048",
+        "attention_layout": "SBH",
+        "cpu_noise_cast": "1",
+        "moss_fused_pointwise": "0",
+        "mc2_row": "0",
+        "cuda_fused_norm": true,
+        "backend": "cuda",
+        "grad_reduce_in_fp32": false,
+        "flex_attention": true,
+        "flex_tiles": {
+          "BLOCK_M": 64,
+          "BLOCK_N": 32,
+          "BLOCK_M1": 32,
+          "BLOCK_N1": 32,
+          "BLOCK_M2": 32,
+          "BLOCK_N2": 32,
+          "num_stages": 2
+        },
+        "cuda_fused_ce": true
+      },
+      "source_commit": null
+    },
+    "speedup": 1.0799718603705026,
+    "memory_delta_gib": -0.5117831230163574
+  },
+  "production_16gpu": {
+    "ce-off": {
+      "mean_seconds": 21.826672236124676,
+      "tokens_per_second": 48041.03844398841,
+      "peak_memory_gib": 22.113162517547607,
+      "world": 16,
+      "tp": 1,
+      "dp": 16,
+      "grad_accum": 8,
+      "sequence_length": 8192,
+      "ranks_with_receipts": 16,
+      "losses": [
+        1.2962086200714111,
+        1.295178771018982,
+        1.2901991605758667,
+        1.2730965614318848,
+        1.2339645624160767
+      ],
+      "kernel_options": {
+        "fused_ce": true,
+        "compile_modulation": false,
+        "attention_tile": "2048",
+        "attention_layout": "SBH",
+        "cpu_noise_cast": "1",
+        "moss_fused_pointwise": "0",
+        "mc2_row": "0",
+        "cuda_fused_norm": true,
+        "backend": "cuda",
+        "grad_reduce_in_fp32": false,
+        "flex_attention": true,
+        "flex_tiles": {
+          "BLOCK_M": 64,
+          "BLOCK_N": 32,
+          "BLOCK_M1": 32,
+          "BLOCK_N1": 32,
+          "BLOCK_M2": 32,
+          "BLOCK_N2": 32,
+          "num_stages": 2
+        },
+        "cuda_fused_ce": false
+      },
+      "source_commit": null
+    },
+    "ce-on": {
+      "mean_seconds": 20.186240514119465,
+      "tokens_per_second": 51945.08602364879,
+      "peak_memory_gib": 20.218618869781494,
+      "world": 16,
+      "tp": 1,
+      "dp": 16,
+      "grad_accum": 8,
+      "sequence_length": 8192,
+      "ranks_with_receipts": 16,
+      "losses": [
+        1.296201229095459,
+        1.2951899766921997,
+        1.290217638015747,
+        1.2734239101409912,
+        1.2339438199996948
+      ],
+      "kernel_options": {
+        "fused_ce": true,
+        "compile_modulation": false,
+        "attention_tile": "2048",
+        "attention_layout": "SBH",
+        "cpu_noise_cast": "1",
+        "moss_fused_pointwise": "0",
+        "mc2_row": "0",
+        "cuda_fused_norm": true,
+        "backend": "cuda",
+        "grad_reduce_in_fp32": false,
+        "flex_attention": true,
+        "flex_tiles": {
+          "BLOCK_M": 64,
+          "BLOCK_N": 32,
+          "BLOCK_M1": 32,
+          "BLOCK_N1": 32,
+          "BLOCK_M2": 32,
+          "BLOCK_N2": 32,
+          "num_stages": 2
+        },
+        "cuda_fused_ce": true
+      },
+      "source_commit": null
+    },
+    "speedup": 1.0812648457674818,
+    "memory_delta_gib": -1.8945436477661133
+  }
+}
