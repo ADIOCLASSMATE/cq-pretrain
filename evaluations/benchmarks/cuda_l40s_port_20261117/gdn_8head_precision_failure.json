@@ -1,0 +1,133 @@
+{
+  "passed": false,
+  "device": "NVIDIA L40S",
+  "tolerance": 0.035,
+  "norm_errors": {
+    "output": 0.0016771640598610771,
+    "dx": 0.002321900740259842,
+    "dw": 1.1491699011058321e-07
+  },
+  "worst_case_error": 0.11387719585203974,
+  "cases": [
+    {
+      "method": "CQ_IT",
+      "length": 61,
+      "events": 129,
+      "errors": {
+        "A_log": 0.01696802981708797,
+        "dt_bias": 0.017761790803478204,
+        "in_proj_qkv.impl.weight": 0.007593247454454431,
+        "in_proj_z.impl.weight": 0.007312571187745359,
+        "in_proj_a.impl.weight": 0.00882613750494796,
+        "in_proj_b.impl.weight": 0.007557110816004066,
+        "conv1d.weight": 0.007750425525451705,
+        "norm.weight": 0.007749493022120657,
+        "out_proj.impl.weight": 0.007438453566774172,
+        "output": 0.00772862186398785,
+        "dx": 0.0079225259818385
+      },
+      "isolation_max_abs": 0.0,
+      "passed": true
+    },
+    {
+      "method": "CQ_IT",
+      "length": 64,
+      "events": 135,
+      "errors": {
+        "A_log": 0.011748160060124857,
+        "dt_bias": 0.009898083588053646,
+        "in_proj_qkv.impl.weight": 0.007648101324870723,
+        "in_proj_z.impl.weight": 0.007211817895082708,
+        "in_proj_a.impl.weight": 0.00854954181769686,
+        "in_proj_b.impl.weight": 0.007518114475007268,
+        "conv1d.weight": 0.0077448564660405695,
+        "norm.weight": 0.007008272808648174,
+        "out_proj.impl.weight": 0.007117107546016297,
+        "output": 0.007447423685358375,
+        "dx": 0.007940237143489478
+      },
+      "isolation_max_abs": 0.0,
+      "passed": true
+    },
+    {
+      "method": "CQ_IT",
+      "length": 65,
+      "events": 137,
+      "errors": {
+        "A_log": 0.022843087045409154,
+        "dt_bias": 0.022018390638859468,
+        "in_proj_qkv.impl.weight": 0.007450467195273518,
+        "in_proj_z.impl.weight": 0.007454674292406939,
+        "in_proj_a.impl.weight": 0.00845900728673954,
+        "in_proj_b.impl.weight": 0.007223839335474852,
+        "conv1d.weight": 0.00733077206582672,
+        "norm.weight": 0.006882568453702013,
+        "out_proj.impl.weight": 0.007346873124867918,
+        "output": 0.0075753096669067205,
+        "dx": 0.0076169896682498186
+      },
+      "isolation_max_abs": 0.0,
+      "passed": true
+    },
+    {
+      "method": "Bi_I+CQ_T",
+      "length": 61,
+      "events": 172,
+      "errors": {
+        "A_log": 0.0012127723041161832,
+        "dt_bias": 0.001385293489019156,
+        "in_proj_qkv.impl.weight": 0.007556097002698491,
+        "in_proj_z.impl.weight": 0.007399898568474436,
+        "in_proj_a.impl.weight": 0.009851873236390002,
+        "in_proj_b.impl.weight": 0.007433742256812453,
+        "conv1d.weight": 0.007631191486234533,
+        "norm.weight": 0.006580838902800139,
+        "out_proj.impl.weight": 0.007271758322115556,
+        "output": 0.0075625998054903495,
+        "dx": 0.00783665329662252
+      },
+      "isolation_max_abs": 0.0,
+      "passed": true
+    },
+    {
+      "method": "Bi_I+CQ_T",
+      "length": 64,
+      "events": 180,
+      "errors": {
+        "A_log": 0.11387719585203974,
+        "dt_bias": 0.10354299273455742,
+        "in_proj_qkv.impl.weight": 0.00747673588420304,
+        "in_proj_z.impl.weight": 0.00725096241087147,
+        "in_proj_a.impl.weight": 0.008863698270953967,
+        "in_proj_b.impl.weight": 0.007212920724759859,
+        "conv1d.weight": 0.007731496610182675,
+        "norm.weight": 0.006556273077839644,
+        "out_proj.impl.weight": 0.007263588399948513,
+        "output": 0.007492813451620464,
+        "dx": 0.0077506739063565346
+      },
+      "isolation_max_abs": 0.0,
+      "passed": false
+    },
+    {
+      "method": "Bi_I+CQ_T",
+      "length": 65,
+      "events": 182,
+      "errors": {
+        "A_log": 0.0021702626157376306,
+        "dt_bias": 0.0017381558979395067,
+        "in_proj_qkv.impl.weight": 0.0075629983758479105,
+        "in_proj_z.impl.weight": 0.007313066897283674,
+        "in_proj_a.impl.weight": 0.008482347405594504,
+        "in_proj_b.impl.weight": 0.007496607053007162,
+        "conv1d.weight": 0.007745762518331897,
+        "norm.weight": 0.006334050942846769,
+        "out_proj.impl.weight": 0.007244422682521546,
+        "output": 0.007582438392351958,
+        "dx": 0.007933394182240783
+      },
+      "isolation_max_abs": 0.0,
+      "passed": true
+    }
+  ]
+}

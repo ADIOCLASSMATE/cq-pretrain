@@ -229,7 +229,8 @@ def make_embedding(vocab, width):
 
 
 def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_param_gather=True,
-                   *, optimizer_config=None, config_overrides=None, overlap_grad_reduce=True):
+                   *, optimizer_config=None, config_overrides=None, overlap_grad_reduce=True,
+                   optimizer_offload_fraction=0.0):
     from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig
     from megatron.core.optimizer import get_megatron_optimizer, AdamOptimizerConfig as OptimizerConfig
 
@@ -253,11 +254,16 @@ def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_
         clip_grad=1.0,
         adam_beta1=0.9,
         adam_beta2=0.95,
+        optimizer_cpu_offload=optimizer_offload_fraction > 0,
+        optimizer_offload_fraction=optimizer_offload_fraction,
     )
     # Our checkpoint protocol writes local shards and uses device broadcasts;
     # MCore's optional CPU/Gloo checkpoint groups are unnecessary.
-    optimizer = get_megatron_optimizer(optimizer_cfg, [wrapped], config_overrides=config_overrides,
-                                        use_gloo_process_groups=False)
+    # Optimizer-owned FP32 shard views are state, not part of the model graph.
+    # The upstream CPU-offload optimizer requires leaf tensors here.
+    with torch.no_grad():
+        optimizer = get_megatron_optimizer(optimizer_cfg, [wrapped], config_overrides=config_overrides,
+                                            use_gloo_process_groups=False)
     return wrapped, optimizer
 
 

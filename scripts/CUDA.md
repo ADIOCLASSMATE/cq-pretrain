@@ -33,10 +33,18 @@ PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   .venv-cuda/bin/python -m scripts.validation.validate_cq_cuda --output .runs/gdn-tp1
 PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   .venv-cuda/bin/python -m scripts.validation.validate_cq_cuda \
-  --key-heads 8 --value-heads 8 --output .runs/gdn-tp2
+  --kernel-head-shards 2 --output .runs/gdn-tp2
 PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 \
   .venv-cuda/bin/python -m scripts.validation.validate_cuda_ops --output .runs/cuda-ops.json
 ```
+
+The second gate keeps the same full layer and FP64 oracle and splits each FLA
+call into two 8-head calls. It tests the TP-local kernel shapes on one GPU;
+distributed collectives require the separate two-GPU training run. An additional
+independently initialized 8-head stress fixture (`--key-heads 8 --value-heads 8`)
+exceeds the 0.035 gradient tolerance in one case, including in a pure CPU BF16
+recurrence. Preserve that failure in the evidence; do not loosen the tolerance
+or treat the finite-loss training smoke as proof that it passed.
 
 Use the original `configs/qwen35_2b_wan.yaml` with `--synthetic` and explicit local
 asset paths. Synthetic batches exercise the full model with fake pixels/latents;

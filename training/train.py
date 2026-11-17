@@ -91,6 +91,8 @@ def parse_args(argv=None):
     parser.add_argument('--keep-attention-activations',type=int,default=0)
     parser.add_argument('--optimizer-instances', type=int, default=1,
                         help='Replicated optimizer groups for hierarchical DP synchronization')
+    parser.add_argument('--optimizer-offload-fraction', type=float, default=0.,
+                        help='Fraction of Adam state/compute offloaded by upstream MCore (0 disables)')
     parser.add_argument('--ce-chunk', type=int, help='Text output projection/CE chunk size')
     parser.add_argument('--deterministic',action='store_true',help='Use deterministic kernels for exact restart validation')
     recompute = parser.add_mutually_exclusive_group()
@@ -142,6 +144,8 @@ def parse_args(argv=None):
         parser.error('Require finite 0 <= i2t-image-loss-probability <= 1')
     if args.eval_snapshot_every < 0:
         parser.error('Require eval-snapshot-every >= 0')
+    if not 0 <= args.optimizer_offload_fraction <= 1:
+        parser.error('Require optimizer-offload-fraction in [0, 1]')
     return args
 
 
@@ -341,7 +345,8 @@ def main():
         dist.all_reduce(count, group=P.state().get_tensor_model_parallel_group())
     parameters,trainable_parameters = count.tolist()
     wrapped, optimizer = P.make_optimizer(model, args.lr, bucket_size=args.bucket_size,
-                                          overlap_param_gather=not args.no_param_overlap)
+        overlap_param_gather=not args.no_param_overlap,
+        optimizer_offload_fraction=args.optimizer_offload_fraction)
     ema=None
     if args.renderer_ema_decay:
         if cfg.renderer not in ('moss','wan') or args.data_mode=='B':raise ValueError('EMA requires a trainable renderer')
@@ -362,6 +367,9 @@ def main():
     training_state['renderer_schedule_sha256']=hashlib.sha256((Path(__file__).parent/'renderer_schedule.py').read_bytes()).hexdigest()
     training_state['initialization_checkpoint']=str(args.init_checkpoint) if args.init_checkpoint else None
     training_state['deterministic']=args.deterministic
+    if not accel.IS_NPU:
+        training_state['optimizer_offload_fraction']=args.optimizer_offload_fraction
+        training_state['cuda_gdn_sha256']=hashlib.sha256((ROOT/'ops/cuda_gated_delta.py').read_bytes()).hexdigest()
     training_state['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
     from ops.functional import _ATTENTION_LAYOUT, _COMPILE_MODULATION
     from ops.cross_entropy import _FUSED_CE

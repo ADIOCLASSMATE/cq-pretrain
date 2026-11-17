@@ -6,7 +6,9 @@
 
 - 使用账号 `wjx`、用户指定 Workspace `可上网GPU资源`、Compute Group `L40s-cuda13.2`，
   Project `随机序语言建模-统一自回归与掩码扩散的随机顺序生成框架`。
-- **所有开发、测试和多节点验证必须显式 `--priority 3`**，创建后核验平台仍为 `3 / LOW`。
+- **所有开发、测试和多节点验证必须显式 `--priority 3`**，核验 dry-run 的提交值为 3、
+  创建后的任务等级为 LOW。Job status 的 priority 字段可能返回平台内部排序值，
+  本次提交 3 的 Job 回读为 13 / LOW；Notebook 回读为 3 / LOW。
 - 基底镜像沿用 L40S 开发环境的官方镜像
   `docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3`。
   CUDA 依赖单独安装；不加载 `.venv-core17`、CANN、MindSpeed 或 MegatronAdaptor。

@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "world": 1,
+  "nodes": 1,
+  "tp": 1,
+  "dp": 1,
+  "completed_steps": [
+    1,
+    2,
+    3
+  ],
+  "tokens_per_step": 2048,
+  "mean_seconds": 3.366430401802063,
+  "tokens_per_second": 608.3595249447895,
+  "peak_memory_gib": 36.389686584472656,
+  "per_rank": [
+    {
+      "rank": 0,
+      "hostname": "cq-l40s-dev-p3-1117--fb5a6df803f2-jc6lfkebox",
+      "final_step": 3,
+      "final_loss": 1.358666181564331,
+      "peak_memory_gib": 36.389686584472656
+    }
+  ]
+}

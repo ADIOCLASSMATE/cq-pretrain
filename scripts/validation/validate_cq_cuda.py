@@ -9,6 +9,7 @@ queries never perturb content/key outputs. No distributed init required.
 import argparse
 import copy
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -30,7 +31,11 @@ def main():
     p.add_argument("--key-heads", type=int, default=16)
     p.add_argument("--value-heads", type=int, default=16)
     p.add_argument("--tol", type=float, default=0.035)
+    p.add_argument("--kernel-head-shards", type=int, default=1,
+                   help="Split the same layer's packed kernel heads; single-GPU check, not collectives")
     a = p.parse_args()
+    if a.kernel_head_shards < 1 or a.value_heads % a.kernel_head_shards:
+        p.error('value-heads must be divisible by a positive kernel-head-shards')
     if not torch.cuda.is_available():
         raise SystemExit("CUDA device required")
     dev = "cuda"
@@ -38,6 +43,19 @@ def main():
     out = Path(a.output)
     out.mkdir(parents=True, exist_ok=True)
     cases = []
+    if a.kernel_head_shards > 1:
+        import ops.cuda_gated_delta as binding
+        original = binding.chunk_gated_delta
+
+        def split_heads(q, k, v, g, beta, **kwargs):
+            shards = [t.chunk(a.kernel_head_shards, dim=2) for t in (q, k, v, g, beta)]
+            outputs = [original(qi, ki, vi, gi, bi, **kwargs)[0]
+                       for qi, ki, vi, gi, bi in zip(*shards)]
+            return torch.cat(outputs, dim=2), None
+
+        # Keep the full 16-head fixture and FP64 oracle identical while testing
+        # each upstream kernel invocation with TP-local head dimensions.
+        binding.chunk_gated_delta = split_heads
 
     # Offset-gamma RMSNorm: BF16 activations, FP32 weight, including dgamma.
     torch.manual_seed(1)
@@ -87,13 +105,14 @@ def main():
             with torch.no_grad():
                 after = layer(changed, dp)
             isolation = float((after[:keys] - y[:keys]).abs().max())
-            passed = max(errors.values()) <= a.tol and isolation == 0.0
+            passed = all(math.isfinite(v) and v <= a.tol for v in errors.values()) and isolation == 0.0
             cases.append(dict(method=method, length=length, events=len(plan.event_q),
                               errors=errors, isolation_max_abs=isolation, passed=passed))
 
     result = dict(
-        passed=all(c["passed"] for c in cases) and max(norm_err.values()) <= a.tol,
+        passed=all(c["passed"] for c in cases) and all(math.isfinite(v) and v <= a.tol for v in norm_err.values()),
         device=torch.cuda.get_device_name(0),
+        kernel_head_shards=a.kernel_head_shards,
         tolerance=a.tol,
         norm_errors=norm_err,
         worst_case_error=max((v for c in cases for v in c["errors"].values()), default=0.0),
