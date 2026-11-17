@@ -98,3 +98,46 @@ def main():
 
 
 if __name__=='__main__':main()
+
+
+REQUIRED_SPECIAL_TOKENS = ("<|im_start|>", "<|endoftext|>", "<|vision_start|>",
+                           "<|vision_end|>", "<|image_pad|>", "<|fim_pad|>")
+
+
+def tokenizer_root(vocab_size=None):
+    """Locate a tokenizer usable for corpus fixtures, or None to skip.
+
+    Order: an explicit DCVLM_TOKENIZER, the historical assets/tokenizer, then
+    the pinned model assets this runtime already uses. make_fake needs only
+    tokenizer.json and tokenizer_config.json, and records their digests.
+
+    Pass vocab_size to require the same thing data.packing.token_contract
+    requires: every special token this project depends on must be addressable
+    inside the model vocabulary. A caller that asserts Qwen2.5-class ids will
+    get None from a Qwen3.5 tokenizer rather than a confusing downstream error.
+    """
+    import json
+    import os
+
+    root = Path(__file__).resolve().parents[1]
+    candidates = []
+    explicit = os.environ.get("DCVLM_TOKENIZER")
+    if explicit:
+        candidates.append(Path(explicit))
+    candidates += [root / "assets/tokenizer", root / ".assets/Qwen3.5-2B-Base",
+                   root / "assets/Qwen3.5-0.8B"]
+    for candidate in candidates:
+        if not all((candidate / name).is_file()
+                   for name in ("tokenizer.json", "tokenizer_config.json")):
+            continue
+        if vocab_size is None:
+            return candidate
+        try:
+            config = json.loads((candidate / "tokenizer_config.json").read_text())
+            added = {v["content"]: int(k) for k, v in config["added_tokens_decoder"].items()}
+            ids = [added[text] for text in REQUIRED_SPECIAL_TOKENS]
+        except (KeyError, ValueError):
+            continue
+        if max(ids) < vocab_size:
+            return candidate
+    return None

@@ -17,13 +17,19 @@ from data.packing import Packer, ConsumedLoader, token_contract
 from data.codec import DevicePreparer
 from data.device import DeviceLoader
 
-TOKENIZER=Path(os.environ.get('DCVLM_TOKENIZER','assets/tokenizer'))
+from tests.fixtures import tokenizer_root
+# This module asserts Qwen2.5-class token ids against tiny_config(vocab_size=151936).
+TOKENIZER=tokenizer_root(151936)
 
 
 class PipelineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         torch.set_num_threads(1)
+        if TOKENIZER is None:
+            raise unittest.SkipTest(
+                'Needs a 151936-vocabulary tokenizer fixture; set DCVLM_TOKENIZER '
+                'or place one at assets/tokenizer')
         cls.temp=tempfile.TemporaryDirectory();cls.root=Path(cls.temp.name)/'corpus'
         make_fake(cls.root,TOKENIZER,rows=33,shard_rows=11,edge_cases=True)
 

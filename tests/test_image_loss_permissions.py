@@ -15,7 +15,7 @@ import torch
 from configs.config import tiny_config
 from data.loss_permissions import image_loss_allowed
 from data.packing import Packer
-from tests.fixtures import make_fake
+from tests.fixtures import make_fake, tokenizer_root
 from data.stream import DocumentStream
 from data.codec import DevicePreparer
 from models.modeling_umm import JointModel
@@ -36,7 +36,9 @@ class PermissionLoadingTests(unittest.TestCase):
     def test_parquet_flags_reach_documents_and_images(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary)/'corpus'
-            make_fake(root,Path('assets/tokenizer'),rows=3,shard_rows=3)
+            tokenizer=tokenizer_root()
+            if tokenizer is None:self.skipTest('No tokenizer available for corpus fixtures')
+            make_fake(root,tokenizer,rows=3,shard_rows=3)
             path=root/'data/00000.parquet'
             rows=pq.read_table(path).to_pylist()
             for index,entry in enumerate(rows):
