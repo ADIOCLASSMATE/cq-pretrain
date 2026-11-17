@@ -73,9 +73,14 @@ def prepare_accelerator():
 def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, initialize_weights=True):
     global _active, _config, _optimizer_instances
     _optimizer_instances = optimizer_instances
-    local_heads = (model_config.linear_value_heads or model_config.linear_heads) // tp
+    heads = model_config.linear_value_heads or model_config.linear_heads
+    local_heads = heads // tp
     if accel.IS_NPU and (model_config.linear_head_dim != 128 or local_heads not in (4, 8, 16, 32)):
         raise ValueError("AscendC requires 128-dimensional GDN heads with a supported local head count")
+    # The upstream Triton GDN accepts other head counts, but the TP shard must
+    # still be exact: a remainder would silently drop heads from the recurrence.
+    if not accel.IS_NPU and (heads % tp or local_heads < 1):
+        raise ValueError(f"GDN head count {heads} must divide TP={tp}")
     prepare_accelerator()
     logging.getLogger("megatron.core.optimizer").setLevel(logging.WARNING)
     from megatron.core import parallel_state as ps
