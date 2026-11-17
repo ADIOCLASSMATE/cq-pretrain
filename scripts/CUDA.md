@@ -124,3 +124,58 @@ backend. Removing it requires `sigma`/`segments` on device at the attention call
 site so a FlexAttention `mask_mod` can evaluate the predicate blockwise. That means
 extending `MainlinePlan` and the CPU plan builders, which are deliberately frozen —
 raise it as a design change rather than patching it in.
+
+### Where the step time actually goes
+
+Torch profiler, rank 0, sequence 8192, TP1 DP2, full recompute
+(`.runs/prof-1117`). Phase timing on the same shape: forward 941 ms (23%),
+backward 2916 ms (72%), optimizer 155 ms (4%) — backward is 3.1x forward, which
+is the signature of recomputing every layer.
+
+| CUDA kernel category | share |
+|---|---:|
+| elementwise | 36.1% |
+| GEMM | 24.0% |
+| attention | 11.8% |
+| NCCL collective | 11.2% |
+| norm/reduce | 5.5% |
+| other | 4.8% |
+| copy/index | 3.6% |
+| GDN (FLA Triton) | 3.0% |
+
+Three things follow, and two of them contradict the obvious guesses:
+
+- **The GDN kernel is not a bottleneck at 3%.** Effort belongs in the surrounding
+  projections and normalization, not in the recurrence.
+- **Elementwise work, not GEMM, dominated.** That was unfused normalization; see
+  `ops/cuda_fused.py`.
+- **Attention runs on the memory-efficient backend, not flash**
+  (`fmha_cutlassB_bf16` 775 ms backward, `fmha_cutlassF_bf16` 219 ms forward),
+  because the CQ mask arrives as a dense `[1,1,2S,S]` boolean. Flash cannot take
+  an arbitrary mask, so this is structural; see the FlexAttention note above.
+- NCCL is 11.2% here only because this probe used GA=1. At the production GA=8 it
+  amortizes, which is why per-card throughput *rises* from 2 to 16 cards.
+
+### Recompute depth is a throughput knob, not a binary
+
+At production shape the full-recompute configuration leaves 22 GiB of each card
+unused. Backbone recompute depth converts that into speed (16xL40S, sequence
+8192, TP1 DP16, GA8, BF16 grad reduce, all 16 ranks verified):
+
+| backbone / DiT layers recomputed | s/update | peak GiB | vs full |
+|---|---:|---:|---:|
+| 24 / 30 (full) | 30.374 | 22.32 | baseline |
+| 22 / 30 | 29.717 | 27.84 | +2.2% |
+| 18 / 30 | 27.238 | 36.70 | +11.5% |
+| 24 / 0 | 30.163 | 28.41 | +0.7% |
+| 0 / 30, and 0 / 0 | OOM | | |
+
+Roughly 2.4 GiB and 1.9% per skipped backbone layer. Recomputing the whole
+30-layer DiT costs only 0.7%, so the DiT is a small share of *this* shape — one
+image per pack. Packs with many generation targets will shift that, so re-measure
+before carrying the DiT conclusion to real data.
+
+Choose depth by the margin you want: 18/30 leaves about 7.7 GiB of a 44.39 GiB
+card, which is thin once real packs vary in image count. 20/30 or 22/30 are the
+conservative picks. Treat these as upper bounds on achievable speed, not as
+settings to adopt blind.
