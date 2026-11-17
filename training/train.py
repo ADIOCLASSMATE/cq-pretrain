@@ -397,6 +397,9 @@ def main():
     training_state['kernel_options']['flex_tiles']=(
         _flex.tile_options(cfg.head_dim,'%d%d'%torch.cuda.get_device_capability())
         if _flex._ENABLED and accel.BACKEND=='cuda' else None)
+    from ops import cuda_cross_entropy as _fused_ce
+    training_state['kernel_options']['cuda_fused_ce']=(
+        _fused_ce._ENABLED if accel.BACKEND=='cuda' else None)
     training_state['qwen35_assets']=text_manifest
     if ema is not None:
         training_state['renderer_ema']=dict(schema=ema.schema,module='renderer',decay=ema.decay,dtype='float32',

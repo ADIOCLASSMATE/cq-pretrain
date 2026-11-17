@@ -117,4 +117,10 @@ class _LinearCE(torch.autograd.Function):
 
 
 def linear_cross_entropy(hidden, weight, targets, chunk):
+    from ops import cuda_cross_entropy as fused
+
+    # Same chunking, recompute and gradient protocol; only the per-chunk
+    # softmax/gradient kernel differs, and only where that is equivalent.
+    if fused.available(hidden, parallel.tp_size()):
+        return fused.linear_cross_entropy(hidden, weight, targets, chunk)
     return _LinearCE.apply(hidden, weight, targets, chunk)
