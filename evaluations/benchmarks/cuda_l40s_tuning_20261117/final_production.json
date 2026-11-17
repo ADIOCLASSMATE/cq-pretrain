@@ -1,0 +1,68 @@
+{
+  "what": "Fused GDN causal convolution confirmed at production shape",
+  "configuration": "16 x L40S (2 nodes), seq 8192, TP1 DP16, global batch 128 (GA 8), BF16 gradient reduction, frozen source snapshot",
+  "ops_off": {
+    "mean_seconds": 20.009684880574543,
+    "tokens_per_second": 52403.423954865,
+    "peak_memory_gib": 20.218618869781494,
+    "ranks_with_receipts": 16,
+    "kernel_options": {
+      "cuda_fused_ops": false,
+      "cuda_fused_ce": true,
+      "cuda_fused_norm": true,
+      "flex_attention": true,
+      "grad_reduce_in_fp32": false
+    }
+  },
+  "ops_on": {
+    "mean_seconds": 19.385738372802734,
+    "tokens_per_second": 54090.07280687859,
+    "peak_memory_gib": 20.218618869781494,
+    "ranks_with_receipts": 16,
+    "kernel_options": {
+      "cuda_fused_ops": true,
+      "cuda_fused_ce": true,
+      "cuda_fused_norm": true,
+      "flex_attention": true,
+      "grad_reduce_in_fp32": false
+    }
+  },
+  "speedup": 1.0322,
+  "end_to_end_2gpu_speedup": 1.0386,
+  "cumulative_vs_pre_optimization": 1.5668,
+  "ledger": [
+    {
+      "change": "fused RMSNorm + gated RMSNorm (flash-attn Triton, upstream FLA)",
+      "operator": "7.58x / 7.34x",
+      "production_speedup": 1.235
+    },
+    {
+      "change": "FlexAttention on the CQ mask predicate",
+      "operator": "10.53x fwd+bwd vs dense SDPA",
+      "production_speedup": 1.129
+    },
+    {
+      "change": "fused linear cross entropy (flash-attn Triton)",
+      "operator": "2.03-2.14x",
+      "production_speedup": 1.0813,
+      "memory": "-1.89 GiB peak"
+    },
+    {
+      "change": "fused GDN causal convolution (upstream FLA varlen)",
+      "operator": "6.41x",
+      "production_speedup": 1.0322
+    }
+  ],
+  "rejected_with_evidence": [
+    "recompute depth as a tuning knob: 0-1% across the whole range, and full recompute is simultaneously the fastest and the smallest footprint at this model size",
+    "Inductor fusion of the DiT pointwise chain: 1% slower",
+    "TP2: 43% slower than TP1 at equal card count, no NVLink",
+    "upstream fused SwiGLU: silently wrong on this MLP's strided gate/up views",
+    "FP8: 1.08x step-level upper bound once measured through TE as it would be adopted"
+  ],
+  "baseline": {
+    "mean_seconds": 30.374,
+    "tokens_per_second": 34522,
+    "note": "Same shape and hardware before any of this work."
+  }
+}
