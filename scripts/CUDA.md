@@ -179,3 +179,75 @@ Choose depth by the margin you want: 18/30 leaves about 7.7 GiB of a 44.39 GiB
 card, which is thin once real packs vary in image count. 20/30 or 22/30 are the
 conservative picks. Treat these as upper bounds on achievable speed, not as
 settings to adopt blind.
+
+## L40S tuning (measured 2026-11-17)
+
+Production shape is 16x L40S (2 full nodes), `--sequence-length 8192`,
+`--global-batch 128` (GA 8 at DP16) and `--bf16-grad-reduce`.
+
+**Parallelism.** TP1 beats TP2 by 43% on two cards at seq 8192 (4044 vs 2826
+tok/s): without NVLink a tensor-parallel all-reduce rides PCIe every layer, so
+scale with DP and keep TP at 1. Per-card throughput *rises* from 2 cards to 16
+(2023 -> 2158 tok/s) because GA 8 amortizes the gradient all-reduce, so the
+multi-node collective is not the limit.
+
+**Gradient reduction dtype.** `--bf16-grad-reduce` is what makes seq 8192 fit:
+FP32 reduction OOMs on two cards where BF16 peaks at 38.41 GiB, and it halves
+the inter-node all-reduce from 13.2 GB to 6.6 GB. Six same-seed steps drift at
+most 1.2e-3 in loss, non-monotonically -- BF16 rounding, not a bias.
+
+**Peak memory is optimizer state, not activations.** At seq 2048 the same
+configuration peaks at 42.56 GiB on DP2 and 26.47 GiB on DP16; activations under
+full recompute are only ~5 GiB there and ~7 GiB at seq 8192. Memory therefore
+falls as DP widens, and a single-card measurement does not predict production.
+
+**Recompute depth is not a useful knob here.** Measured from one frozen source
+tree at production shape: full recompute 24.599s / 22.19 GiB, `bb24-dit22`
+24.600s / 23.83 GiB (-0.0%), `bb22-dit26` 24.355s / 26.40 GiB (+1.0%). Keep
+full recompute: it is tied-fastest *and* cheapest, which leaves headroom for
+real-data packs whose image counts vary. The Ascend conclusion that full
+recompute is optimal survives the port, for a different reason (there it was a
+hard memory bound; here the activations are simply small).
+
+**Fused normalization is the large win.** `PRETRAIN_CUDA_FUSED_NORM=1` (default)
+routes RMSNorm to flash-attn's Triton kernel and the gated RMSNorm to the same
+upstream `fla.modules.fused_norm_gate` the Ascend path already used: 7.6x and
+7.3x at production shapes, **1.212x end to end on two cards and 1.235x at 16**.
+
+**Pointwise fusion of the DiT is not worth enabling.** `torch.compile` on
+`modulated_norm`/`gated_add` measured 1% *slower*; keep
+`PRETRAIN_COMPILE_MODULATION=0`. The profile explains why -- recomputing all 30
+DiT layers costs only 0.7%, so the DiT is a small share of this step.
+
+### Where the time goes
+
+Kernel time at production shape, after fused norms:
+
+| category | share |
+|---|---:|
+| GEMM | 34.0% |
+| elementwise | 25.4% |
+| attention | 17.2% |
+| norm/reduce | 7.0% |
+| copy/index | 5.1% |
+| GDN (FLA Triton) | 4.1% |
+| NCCL | 3.7% |
+
+Fusing the norms moved elementwise from 36.1% to 25.4%. The GDN recurrence is
+**not** a bottleneck at 4.1%, and NCCL is not one either at 3.7%. The remaining
+addressable item is attention: the mem-efficient backward kernel alone is 12.9%
+because the CQ mask reaches SDPA as a dense tensor.
+
+### Experiment hygiene
+
+Jobs read source from the shared checkout, so editing the tree while a sweep
+runs silently changes what later configurations execute. One sweep was
+invalidated this way; its recompute "speedups" were the fused norms landing
+mid-run. Freeze first and submit the snapshot:
+
+```bash
+bash scripts/freeze_source.sh .runs/<run>/source
+```
+
+`run.json` records `source_sha256` and `kernel_options`; compare both before
+comparing timings, and treat runs from different trees as incomparable.

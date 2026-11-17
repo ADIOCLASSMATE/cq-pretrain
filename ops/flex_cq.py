@@ -10,27 +10,55 @@ The rule is exactly the one ``document_cq_mask`` materializes --
 thing that changes is that fully-masked blocks are skipped instead of being
 multiplied by a [1,1,2S,S] boolean tensor. Grouped-query heads are handled by
 ``enable_gqa`` rather than by expanding K/V.
+
+Tile sizes are not guessed from a shared-memory formula: this backbone's
+head_dim is 256 and Ada (sm89) offers ~99 KB per SM against Hopper's 228 KB, so
+the upstream defaults do not compile here. The ladder below is tried largest
+first and the first configuration that compiles on this card is cached. If none
+compiles the module disables itself and callers keep the dense mask, because a
+slower attention is always better than a failed training step.
 """
 
 import os
-from functools import lru_cache
 
 import torch
 
 _ENABLED = os.environ.get("PRETRAIN_FLEX_ATTENTION", "0") == "1"
 _BLOCK = int(os.environ.get("PRETRAIN_FLEX_BLOCK", "128"))
+_DISABLED_REASON = None
+_COMPILED = None
+_OPTIONS = {}
+
+# Descending working-set size; (forward M, forward N, backward M, backward N).
+_LADDER = (
+    (128, 128, 64, 64),
+    (128, 64, 64, 32),
+    (64, 64, 32, 32),
+    (64, 32, 32, 32),
+    (32, 32, 32, 32),
+    (32, 32, 16, 16),
+    (16, 16, 16, 16),
+)
 
 
-@lru_cache(maxsize=1)
-def _compiled():
-    from torch.nn.attention.flex_attention import flex_attention
+def _options(fm, fn, bm, bn):
+    return dict(BLOCK_M=fm, BLOCK_N=fn,
+                BLOCK_M1=bn, BLOCK_N1=bm, BLOCK_M2=bm, BLOCK_N2=bn,
+                num_stages=1, num_warps=4)
 
-    return torch.compile(flex_attention, dynamic=False)
+
+def compiled():
+    global _COMPILED
+    if _COMPILED is None:
+        from torch.nn.attention.flex_attention import flex_attention
+
+        _COMPILED = torch.compile(flex_attention, dynamic=False)
+    return _COMPILED
 
 
 def usable(q, predicate, mask):
     """Only take this path when it is exactly equivalent and actually supported."""
-    if not _ENABLED or predicate is None or q.device.type != "cuda":
+    if not _ENABLED or _DISABLED_REASON or predicate is None or q.device.type != "cuda":
         return False
     if torch.are_deterministic_algorithms_enabled():
         return False
@@ -69,7 +97,7 @@ def mask_mod(predicate):
 def block_mask(predicate, rows, keys):
     """One block mask per batch, reused by every full-attention layer."""
     cached = predicate.block_mask
-    if cached is not None and cached.shape[-2:] == (rows, keys):
+    if cached is not None and tuple(cached.shape[-2:]) == (rows, keys):
         return cached
     from torch.nn.attention.flex_attention import create_block_mask
 
@@ -81,26 +109,75 @@ def block_mask(predicate, rows, keys):
     return built
 
 
+def _run(query, key, value, bm, scale, gqa, options, needs_backward):
+    out = compiled()(query, key, value, block_mask=bm, scale=scale,
+                     enable_gqa=gqa, kernel_options=options)
+    if needs_backward:
+        # Force the backward kernel to compile now, so a shared-memory failure
+        # is discovered during the ladder search and not mid-training.
+        torch.autograd.grad(out.sum(), [t for t in (query, key, value)
+                                        if t.requires_grad], retain_graph=True)
+    return out
+
+
 def attention(q, k, v, predicate, valid_rows=None, scale=None):
     """q/k/v are [sequence, batch, heads, dim]; returns [sequence, batch, heads*dim]."""
     rows, keys = q.shape[0], k.shape[0]
     query, key, value = (t.permute(1, 2, 0, 3).contiguous() for t in (q, k, v))
-    out = _compiled()(
-        query, key, value,
-        block_mask=block_mask(predicate, rows, keys),
-        scale=q.shape[-1] ** -0.5 if scale is None else scale,
-        enable_gqa=q.shape[2] != k.shape[2],
-    )
+    bm = block_mask(predicate, rows, keys)
+    scale = q.shape[-1] ** -0.5 if scale is None else scale
+    gqa = q.shape[2] != k.shape[2]
+    signature = (q.shape[-1], q.element_size(), gqa, torch.is_grad_enabled())
+
+    chosen = _OPTIONS.get(signature)
+    if chosen is not None:
+        out = compiled()(query, key, value, block_mask=bm, scale=scale,
+                         enable_gqa=gqa, kernel_options=chosen)
+    else:
+        needs_backward = torch.is_grad_enabled() and any(
+            t.requires_grad for t in (query, key, value))
+        errors = []
+        out = None
+        for fm, fn, bmm, bnn in _LADDER:
+            options = _options(fm, fn, bmm, bnn)
+            try:
+                out = _run(query, key, value, bm, scale, gqa, options, needs_backward)
+            except Exception as error:  # OutOfResources and its compile wrappers
+                errors.append(f"{fm}x{fn}/{bmm}x{bnn}: {type(error).__name__}")
+                continue
+            _OPTIONS[signature] = options
+            break
+        if out is None:
+            raise RuntimeError(
+                "No FlexAttention tile configuration compiles on this device: "
+                + "; ".join(errors))
+        if needs_backward:
+            # The probe above built a throwaway graph; redo the forward so the
+            # returned tensor owns the graph the caller will back-propagate.
+            out = compiled()(query, key, value, block_mask=bm, scale=scale,
+                             enable_gqa=gqa, kernel_options=_OPTIONS[signature])
+
     result = out.permute(2, 0, 1, 3).flatten(-2).contiguous()
     if valid_rows is not None:
         result = result * valid_rows.transpose(0, 1).unsqueeze(-1).to(result.dtype)
     return result
 
 
+def disable(reason):
+    """Stop offering this path; callers fall back to the dense mask."""
+    global _DISABLED_REASON
+    _DISABLED_REASON = reason
+    return reason
+
+
+def chosen_options():
+    return {str(k): v for k, v in _OPTIONS.items()}
+
+
 def sparsity(predicate, rows, keys):
-    """Fraction of 128x128 blocks the mask lets the kernel skip."""
+    """Fraction of blocks the mask lets the kernel skip."""
     bm = block_mask(predicate, rows, keys)
     try:
-        return float(bm.sparsity()) / 100.0
+        return round(float(bm.sparsity()) / 100.0, 4)
     except Exception:
         return None
