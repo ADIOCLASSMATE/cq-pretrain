@@ -1,4 +1,27 @@
-# 平台资产
+# CUDA / L40S 分支
+
+本 checkout 的规范路径为
+`/inspire/hdd/global_user/wanjiaxin-253108030048/code/cq-pretrain-l40s`，分支 `l40s`。
+以下 CUDA 约定优先于后面的 Ascend 历史资产记录：
+
+- 使用账号 `wjx`、用户指定 Workspace `可上网GPU资源`、Compute Group `L40s-cuda13.2`，
+  Project `随机序语言建模-统一自回归与掩码扩散的随机顺序生成框架`。
+- **所有开发、测试和多节点验证必须显式 `--priority 3`**，创建后核验平台仍为 `3 / LOW`。
+- 基底镜像沿用 L40S 开发环境的官方镜像
+  `docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3`。
+  CUDA 依赖单独安装；不加载 `.venv-core17`、CANN、MindSpeed 或 MegatronAdaptor。
+- L40S 每节点 8 卡、无 NVLink。TP 留在节点内；多节点使用完整 8 卡规格，
+  创建 Job 必须显式 `--shm-size 128`、平台自动容错和训练 `--auto-resume`。
+- CPU 侧开发与回归复用 CUDA PyTorch 虚拟环境；模型、依赖和运行产物放在本 checkout
+  的共享盘目录。跨 Workspace 的历史 Ascend 资产路径必须重新验证，不能假定同名可见。
+- CQ/attention/GDN 的 CPU 计划、模型配置和索引逻辑保持原样，只接入上游 CUDA 库。
+  验证保留每个 rank 的成功 optimizer step、loss、显存和完整环境版本；不能以 RUNNING 代替验收。
+- 本任务的临时 Notebook 结束后停止并删除；历史 checkpoint、常驻实例和其他实验不动。
+
+CLI 7.2.2 的 `init --help` 已不支持项目级 `--scope project`，提交命令须显式传入上述条件，
+不创建 CLI 不再读取的 `.inspire/` 配置。
+
+# 平台资产（Ascend 历史记录）
 
 工程：`/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain`。
 

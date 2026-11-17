@@ -30,8 +30,12 @@ def parse_args(argv=None):
     parser.add_argument('--config')
     parser.add_argument('--vision-assets',help='Local pinned Qwen3.5 vision assets; training never downloads weights')
     parser.add_argument('--text-assets',help='Local pinned Qwen3.5 language checkpoint and tokenizer')
+    parser.add_argument('--wan-assets',help='Local native Wan2.1 DiT checkpoint')
+    parser.add_argument('--wan-vae-assets',help='Local frozen Wan2.1 VAE checkpoint')
     parser.add_argument('--random-init',action='store_true',help='Explicit architecture control; do not load pretrained language/vision weights')
     parser.add_argument('--tiny', action='store_true')
+    parser.add_argument('--synthetic', action='store_true',
+                        help='Use fake_batch with the unchanged production model and CPU planners')
     parser.add_argument('--method', choices=('CQ_IT','Bi_I+CQ_T'))
     parser.add_argument('--image-condition-queries', type=int)
     parser.add_argument('--visual-query-mode',choices=('native','fixed'))
@@ -81,6 +85,7 @@ def parse_args(argv=None):
     parser.add_argument('--bucket-size', type=int, default=40_000_000, help='DDP bucket elements')
     parser.add_argument('--no-param-overlap', action='store_true')
     parser.add_argument('--phase-timing', action='store_true', help='Measure forward/backward/optimizer device time')
+    parser.add_argument('--log-all-ranks', action='store_true', help='Print successful step receipts on every rank')
     parser.add_argument('--checkpoint-backbone-layers', type=int, default=0)
     parser.add_argument('--checkpoint-dit-layers', type=int, default=0)
     parser.add_argument('--keep-attention-activations',type=int,default=0)
@@ -181,6 +186,8 @@ def main():
            RunConfig.load(args.config or ROOT/'configs/qwen35_2b_wan.yaml'))
     if args.vision_assets is not None:cfg.vision_assets=args.vision_assets
     if args.text_assets is not None:cfg.text_assets=args.text_assets
+    if args.wan_assets is not None:cfg.wan_assets=args.wan_assets
+    if args.wan_vae_assets is not None:cfg.wan_vae_assets=args.wan_vae_assets
     if cfg.renderer=='wan' and args.latent_encoder is None:args.latent_encoder='wan'
     if args.method is not None: cfg.method=args.method
     if args.image_condition_queries is not None: cfg.image_condition_queries=args.image_condition_queries
@@ -194,7 +201,9 @@ def main():
     if not cfg.preserve_documents and (args.dit_microbatch_tokens is not None or args.dit_microbatch_images is not None):
         raise ValueError('DiT microbatch flags require --preserve-documents or the whole-document config')
     if args.max_images_per_pack is None:args.max_images_per_pack=0 if cfg.preserve_documents else 4
-    if cfg.preserve_documents and (not args.data_snapshot or args.max_images_per_pack):
+    if args.synthetic and args.data_snapshot:
+        raise ValueError('--synthetic and --data-root are mutually exclusive')
+    if cfg.preserve_documents and ((not args.data_snapshot and not args.synthetic) or args.max_images_per_pack):
         raise ValueError('Whole-document training needs real data and max-images-per-pack=0; bound DiT separately')
     if args.data_snapshot:
         from data.sources import open_catalog
@@ -231,8 +240,11 @@ def main():
         vision_manifest=json.loads((asset_path(cfg.vision_assets)/'manifest.json').read_text())
         asset_manifest(cfg.vision_assets)
     if args.deterministic:
-        os.environ['HCCL_DETERMINISTIC']='True'
-        os.environ['CLOSE_MATMUL_K_SHIFT']='1'
+        if accel.IS_NPU:
+            os.environ['HCCL_DETERMINISTIC']='True'
+            os.environ['CLOSE_MATMUL_K_SHIFT']='1'
+        else:
+            os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
         torch.use_deterministic_algorithms(True)
     complete_pretrained = (cfg.renderer in ('moss','wan') and bool(cfg.text_assets)
         and cfg.vision_encoder == 'qwen35' and not args.random_init)
@@ -451,14 +463,17 @@ def main():
         batch = fake_batch(cfg, args.sequence_length, args.micro_batch, args.images,
                            seed=args.seed + P.dp_rank(), device=ACCEL, dtype=torch.bfloat16)
     environment = dict(torch=torch.__version__, torch_npu=(torch_npu.__version__ if accel.IS_NPU else None),
-        device=DEV.get_device_name(0), total_memory=DEV.get_device_properties(0).total_memory,
+        device=DEV.get_device_name(DEV.current_device()),
+        total_memory=DEV.get_device_properties(DEV.current_device()).total_memory,
         world_size=world, topology=topology, model=cfg.to_dict(), parameters=parameters,
         trainable_parameters=trainable_parameters,frozen_parameters=parameters-trainable_parameters,
         training_scope=training_scope,
         arguments={k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()}, global_batch=global_batch,
         capacity_slots_per_update_upper_bound=global_batch*args.sequence_length,
-        training_backend='MindSpeed Core + Megatron Core distributed optimizer',
-        attention_backend=f'{cfg.layers-cfg.layers//4} {cfg.gdn_backend} GatedDeltaNet + {cfg.layers//4} torch_npu gated fusion attention', measured_on=accel.accel_type(),
+        training_backend=('MindSpeed + Megatron Core / HCCL' if accel.IS_NPU else 'Megatron Core / NCCL'),
+        attention_backend=(f'{cfg.gdn_backend} GatedDeltaNet + torch_npu fusion attention' if accel.IS_NPU
+                           else 'upstream flash-linear-attention GatedDeltaNet + PyTorch SDPA'),
+        measured_on=accel.accel_type(), cuda=torch.version.cuda, synthetic=not bool(args.data_snapshot),
         pretrained_weights=loaded_weights,qwen35_assets=text_manifest,startup=startup)
     if ema is not None:
         environment['renderer_ema']=dict(**ema.metadata(),local_storage_bytes=ema.local_bytes,
@@ -479,6 +494,9 @@ def main():
     import utils.dependencies as stack
     environment['stack'] = stack.name()
     environment['dependencies'] = json.loads(stack.lock_path().read_text())
+    environment['installed_versions'] = stack.installed_versions()
+    if not accel.IS_NPU:
+        environment['nccl'] = torch.cuda.nccl.version()
     host = dict(rank=rank, local_rank=int(os.environ.get('LOCAL_RANK', 0)),
         hostname=socket.gethostname(), tp_rank=P.state().get_tensor_model_parallel_rank(),
         dp_rank=P.dp_rank())
@@ -501,8 +519,8 @@ def main():
         (output / 'run.json').write_text(json.dumps(environment, indent=2))
         print(json.dumps(environment), flush=True)
     profile = nullcontext()
-    profile_this_rank = args.profile and rank in profile_ranks and not budget_already_complete and accel.IS_NPU
-    if profile_this_rank:
+    profile_this_rank = args.profile and rank in profile_ranks and not budget_already_complete
+    if profile_this_rank and accel.IS_NPU:
         profile = torch_npu.profiler.profile(
             activities=[torch_npu.profiler.ProfilerActivity.CPU, torch_npu.profiler.ProfilerActivity.NPU],
             schedule=torch_npu.profiler.schedule(wait=args.warmup, warmup=1, active=2, repeat=1),
@@ -514,6 +532,12 @@ def main():
             record_shapes=True, profile_memory=True, with_stack=False,
             experimental_config=torch_npu.profiler._ExperimentalConfig(
                 profiler_level=torch_npu.profiler.ProfilerLevel.Level1))
+    elif profile_this_rank:
+        profile = torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(wait=args.warmup, warmup=1, active=2, repeat=1),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(str(output/'profile'/f'rank{rank}')),
+            record_shapes=True, profile_memory=True, with_stack=False)
     DEV.synchronize()
     completed_step = start_step
     last_saved_step = start_step if args.resume else -1
@@ -720,7 +744,8 @@ def main():
             elapsed = torch.tensor(local_seconds, device=ACCEL, dtype=torch.float32)
             dist.all_reduce(elapsed, op=dist.ReduceOp.MAX)
             seconds = elapsed.item()
-            memory = torch.tensor(DEV.max_memory_allocated(), device=ACCEL, dtype=torch.int64)
+            local_memory = DEV.max_memory_allocated()
+            memory = torch.tensor(local_memory, device=ACCEL, dtype=torch.int64)
             dist.all_reduce(memory, op=dist.ReduceOp.MAX)
             values = torch.stack(loss_totals)
             dist.all_reduce(values, group=P.state().get_data_parallel_group())
@@ -729,6 +754,16 @@ def main():
                 raise FloatingPointError('Nonfinite loss or skipped optimizer update')
             for receipt in consumed_receipts: loader.acknowledge(receipt)
             completed_step = start_step+local_step+1
+            rank_step = dict(step=completed_step, rank=rank, tp_rank=host['tp_rank'], dp_rank=P.dp_rank(),
+                hostname=host['hostname'], seconds=local_seconds, peak_memory_gib=local_memory/2**30,
+                loss=loss_totals[0].item(), text_loss=loss_totals[1].item(), image_loss=loss_totals[2].item(),
+                grad_norm=float(grad_norm), optimizer_updated=bool(updated),
+                global_tokens_per_step=global_batch*args.sequence_length,
+                warmup=local_step < args.warmup)
+            with (output/f'steps_rank_{rank:05d}.jsonl').open('a') as f:
+                f.write(json.dumps(rank_step)+'\n')
+            if args.log_all_ranks:
+                print(json.dumps(dict(rank_step=rank_step)), flush=True)
             if loader:
                 with (output/f'consumed_rank_{rank:05d}.jsonl').open('a') as trace:
                     trace.write(json.dumps(dict(step=start_step+local_step+1,receipts=consumed_receipts))+'\n')
@@ -867,7 +902,7 @@ def main():
     (output/f'backend_rank_{rank:05d}.json').write_text(json.dumps(provenance(),indent=2))
     dist.barrier()
     dist.destroy_process_group()
-    if profile_this_rank:
+    if profile_this_rank and accel.IS_NPU:
         from torch_npu.profiler.profiler import analyse
         profile_root=output/'profile'/f'rank{rank}'
         analyse(str(profile_root),max_process_number=4)

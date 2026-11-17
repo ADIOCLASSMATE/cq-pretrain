@@ -7,6 +7,7 @@ Only the final chunk marks renderer gradients ready for MCore's DP reduction.
 
 from contextlib import contextmanager, nullcontext
 import torch
+from distributed.accel import device_module
 
 
 @contextmanager
@@ -53,7 +54,7 @@ def backward_deferred_renderer(
         context = suspend_gradient_readiness(wrapped) if index + 1 < len(parts) else nullcontext()
         with context:
             if forward_events is not None:
-                pair = [(torch.cuda if torch.cuda.is_available() else torch.npu).Event(enable_timing=True) for _ in range(2)]
+                pair = [device_module().Event(enable_timing=True) for _ in range(2)]
                 pair[0].record()
             chunk_loss = model.renderer(leaf, part.bind(batch))
             if forward_events is not None:

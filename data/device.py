@@ -5,7 +5,8 @@ from dataclasses import dataclass, fields, is_dataclass
 import time
 
 import torch
-_DEV = torch.npu if (hasattr(torch, 'npu') and not torch.cuda.is_available()) else torch.cuda
+from distributed.accel import device_module
+_DEV = device_module()
 
 
 def tensors(value, seen=None):

@@ -1,4 +1,4 @@
-"""Megatron Core TP and distributed optimizer, adapted by MindSpeed for HCCL."""
+"""Megatron Core TP/optimizer with NCCL, or the MindSpeed adapter on NPU."""
 
 from datetime import timedelta
 import os
@@ -8,6 +8,7 @@ import torch
 from torch import nn
 import torch.distributed as dist
 import utils.dependencies as stack
+import distributed.accel as accel
 
 _active = False
 _config = None
@@ -50,11 +51,13 @@ def prepare_npu():
 
 
 def prepare_cuda():
-    """Standard CUDA stack: set device and initialize the FLA Triton GDN backend."""
+    """Check upstream CUDA dependencies before constructing any training weights."""
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
-    import ops.gated_delta_net as delta
+    from fla.ops.gated_delta_rule import chunk_gated_delta_rule  # noqa: F401
+    import fused_weight_gradient_mlp_cuda
 
-    delta.initialize()
+    if not callable(getattr(fused_weight_gradient_mlp_cuda, "wgrad_gemm_accum_fp32", None)):
+        raise RuntimeError("Install NVIDIA Apex with --cuda_ext for MCore gradient accumulation")
 
 
 def prepare_accelerator():
@@ -71,14 +74,12 @@ def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, init
     global _active, _config, _optimizer_instances
     _optimizer_instances = optimizer_instances
     local_heads = (model_config.linear_value_heads or model_config.linear_heads) // tp
-    if model_config.linear_head_dim != 128 or local_heads not in (4, 8, 16, 32):
+    if accel.IS_NPU and (model_config.linear_head_dim != 128 or local_heads not in (4, 8, 16, 32)):
         raise ValueError("AscendC requires 128-dimensional GDN heads with a supported local head count")
     prepare_accelerator()
     logging.getLogger("megatron.core.optimizer").setLevel(logging.WARNING)
     from megatron.core import parallel_state as ps
     from megatron.core.transformer.transformer_config import TransformerConfig
-
-    import distributed.accel as accel
 
     dist.init_process_group(accel.dist_backend(), timeout=timedelta(minutes=timeout_minutes))
     ps.initialize_model_parallel(
@@ -186,7 +187,8 @@ class RowLinear(nn.Module):
             )
             mark_sharded(self.impl.weight, dim=1)
             if (
-                os.environ.get("PRETRAIN_MC2_ROW", "0") == "1"
+                accel.IS_NPU
+                and os.environ.get("PRETRAIN_MC2_ROW", "0") == "1"
                 and tp_size() > 1
                 and self.impl.weight.shape[1] % 32 == 0
                 and out_features % 32 == 0
@@ -252,7 +254,7 @@ def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_
         adam_beta1=0.9,
         adam_beta2=0.95,
     )
-    # Our checkpoint protocol writes local shards and uses HCCL broadcasts;
+    # Our checkpoint protocol writes local shards and uses device broadcasts;
     # MCore's optional CPU/Gloo checkpoint groups are unnecessary.
     optimizer = get_megatron_optimizer(optimizer_cfg, [wrapped], config_overrides=config_overrides,
                                         use_gloo_process_groups=False)

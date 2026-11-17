@@ -1,4 +1,4 @@
-"""NPU training kernels. CPU implementations are explicit numerical references."""
+"""Published accelerator operators and explicit PyTorch numerical references."""
 
 import os
 import torch
@@ -29,7 +29,14 @@ def gated_add(hidden, branch, gate, fused=True):
 
 
 def fused_wgrad(total_input, grad_output, main_grad):
-    """BF16 GEMM accumulated directly into FP32 through TorchNPU's ATB binding."""
+    """Accumulate BF16 GEMM into FP32 through the selected vendor's binding."""
+    if total_input.device.type == "cuda":
+        import fused_weight_gradient_mlp_cuda
+
+        if total_input.numel() and grad_output.numel():
+            fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(
+                total_input.contiguous(), grad_output.contiguous(), main_grad)
+        return
     import torch_npu
 
     if total_input.numel() and grad_output.numel():

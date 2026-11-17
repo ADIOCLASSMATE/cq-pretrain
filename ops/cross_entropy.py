@@ -96,9 +96,9 @@ class _LinearCE(torch.autograd.Function):
                 prob.scatter_add_(1, index[:, None], -owned[:, None].to(prob.dtype))
                 gradient = (prob * factor).to(hidden.dtype)
             dh[start : start + ctx.chunk] = gradient @ weight
-            # ATB accumulates BF16 products directly into FP32, with no
+            # Vendor GEMM accumulates BF16 products directly into FP32, with no
             # full FP32 cast or separately materialized dW for each chunk.
-            if hidden.device.type == "npu":
+            if hidden.device.type in ("npu", "cuda"):
                 fused_wgrad(h, gradient, dw)
             else:
                 dw.addmm_(gradient.float().T, h.float())

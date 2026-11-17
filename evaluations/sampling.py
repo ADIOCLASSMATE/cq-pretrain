@@ -19,6 +19,7 @@ from torch.nn import functional as F
 from PIL import Image
 
 import distributed.megatron as P
+from distributed.accel import accel_type, device_module
 from models.cq_backbone import backbone
 from data.batch_layout import finalize_plan
 from data.packing import Packer, token_contract
@@ -175,7 +176,7 @@ def score_reference(model,case,tokenizer,tokens,processor,vae):
     cfg=model.cfg
     with Image.open(case['image']) as image:processed=processor(np.asarray(image.convert('RGB')))
     ids=tokenizer.encode(case['references'][0],add_special_tokens=False).ids
-    batch=make_batch(cfg,tokens,ids,processed,'I2T',prune=False,tokenizer=tokenizer).to('npu')
+    batch=make_batch(cfg,tokens,ids,processed,'I2T',prune=False,tokenizer=tokenizer).to(accel_type())
     hidden=backbone(model,batch)
     indices=batch.text_indices
     indices=indices[(indices>batch.image_indices.max()+1)&(indices<batch.ids.shape[1]-1)]
@@ -184,18 +185,18 @@ def score_reference(model,case,tokenizer,tokens,processor,vae):
     weight=model.lm_head.weight if model.lm_head is not None else model.embedding.weight
     nll=linear_cross_entropy(hidden[indices],weight,targets,cfg.ce_chunk)
     if cfg.renderer=='wan':return dict(reference_text_nll=float(nll),reference_text_tokens=len(targets))
-    batch=make_batch(cfg,tokens,ids,processed,'T2I',tokenizer=tokenizer).to('npu')
-    empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device='npu',dtype=model.embedding.weight.dtype)
+    batch=make_batch(cfg,tokens,ids,processed,'T2I',tokenizer=tokenizer).to(accel_type())
+    empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device=accel_type(),dtype=model.embedding.weight.dtype)
     condition=backbone(model,batch,vision_features=empty)[batch.mainline.condition_indices]
-    pixels=torch.from_numpy(processed[0].transpose(2,0,1).copy())[None].to('npu').float().div(127.5).sub(1)
+    pixels=torch.from_numpy(processed[0].transpose(2,0,1).copy())[None].to(accel_type()).float().div(127.5).sub(1)
     mean,std=vae.encode(pixels)
     rng=torch.Generator(device='cpu').manual_seed(case.get('seed',1234))
-    target=mean.flatten(2).transpose(1,2)[0]+std.flatten(2).transpose(1,2)[0]*torch.randn(sum(batch.generation.lengths),cfg.latent_channels,generator=rng).to('npu')
+    target=mean.flatten(2).transpose(1,2)[0]+std.flatten(2).transpose(1,2)[0]*torch.randn(sum(batch.generation.lengths),cfg.latent_channels,generator=rng).to(accel_type())
     batch.latents=target
-    batch.noise=torch.randn(target.shape,generator=rng).to('npu')
-    batch.times=torch.tensor([.5],device='npu')
+    batch.noise=torch.randn(target.shape,generator=rng).to(accel_type())
+    batch.times=torch.tensor([.5],device=accel_type())
     phase=500.*10000**(-torch.arange(128,dtype=torch.float64)/128)
-    batch.generation.time_features=torch.cat((phase.cos(),phase.sin()))[None].to(device='npu',dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
+    batch.generation.time_features=torch.cat((phase.cos(),phase.sin()))[None].to(device=accel_type(),dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
     loss=model.renderer(condition,batch)
     return dict(reference_text_nll=nll.item(),reference_text_tokens=len(targets),conditional_flow_mse=loss.item(),
                 fixed_flow_time=.5,fixed_noise_seed=case.get('seed',1234))
@@ -247,7 +248,7 @@ def caption(model,case,tokenizer,tokens,processor):
         if cached:hidden=decoder.hidden
         else:
             batch=make_batch(cfg,tokens,emitted,processed,'I2T',tokenizer=tokenizer,
-                instruction=instruction,sequence=sequence).to('npu')
+                instruction=instruction,sequence=sequence).to(accel_type())
             if features is None:features=model.patch_embed(batch.vision)
             hidden=backbone(model,batch,vision_features=features)[batch.mainline.output_positions]
         token=greedy_token(model,hidden)
@@ -270,10 +271,10 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     def conditions(prompt=None):
         batch=(make_null_batch(cfg,tokens,processed,tokenizer,sequence=sequence) if prompt is None else
             make_batch(cfg,tokens,tokenizer.encode(prompt,add_special_tokens=False).ids,
-                       processed,case['task'],tokenizer=tokenizer,sequence=sequence)).to('npu')
+                       processed,case['task'],tokenizer=tokenizer,sequence=sequence)).to(accel_type())
         # Clean target pixels are strictly invisible to image CQ. Zero features
         # eliminate a useless ViT forward, tested against the full CQ plan.
-        empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device='npu',dtype=model.embedding.weight.dtype)
+        empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device=accel_type(),dtype=model.embedding.weight.dtype)
         hidden=backbone(model,batch,vision_features=empty)
         return hidden[batch.mainline.condition_indices],batch.generation
     positive,layout=conditions(case['prompt'])
@@ -289,14 +290,14 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
         if negative_projected is not None:
             negative_kv=dict(cached_kv=model.renderer.cache_condition_kv(negative_projected))
     generator=torch.Generator(device='cpu').manual_seed(case['seed'])
-    latent=torch.randn(sum(layout.lengths),cfg.latent_channels*(4 if cfg.renderer=='wan' else 1),generator=generator).to('npu')
+    latent=torch.randn(sum(layout.lengths),cfg.latent_channels*(4 if cfg.renderer=='wan' else 1),generator=generator).to(accel_type())
     sigmas=moss_sigmas(case.get('steps',30),case.get('shift',5.))
     if cfg.renderer=='wan':
         base=torch.linspace(1.,0.,case.get('steps',30)+1);shift=case.get('shift',5.)
         sigmas=shift*base/(1+(shift-1)*base)
     half=cfg.wan_freq_dim//2 if cfg.renderer=='wan' else 128
     phase=(sigmas[:-1]*1000).double()[:,None]*10000**(-torch.arange(half,dtype=torch.float64)/half)
-    time_features=torch.cat((phase.cos(),phase.sin()),-1).to(device='npu',dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
+    time_features=torch.cat((phase.cos(),phase.sin()),-1).to(device=accel_type(),dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
     for i,(start,end) in enumerate(zip(sigmas[:-1],sigmas[1:])):
         velocity=model.renderer.predict(latent,positive,time_features[i:i+1],layout,projected,**positive_kv).float()
         if negative_projected is not None:
@@ -319,13 +320,13 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     bn=vae.bn;eps=vae.config.batch_norm_eps
     z=z*(bn.running_var+eps).sqrt().view(1,-1,1,1)+bn.running_mean.view(1,-1,1,1)
     z=z.reshape(1,cfg.latent_channels//4,2,2,h,w).permute(0,1,4,2,5,3).reshape(1,cfg.latent_channels//4,2*h,2*w)
-    vae.decoder.to('npu');vae.post_quant_conv.to('npu')
+    vae.decoder.to(accel_type());vae.post_quant_conv.to(accel_type())
     try:
         pixels=vae.decode(z.to(vae.dtype),return_dict=False)[0]
         if not torch.isfinite(pixels).all().item():raise FloatingPointError('Nonfinite decoded pixels')
         pixels=(pixels.clamp(-1,1).add(1).mul(127.5).round().to(torch.uint8)[0].permute(1,2,0).cpu().numpy())
     finally:
-        torch.npu.synchronize()
+        device_module().synchronize()
         vae.decoder.to('cpu');vae.post_quant_conv.to('cpu')
     if P.state().get_tensor_model_parallel_rank()==0:Image.fromarray(pixels).save(output/f"{case['id']}.png")
     return dict(image=f"{case['id']}.png",prompt=case['prompt'],height=height,width=width,
@@ -366,16 +367,16 @@ def run_suite(model,suite_path,output,preparer,weight_sources=None):
     suite=json.loads(Path(suite_path).read_text());output=Path(output)
     output.mkdir(parents=True,exist_ok=True)
     was_training=model.training
-    torch.npu.synchronize();dist.barrier();begin=time.perf_counter()
+    device_module().synchronize();dist.barrier();begin=time.perf_counter()
     tokens=token_contract(model.cfg.text_assets,model.cfg)
     tokenizer=Tokenizer.from_file(str(Path(model.cfg.text_assets)/'tokenizer.json'))
     processor=NativeImageProcessor(model.cfg,2048)
     model.eval();local=[]
     try:
-        with torch.random.fork_rng(devices=[torch.npu.current_device()],device_type='npu'):
+        with torch.random.fork_rng(devices=[device_module().current_device()],device_type=accel_type()):
             for index,case in enumerate(suite['cases']):
                 if index%P.dp_size()!=P.dp_rank():continue
-                torch.npu.reset_peak_memory_stats();started=time.perf_counter()
+                device_module().reset_peak_memory_stats();started=time.perf_counter()
                 result=(generate(model,case,tokenizer,tokens,processor,preparer.vae if model.cfg.renderer=='wan' else preparer.vae.vae,output)
                     if case['task'] in ('T2I','T2V') else caption(model,case,tokenizer,tokens,processor))
                 if case['task']=='V2T' and Path(result['image']).suffix=='.npy':
@@ -385,9 +386,9 @@ def run_suite(model,suite_path,output,preparer,weight_sources=None):
                     result['image']=str(path)
                 if case['task']=='I2T' and case.get('score_reference',True):
                     result.update(score_reference(model,case,tokenizer,tokens,processor,preparer.vae))
-                torch.npu.synchronize()
+                device_module().synchronize()
                 result.update(id=case['id'],task=case['task'],seconds=time.perf_counter()-started,
-                    peak_memory_gib=torch.npu.max_memory_allocated()/2**30,dp_rank=P.dp_rank(),
+                    peak_memory_gib=device_module().max_memory_allocated()/2**30,dp_rank=P.dp_rank(),
                     source=case.get('source',{}))
                 local.append(result)
         group=P.state().get_data_parallel_group();rows=[None]*P.dp_size()

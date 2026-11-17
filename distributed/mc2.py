@@ -39,6 +39,14 @@ def configure_mc2(tp):
 
     if os.environ.get("PRETRAIN_MC2_ROW", "0") != "1":
         return
+    from distributed.accel import IS_NPU
+
+    if not IS_NPU:
+        os.environ["PRETRAIN_MC2_ROW"] = "0"
+        if int(os.environ.get("RANK", 0)) == 0:
+            print(json.dumps(dict(mc2=dict(requested=True, enabled=False,
+                reason="CUDA uses ordinary NCCL tensor-parallel collectives"))), flush=True)
+        return
     reason = "HCCS TP group"
     try:
         supported = topology_supports_mc2(
