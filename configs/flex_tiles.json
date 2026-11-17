@@ -1,0 +1,7 @@
+{
+  "_note": "FlexAttention tile configs per GPU capability and head size, chosen by scripts/validation/probe_flex_tile.py. Each entry was probed in an isolated process, validated against the dense-mask reference and timed on forward+backward. Nothing is searched at runtime: a failed Triton compile leaves Inductor's worker pool unusable, so an unrecorded GPU or head size simply keeps the dense path.",
+  "_measured": "2026-11-17 on NVIDIA L40S (sm89, ~99 KiB shared memory/SM). At head_dim=256 the kernel defaults need 213 KiB and cannot compile; BLOCK_N costs ~2 KiB/unit and BLOCK_M ~0.7 KiB/unit. (64,32) needed 102400 B against a 101376 B limit and became feasible at num_stages=2. Measured 10.53x over dense SDPA on forward+backward, 4.52x forward alone, relative error 1.5e-3.",
+  "sm89": {
+    "256": {"block_m": 64, "block_n": 32, "num_stages": 2}
+  }
+}
