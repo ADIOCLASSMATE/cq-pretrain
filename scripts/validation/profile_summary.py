@@ -27,6 +27,11 @@ CATEGORIES = (
 
 
 def categorize(name):
+    # FlexAttention compiles to Inductor template kernels ("tem"); they are
+    # this model's CQ attention, not miscellaneous work. Confirmed by A/B:
+    # with PRETRAIN_FLEX_ATTENTION=0 these vanish and fmha_cutlass* appear.
+    if "triton_tem" in name:
+        return "attention"
     for label, pattern in CATEGORIES:
         if pattern.search(name):
             return label
@@ -80,18 +85,26 @@ def main():
             cpu_ops[event.get("tid")].append(
                 (ts, ts + float(event.get("dur", 0)), event.get("name", "?"), shape_tag(detail)))
 
-    for tid in cpu_ops:
-        cpu_ops[tid].sort()
-
-    def enclosing(tid, ts):
-        """Innermost CPU op containing this launch; ops on a thread nest by time."""
-        best = None
-        for start, end, name, shapes in cpu_ops.get(tid, ()):
-            if start > ts:
-                break
-            if end >= ts and (best is None or start >= best[0]):
-                best = (start, name, shapes)
-        return (best[1], best[2]) if best else ("<unattributed>", "")
+    # One ordered sweep per thread instead of a scan per launch: profiler ops
+    # nest, so the innermost enclosing op is whatever is on top of the stack
+    # when the launch is reached. A 1.4 GB trace has millions of each.
+    attribution = {}
+    launches_by_thread = collections.defaultdict(list)
+    for correlation, (tid, ts) in launches.items():
+        launches_by_thread[tid].append((ts, correlation))
+    for tid, items in launches_by_thread.items():
+        ops = sorted(cpu_ops.get(tid, ()))
+        items.sort()
+        stack = []           # (end, name, shapes), innermost last
+        index = 0
+        for ts, correlation in items:
+            while index < len(ops) and ops[index][0] <= ts:
+                start, end, name, shapes = ops[index]
+                stack.append((end, name, shapes))
+                index += 1
+            while stack and stack[-1][0] < ts:
+                stack.pop()
+            attribution[correlation] = (stack[-1][1], stack[-1][2]) if stack else ("<unattributed>", "")
 
     by_category = collections.Counter()
     by_kernel = collections.Counter()
@@ -102,9 +115,8 @@ def main():
         label = "__" + cat if cat != "kernel" else categorize(name)
         by_category[label] += dur
         by_kernel[name] += dur
-        if cat == "kernel" and correlation in launches:
-            tid, ts = launches[correlation]
-            op, shapes = enclosing(tid, ts)
+        if cat == "kernel" and correlation in attribution:
+            op, shapes = attribution[correlation]
             by_op[(op, shapes, categorize(name))] += dur
 
     print(f"\n=== GPU kernel time by category (total {total:.1f} ms) ===")
