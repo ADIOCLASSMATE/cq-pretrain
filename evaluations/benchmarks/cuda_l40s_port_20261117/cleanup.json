@@ -1,0 +1,12 @@
+{
+  "recorded_at": "2026-11-17T11:56:47.350698+00:00",
+  "notebooks": {
+    "cq-l40s-dev-p3-1117": "stopped and deleted; SSH connection cache removed",
+    "cq-l40s-dev": "already STOPPED; deleted; no SSH cache existed"
+  },
+  "shared_assets_preserved": true,
+  "jobs": {
+    "cq-cuda-tune-p3-1117": "SUCCEEDED",
+    "cq-cuda-2n16-p3-1117": "SUCCEEDED; both instances successful"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "cuda": "12.8",
+  "torch": "2.7.0a0+ecf3bae40a.nv25.02",
+  "triton": "3.2.0",
+  "device": "NVIDIA L40S",
+  "wgrad": "/usr/local/lib/python3.12/dist-packages/fused_weight_gradient_mlp_cuda.cpython-312-x86_64-linux-gnu.so",
+  "mcore_optimizer": "megatron.core.optimizer.optimizer_config",
+  "installed": {
+    "torch": "2.7.0a0+ecf3bae40a.nv25.2",
+    "triton": null,
+    "pytorch-triton": "3.2.0+git0d4682f0b.nvinternal",
+    "flash-linear-attention": "0.4.0",
+    "fla-core": "0.4.0",
+    "megatron-core": "0.17.0",
+    "apex": "0.1",
+    "transformer-engine": "2.0.0+e5cc6c2",
+    "transformers": "5.7.0",
+    "diffusers": "0.38.0",
+    "pyarrow": "26.0.1",
+    "av": "16.0.1"
+  }
+}

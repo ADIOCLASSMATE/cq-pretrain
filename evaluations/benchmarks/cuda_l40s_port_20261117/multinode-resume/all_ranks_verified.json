@@ -1,0 +1,128 @@
+{
+  "passed": true,
+  "world": 16,
+  "nodes": 2,
+  "tp": 1,
+  "dp": 16,
+  "completed_steps": [
+    5
+  ],
+  "tokens_per_step": 32768,
+  "mean_seconds": 19.765399932861328,
+  "tokens_per_second": 1657.846545544518,
+  "peak_memory_gib": 26.46745252609253,
+  "per_rank": [
+    {
+      "rank": 0,
+      "hostname": "qb-prod-y40s-gpu041",
+      "final_step": 5,
+      "final_loss": 1.2814197540283203,
+      "peak_memory_gib": 26.467448234558105
+    },
+    {
+      "rank": 1,
+      "hostname": "qb-prod-y40s-gpu041",
+      "final_step": 5,
+      "final_loss": 1.258853554725647,
+      "peak_memory_gib": 26.46745252609253
+    },
+    {
+      "rank": 2,
+      "hostname": "qb-prod-y40s-gpu041",
+      "final_step": 5,
+      "final_loss": 1.2451263666152954,
+      "peak_memory_gib": 26.46744966506958
+    },
+    {
+      "rank": 3,
+      "hostname": "qb-prod-y40s-gpu041",
+      "final_step": 5,
+      "final_loss": 1.3042137622833252,
+      "peak_memory_gib": 26.467451095581055
+    },
+    {
+      "rank": 4,
+      "hostname": "qb-prod-y40s-gpu041",
+      "final_step": 5,
+      "final_loss": 1.1961023807525635,
+      "peak_memory_gib": 26.46744966506958
+    },
+    {
+      "rank": 5,
+      "hostname": "qb-prod-y40s-gpu041",
+      "final_step": 5,
+      "final_loss": 1.2543525695800781,
+      "peak_memory_gib": 26.467451095581055
+    },
+    {
+      "rank": 6,
+      "hostname": "qb-prod-y40s-gpu041",
+      "final_step": 5,
+      "final_loss": 1.276607871055603,
+      "peak_memory_gib": 26.467451095581055
+    },
+    {
+      "rank": 7,
+      "hostname": "qb-prod-y40s-gpu041",
+      "final_step": 5,
+      "final_loss": 1.24312162399292,
+      "peak_memory_gib": 26.467448234558105
+    },
+    {
+      "rank": 8,
+      "hostname": "qb-prod-y40s-gpu199",
+      "final_step": 5,
+      "final_loss": 1.2082386016845703,
+      "peak_memory_gib": 26.467448234558105
+    },
+    {
+      "rank": 9,
+      "hostname": "qb-prod-y40s-gpu199",
+      "final_step": 5,
+      "final_loss": 1.2617607116699219,
+      "peak_memory_gib": 26.46744966506958
+    },
+    {
+      "rank": 10,
+      "hostname": "qb-prod-y40s-gpu199",
+      "final_step": 5,
+      "final_loss": 1.2056312561035156,
+      "peak_memory_gib": 26.46744966506958
+    },
+    {
+      "rank": 11,
+      "hostname": "qb-prod-y40s-gpu199",
+      "final_step": 5,
+      "final_loss": 1.3018110990524292,
+      "peak_memory_gib": 26.467451095581055
+    },
+    {
+      "rank": 12,
+      "hostname": "qb-prod-y40s-gpu199",
+      "final_step": 5,
+      "final_loss": 1.2481625080108643,
+      "peak_memory_gib": 26.467451095581055
+    },
+    {
+      "rank": 13,
+      "hostname": "qb-prod-y40s-gpu199",
+      "final_step": 5,
+      "final_loss": 1.2492575645446777,
+      "peak_memory_gib": 26.467449188232422
+    },
+    {
+      "rank": 14,
+      "hostname": "qb-prod-y40s-gpu199",
+      "final_step": 5,
+      "final_loss": 1.287147045135498,
+      "peak_memory_gib": 26.46745252609253
+    },
+    {
+      "rank": 15,
+      "hostname": "qb-prod-y40s-gpu199",
+      "final_step": 5,
+      "final_loss": 1.2645713090896606,
+      "peak_memory_gib": 26.467429637908936
+    }
+  ]
+}

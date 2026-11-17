@@ -1,0 +1,20 @@
+{
+  "requested_gdn_gate_passed": true,
+  "tp_local_kernel_gate_passed": true,
+  "additional_8head_stress_gate_passed": false,
+  "cpu": {
+    "passed": 157,
+    "skipped": 3,
+    "subtests": 49
+  },
+  "all_16_ranks_verified": true,
+  "step_receipts": 80,
+  "nodes": 2,
+  "resumed_from_step": 4,
+  "resumed_update": 5,
+  "checkpoint_shards": 17,
+  "checkpoint_bytes": 46866117790,
+  "runtime_code_matches_commit": "1f18c0ed9c9e79185fec5e52ba5c90a880c9504d",
+  "verified_source_files": 91,
+  "excluded_from_code_commit_check": "evaluations/benchmarks/cuda_l40s_port_20261117"
+}

@@ -1,0 +1,6 @@
+{
+  "torch": "2.8.0+cu128",
+  "cuda_build": "12.8",
+  "cuda_available": false,
+  "torch_npu_installed": false
+}

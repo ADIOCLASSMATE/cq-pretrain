@@ -1,0 +1,7 @@
+{
+  "backend": "cuda",
+  "fla": "0.4.0",
+  "mode": "fused",
+  "pointwise": true,
+  "calls": {}
+}

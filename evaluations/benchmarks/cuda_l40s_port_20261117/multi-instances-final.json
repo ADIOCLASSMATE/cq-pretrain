@@ -1,0 +1,1 @@
+{"success":true,"data":{"name":"cq-cuda-2n16-p3-1117","items":[{"status":"instance_success","type":"instance_type_worker","node":"qb-prod-y40s-gpu199","rank":0},{"status":"instance_success","type":"instance_type_worker","node":"qb-prod-y40s-gpu041","rank":1}]}}

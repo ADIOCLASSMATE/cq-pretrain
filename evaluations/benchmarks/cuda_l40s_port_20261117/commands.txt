@@ -1,0 +1,31 @@
+# All commands run from:
+cd /inspire/hdd/global_user/wanjiaxin-253108030048/code/cq-pretrain-l40s
+
+# CPU gate: CUDA build of PyTorch, no torch_npu. See cpu.txt and cpu-runtime.json.
+PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 /inspire/hdd/global_user/wanjiaxin-253108030048/code/unified-mm/.venv/bin/python -m pytest -q -rs tests
+
+# GPU environment and correctness gates on cq-l40s-dev-p3-1117 (priority 3 / LOW).
+# Executed using: inspire --account wjx notebook exec NAME --workspace 可上网GPU资源 --cwd REPO 'COMMAND'
+bash scripts/setup_cuda.sh
+PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 TRITON_CACHE_DIR=.deps/triton-cache .venv-cuda/bin/python -m scripts.validation.validate_cq_cuda --output .runs/cuda-port-20261117/gdn
+PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 TRITON_CACHE_DIR=.deps/triton-cache .venv-cuda/bin/python -m scripts.validation.validate_cq_cuda --kernel-head-shards 2 --output .runs/cuda-port-20261117/gdn-sharded
+PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 .venv-cuda/bin/python -m scripts.validation.validate_cuda_ops --output .runs/cuda-port-20261117/cuda-ops.json
+
+# Additional stress fixture: FAILED in one control-parameter gradient case.
+PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 TRITON_CACHE_DIR=.deps/triton-cache .venv-cuda/bin/python -m scripts.validation.validate_cq_cuda --key-heads 8 --value-heads 8 --output .runs/cuda-port-20261117/gdn-tp2
+
+# Full-model TP1 smoke on 1 L40S. This uses CPU optimizer offload.
+OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 NPROC_PER_NODE=1 bash scripts/launch.sh --config configs/qwen35_2b_wan.yaml --synthetic --text-assets .assets/Qwen3.5-2B-Base --vision-assets .assets/Qwen3.5-2B-Base --wan-assets .assets/Wan2.1-T2V-1.3B --tp 1 --global-batch 1 --sequence-length 2048 --images 1 --steps 3 --warmup 1 --renderer-ema-decay 0 --eval-snapshot-every 0 --optimizer-offload-fraction 1 --log-all-ranks --output .runs/cuda-port-20261117/tp1-offload
+
+# Two-GPU comparison; tune-two-gpu.sh contains both exact training commands.
+inspire --account wjx --json job create --name cq-cuda-tune-p3-1117 --workspace 可上网GPU资源 --project '随机序语言建模-统一自回归与掩码扩散的随机顺序生成框架' --group L40s-cuda13.2 --quota 2,50,200 --image docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3 --nodes 1 --priority 3 --shm-size 128 --max-time 1 --no-enable-notification --command 'bash /inspire/hdd/global_user/wanjiaxin-253108030048/code/cq-pretrain-l40s/.runs/cuda-port-20261117/tune-two-gpu.sh'
+inspire --account wjx --json job wait cq-cuda-tune-p3-1117 --workspace 可上网GPU资源 --timeout 2400 --interval 30
+
+# Two-node training and clean-process checkpoint restore. See multinode.sh.
+inspire --account wjx --json job create --name cq-cuda-2n16-p3-1117 --workspace 可上网GPU资源 --project '随机序语言建模-统一自回归与掩码扩散的随机顺序生成框架' --group L40s-cuda13.2 --quota 8,210,800 --image docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3 --nodes 2 --priority 3 --shm-size 128 --auto-fault-tolerance --fault-tolerance-max-retry 3 --fault-tolerance-retry-interval 60 --max-time 1 --no-enable-notification --command 'timeout --signal=TERM --kill-after=30s 2700s bash /inspire/hdd/global_user/wanjiaxin-253108030048/code/cq-pretrain-l40s/.runs/cuda-port-20261117/multinode.sh'
+inspire --account wjx --json job wait cq-cuda-2n16-p3-1117 --workspace 可上网GPU资源 --timeout 4200 --interval 30
+
+# Every create was preceded by the same command with --dry-run; resolved JSON is included.
+# For each job, initial observation order was: events, logs, metrics, instances, status.
+# After that, one persistent CLI wait process waited for terminal status.
+# No kernels, CPU CQ plans, indexing algorithms or YAML configs were rewritten.

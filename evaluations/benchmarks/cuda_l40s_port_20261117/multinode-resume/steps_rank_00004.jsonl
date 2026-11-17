@@ -1,0 +1,1 @@
+{"step": 5, "rank": 4, "tp_rank": 0, "dp_rank": 4, "hostname": "qb-prod-y40s-gpu041", "seconds": 19.76453110994771, "peak_memory_gib": 26.46744966506958, "loss": 1.1961023807525635, "text_loss": 0.7791805267333984, "image_loss": 1.1571433544158936, "grad_norm": 20.742834853363373, "optimizer_updated": true, "global_tokens_per_step": 32768, "warmup": false}
