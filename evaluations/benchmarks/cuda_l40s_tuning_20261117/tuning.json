@@ -731,5 +731,153 @@
       "ranks_with_step_receipts": 16
     }
   },
-  "production_recompute_sweep_note": "16xL40S (2 nodes), Qwen3.5-2B-Base + Wan2.1-1.3B, seq 8192, TP1 DP16, global batch 128 (GA 8), --bf16-grad-reduce, synthetic batches. Full recompute is the only configuration that fits: dropping recompute from either the backbone or the DiT alone exhausts the 22 GiB of per-card headroom. Device-time only, no corpus I/O."
+  "production_recompute_sweep_note": "16xL40S (2 nodes), Qwen3.5-2B-Base + Wan2.1-1.3B, seq 8192, TP1 DP16, global batch 128 (GA 8), --bf16-grad-reduce, synthetic batches. Full recompute is the only configuration that fits: dropping recompute from either the backbone or the DiT alone exhausts the 22 GiB of per-card headroom. Device-time only, no corpus I/O.",
+  "fused_norm_ab": {
+    "fused_norm_off": {
+      "mean_seconds": 4.043214917182922,
+      "tokens_per_second": 4052.220902324782,
+      "peak_gib": 38.41352701187134,
+      "losses": [
+        1.3146538734436035,
+        1.3127880096435547,
+        1.3077962398529053,
+        1.288620948791504,
+        1.2488640546798706,
+        1.2380508184432983
+      ]
+    },
+    "fused_norm_on": {
+      "mean_seconds": 3.3367358446121216,
+      "tokens_per_second": 4910.187909077518,
+      "peak_gib": 38.288565158843994,
+      "losses": [
+        1.3140552043914795,
+        1.3124849796295166,
+        1.3072901964187622,
+        1.2896883487701416,
+        1.2490233182907104,
+        1.2379108667373657
+      ]
+    },
+    "speedup": 1.2117276001070219,
+    "max_loss_drift": 0.0010673999786376953,
+    "note": "Clean: both arms are the same source tree, toggled by PRETRAIN_FUSED_NORM, same seed. This is the only measured speedup that survives tree attribution."
+  },
+  "recompute_depth_sweep": {
+    "status": "CONFOUNDED - superseded; see recompute_depth_confound",
+    "runs": {
+      "partial-1117/bb18-dit30": {
+        "mean_seconds": 27.23767153422038,
+        "peak_gib": 36.70017719268799,
+        "checkpoint_backbone": false,
+        "checkpoint_dit": false,
+        "checkpoint_backbone_layers": 18,
+        "checkpoint_dit_layers": 30,
+        "source_tree": "e65638f69349621d8b5ae920"
+      },
+      "partial-1117/bb22-dit26": {
+        "mean_seconds": 23.985942840576172,
+        "peak_gib": 26.402462005615234,
+        "checkpoint_backbone": false,
+        "checkpoint_dit": false,
+        "checkpoint_backbone_layers": 22,
+        "checkpoint_dit_layers": 26,
+        "source_tree": "2f718e739349621d8b5ae920"
+      },
+      "partial-1117/bb22-dit30": {
+        "mean_seconds": 29.71729342142741,
+        "peak_gib": 27.835205078125,
+        "checkpoint_backbone": false,
+        "checkpoint_dit": false,
+        "checkpoint_backbone_layers": 22,
+        "checkpoint_dit_layers": 30,
+        "source_tree": "b63cc9e882de4cc8-"
+      },
+      "partial-1117/bb24-dit22": {
+        "mean_seconds": 24.289553960164387,
+        "peak_gib": 23.82630729675293,
+        "checkpoint_backbone": false,
+        "checkpoint_dit": false,
+        "checkpoint_backbone_layers": 24,
+        "checkpoint_dit_layers": 22,
+        "source_tree": "2f718e739349621d8b5ae920"
+      },
+      "partial-1117/bb24-dit26": {
+        "mean_seconds": 24.327145258585613,
+        "peak_gib": 23.009347915649414,
+        "checkpoint_backbone": false,
+        "checkpoint_dit": false,
+        "checkpoint_backbone_layers": 24,
+        "checkpoint_dit_layers": 26,
+        "source_tree": "2f718e739349621d8b5ae920"
+      },
+      "prod-1117/recompute-full": {
+        "mean_seconds": 30.374013264973957,
+        "peak_gib": 22.317350387573242,
+        "checkpoint_backbone": true,
+        "checkpoint_dit": true,
+        "checkpoint_backbone_layers": 0,
+        "checkpoint_dit_layers": 0,
+        "source_tree": "b63cc9e882de4cc8-"
+      },
+      "prod-1117/recompute-bb": {
+        "mean_seconds": 30.16253089904785,
+        "peak_gib": 28.40938949584961,
+        "checkpoint_backbone": false,
+        "checkpoint_dit": false,
+        "checkpoint_backbone_layers": 24,
+        "checkpoint_dit_layers": 0,
+        "source_tree": "b63cc9e882de4cc8-"
+      }
+    }
+  },
+  "recompute_depth_confound": {
+    "finding": "The 16-GPU recompute sweep launched from the live shared working tree while the fused-normalization change was being edited, so later configs silently ran different source. run.json source_sha256 separates them into three trees; only runs inside one tree are comparable.",
+    "trees": {
+      "e65638f69349621d8b5ae920": [
+        "partial-1117/bb18-dit30"
+      ],
+      "2f718e739349621d8b5ae920": [
+        "partial-1117/bb22-dit26",
+        "partial-1117/bb24-dit22",
+        "partial-1117/bb24-dit26"
+      ],
+      "b63cc9e882de4cc8-": [
+        "partial-1117/bb22-dit30",
+        "prod-1117/recompute-bb",
+        "prod-1117/recompute-full"
+      ]
+    },
+    "retracted": [
+      "partial recompute bb18/dit30 = +11.5% (ran with partially fused norms)",
+      "partial recompute bb24/dit22 = +25.0% (ran with fully fused norms)",
+      "partial recompute bb24/dit26 = +24.9% (ran with fully fused norms)"
+    ],
+    "only_clean_comparison": {
+      "tree": "pre-fused-norm",
+      "baseline": {
+        "config": "bb=all dit=all",
+        "mean_seconds": 30.374,
+        "peak_gib": 22.32
+      },
+      "variants": [
+        {
+          "config": "bb=24 dit=0",
+          "mean_seconds": 30.163,
+          "peak_gib": 28.41,
+          "speedup_pct": 0.7,
+          "extra_gib": 6.09
+        },
+        {
+          "config": "bb=22 dit=30",
+          "mean_seconds": 29.717,
+          "peak_gib": 27.84,
+          "speedup_pct": 2.2,
+          "extra_gib": 5.52
+        }
+      ],
+      "conclusion": "Within one source tree, trading ~6 GiB of activation memory for less recompute buys only 0.7-2.2% at this model size. Not worth the OOM risk on real data, whose image counts vary per pack."
+    },
+    "process_fix": "Sweeps must run from an immutable source snapshot, as the original Ascend experiments did (.runs/<run>/source). Running from the live working tree makes any concurrent edit a silent confound."
+  }
 }
