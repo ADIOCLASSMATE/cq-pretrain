@@ -83,6 +83,9 @@ def parse_args(argv=None):
     parser.add_argument('--profile', action='store_true')
     parser.add_argument('--profile-ranks', default='0', help='Comma separated global ranks')
     parser.add_argument('--bucket-size', type=int, default=40_000_000, help='DDP bucket elements')
+    parser.add_argument('--bf16-grad-reduce', action='store_true',
+                        help='Reduce gradients in BF16 instead of FP32: halves DP allreduce bytes and the '
+                             'resident main_grad buffer. Changes reduction numerics; validate loss parity.')
     parser.add_argument('--no-param-overlap', action='store_true')
     parser.add_argument('--phase-timing', action='store_true', help='Measure forward/backward/optimizer device time')
     parser.add_argument('--log-all-ranks', action='store_true', help='Print successful step receipts on every rank')
@@ -346,7 +349,8 @@ def main():
     parameters,trainable_parameters = count.tolist()
     wrapped, optimizer = P.make_optimizer(model, args.lr, bucket_size=args.bucket_size,
         overlap_param_gather=not args.no_param_overlap,
-        optimizer_offload_fraction=args.optimizer_offload_fraction)
+        optimizer_offload_fraction=args.optimizer_offload_fraction,
+        grad_reduce_in_fp32=not args.bf16_grad_reduce)
     ema=None
     if args.renderer_ema_decay:
         if cfg.renderer not in ('moss','wan') or args.data_mode=='B':raise ValueError('EMA requires a trainable renderer')
@@ -371,6 +375,7 @@ def main():
         training_state['optimizer_offload_fraction']=args.optimizer_offload_fraction
         training_state['cuda_gdn_sha256']=hashlib.sha256((ROOT/'ops/cuda_gated_delta.py').read_bytes()).hexdigest()
     training_state['mc2_row']=os.environ.get('PRETRAIN_MC2_ROW','0')
+    training_state['grad_reduce_in_fp32']=not args.bf16_grad_reduce
     from ops.functional import _ATTENTION_LAYOUT, _COMPILE_MODULATION
     from ops.cross_entropy import _FUSED_CE
     training_state['kernel_options'] = dict(fused_ce=_FUSED_CE,

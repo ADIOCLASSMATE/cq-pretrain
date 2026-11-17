@@ -235,12 +235,17 @@ def make_embedding(vocab, width):
 
 def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_param_gather=True,
                    *, optimizer_config=None, config_overrides=None, overlap_grad_reduce=True,
-                   optimizer_offload_fraction=0.0):
+                   optimizer_offload_fraction=0.0, grad_reduce_in_fp32=True):
     from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig
     from megatron.core.optimizer import get_megatron_optimizer, AdamOptimizerConfig as OptimizerConfig
 
+    # FP32 gradient reduction moves 4 bytes per trainable parameter per step:
+    # 13.2 GB for this 3.3B-trainable model, versus 6.6 GB in BF16. On L40S the
+    # DP path is PCIe/IB rather than NVLink, and the FP32 main_grad buffer is
+    # also the second largest resident allocation after sharded optimizer
+    # state. Opt-in, because it changes reduction numerics.
     ddp_cfg = DistributedDataParallelConfig(
-        grad_reduce_in_fp32=True,
+        grad_reduce_in_fp32=grad_reduce_in_fp32,
         overlap_grad_reduce=overlap_grad_reduce,
         overlap_param_gather=overlap_param_gather,
         use_distributed_optimizer=True,
