@@ -1,0 +1,690 @@
+{
+  "parallelism_sweep": {
+    "tp1-dp2-seq2048-ga1": {
+      "peak_memory_gib": 42.5636305809021,
+      "mean_seconds": 1.4252484639485676,
+      "median_seconds": 1.420151710510254,
+      "throughput": 2873.8848724328886,
+      "sequence_length": 2048,
+      "tp": 1,
+      "dp": 2,
+      "grad_accum": 1,
+      "global_batch": 2,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true
+    },
+    "tp1-dp2-seq8192-ga1-bf16grad": {
+      "peak_memory_gib": 38.41352701187134,
+      "mean_seconds": 4.051266670227051,
+      "median_seconds": 4.053903102874756,
+      "throughput": 4044.1672527772084,
+      "sequence_length": 8192,
+      "tp": 1,
+      "dp": 2,
+      "grad_accum": 1,
+      "global_batch": 2,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true
+    },
+    "tp2-dp1-seq8192-ga1": {
+      "peak_memory_gib": 33.059139251708984,
+      "mean_seconds": 2.8983213106791177,
+      "median_seconds": 2.8989880084991455,
+      "throughput": 2826.46370842869,
+      "sequence_length": 8192,
+      "tp": 2,
+      "dp": 1,
+      "grad_accum": 1,
+      "global_batch": 1,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true
+    },
+    "tp2-dp1-seq8192-ga2": {
+      "peak_memory_gib": 33.059139251708984,
+      "mean_seconds": 5.62719202041626,
+      "median_seconds": 5.634213924407959,
+      "throughput": 2911.576491535476,
+      "sequence_length": 8192,
+      "tp": 2,
+      "dp": 1,
+      "grad_accum": 2,
+      "global_batch": 2,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true
+    }
+  },
+  "parallelism_sweep_oom": [
+    "tp1-dp2-seq8192-ga1",
+    "tp1-dp2-seq8192-ga2"
+  ],
+  "bf16_grad_reduce_ab": {
+    "fp32grad-seq2048": {
+      "summary": {
+        "peak_memory_gib": 42.57143783569336,
+        "mean_seconds": 1.4386017084121705,
+        "median_seconds": 1.4269611835479736,
+        "throughput": 2847.2091865655316,
+        "sequence_length": 2048,
+        "tp": 1,
+        "dp": 2,
+        "grad_accum": 1,
+        "global_batch": 2,
+        "checkpoint_backbone": true,
+        "checkpoint_dit": true
+      },
+      "steps": [
+        {
+          "step": 1,
+          "loss": 1.3517956733703613,
+          "grad_norm": 30.98616555907955
+        },
+        {
+          "step": 2,
+          "loss": 1.3491648435592651,
+          "grad_norm": 30.616314337510993
+        },
+        {
+          "step": 3,
+          "loss": 1.3430240154266357,
+          "grad_norm": 29.907541851016653
+        },
+        {
+          "step": 4,
+          "loss": 1.322559118270874,
+          "grad_norm": 27.74361971802875
+        },
+        {
+          "step": 5,
+          "loss": 1.2698252201080322,
+          "grad_norm": 21.31533785633452
+        },
+        {
+          "step": 6,
+          "loss": 1.2559106349945068,
+          "grad_norm": 19.277105099206658
+        }
+      ]
+    },
+    "bf16grad-seq2048": {
+      "summary": {
+        "peak_memory_gib": 37.51786231994629,
+        "mean_seconds": 1.2762568235397338,
+        "median_seconds": 1.2756097316741943,
+        "throughput": 3209.385387370255,
+        "sequence_length": 2048,
+        "tp": 1,
+        "dp": 2,
+        "grad_accum": 1,
+        "global_batch": 2,
+        "checkpoint_backbone": true,
+        "checkpoint_dit": true
+      },
+      "steps": [
+        {
+          "step": 1,
+          "loss": 1.3517956733703613,
+          "grad_norm": 30.982934992382297
+        },
+        {
+          "step": 2,
+          "loss": 1.3491764068603516,
+          "grad_norm": 30.622684064217413
+        },
+        {
+          "step": 3,
+          "loss": 1.3442356586456299,
+          "grad_norm": 30.14400253237574
+        },
+        {
+          "step": 4,
+          "loss": 1.3219361305236816,
+          "grad_norm": 27.62910700169185
+        },
+        {
+          "step": 5,
+          "loss": 1.2701661586761475,
+          "grad_norm": 21.347144821755805
+        },
+        {
+          "step": 6,
+          "loss": 1.2559434175491333,
+          "grad_norm": 19.264348219046692
+        }
+      ]
+    },
+    "max_abs_loss_drift": 0.0012116432189941406
+  },
+  "dit_pointwise_fusion_ab": {
+    "fuse-off-seq8192": {
+      "peak_memory_gib": 38.41352701187134,
+      "mean_seconds": 4.049812889099121,
+      "median_seconds": 4.049277305603027,
+      "throughput": 4045.619007263472,
+      "sequence_length": 8192,
+      "tp": 1,
+      "dp": 2,
+      "grad_accum": 1,
+      "global_batch": 2,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true
+    },
+    "fuse-on-seq8192": {
+      "peak_memory_gib": 38.41352701187134,
+      "mean_seconds": 4.089950942993164,
+      "median_seconds": 4.091235160827637,
+      "throughput": 4005.916019131915,
+      "sequence_length": 8192,
+      "tp": 1,
+      "dp": 2,
+      "grad_accum": 1,
+      "global_batch": 2,
+      "checkpoint_backbone": true,
+      "checkpoint_dit": true
+    }
+  },
+  "dit_pointwise_fusion_speedup": 0.9902,
+  "dit_pointwise_fusion_verdict": "no benefit; keep PRETRAIN_COMPILE_MODULATION=0",
+  "gdn_control_gradient_gate": {
+    "tp1": {
+      "passed": true,
+      "device": "NVIDIA L40S",
+      "kernel_head_shards": 1,
+      "tolerance": 0.035,
+      "control_tolerance": 0.035,
+      "passed_raw_unconditioned": true,
+      "worst_conditioned_control_error": 0.0019786039482460674,
+      "norm_errors": {
+        "output": 0.0016771640598610771,
+        "dx": 0.002321900740259842,
+        "dw": 1.1491699011058321e-07
+      },
+      "worst_case_error": 0.010426268488747727,
+      "cases": [
+        {
+          "method": "CQ_IT",
+          "length": 61,
+          "events": 129,
+          "errors": {
+            "A_log": 0.009168903563025762,
+            "dt_bias": 0.008024591989891377,
+            "in_proj_qkv.impl.weight": 0.007547357768314887,
+            "in_proj_z.impl.weight": 0.0072707249005765934,
+            "in_proj_a.impl.weight": 0.007598029496940738,
+            "in_proj_b.impl.weight": 0.007950448737476775,
+            "conv1d.weight": 0.007561550345378216,
+            "norm.weight": 0.007123825938870842,
+            "out_proj.impl.weight": 0.007306015704562459,
+            "output": 0.007514224097896287,
+            "dx": 0.0077644512032480455
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0019786039482460674,
+            "dt_bias": 0.0017200317049904208
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "CQ_IT",
+          "length": 64,
+          "events": 135,
+          "errors": {
+            "A_log": 0.00559433057583973,
+            "dt_bias": 0.005833616011220999,
+            "in_proj_qkv.impl.weight": 0.007431698787098522,
+            "in_proj_z.impl.weight": 0.007276292665886106,
+            "in_proj_a.impl.weight": 0.010426268488747727,
+            "in_proj_b.impl.weight": 0.007387749076642803,
+            "conv1d.weight": 0.007446270099611321,
+            "norm.weight": 0.007528845430537878,
+            "out_proj.impl.weight": 0.007309842755526399,
+            "output": 0.007620387473647825,
+            "dx": 0.00785001351634295
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0013664463139914792,
+            "dt_bias": 0.0013969187703995944
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "CQ_IT",
+          "length": 65,
+          "events": 137,
+          "errors": {
+            "A_log": 0.009410993489620673,
+            "dt_bias": 0.0093097877428413,
+            "in_proj_qkv.impl.weight": 0.007466774038020109,
+            "in_proj_z.impl.weight": 0.00729121100436551,
+            "in_proj_a.impl.weight": 0.008453962448026453,
+            "in_proj_b.impl.weight": 0.0074980995542643794,
+            "conv1d.weight": 0.007482148760246714,
+            "norm.weight": 0.008089890836393472,
+            "out_proj.impl.weight": 0.007359334851869684,
+            "output": 0.007657604677334636,
+            "dx": 0.007899314842516453
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0018031976412753088,
+            "dt_bias": 0.001816717344618645
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 61,
+          "events": 172,
+          "errors": {
+            "A_log": 0.003110007544540872,
+            "dt_bias": 0.003365674821513133,
+            "in_proj_qkv.impl.weight": 0.007507802792904722,
+            "in_proj_z.impl.weight": 0.007119077890705875,
+            "in_proj_a.impl.weight": 0.007466179992434515,
+            "in_proj_b.impl.weight": 0.007980112310211498,
+            "conv1d.weight": 0.00779690311013955,
+            "norm.weight": 0.006408079737695413,
+            "out_proj.impl.weight": 0.007240525997804011,
+            "output": 0.007407312882206554,
+            "dx": 0.007775092405810732
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0005999852059160178,
+            "dt_bias": 0.0006509994376727365
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 64,
+          "events": 180,
+          "errors": {
+            "A_log": 0.001599639763139922,
+            "dt_bias": 0.002634143499726476,
+            "in_proj_qkv.impl.weight": 0.007434405458025381,
+            "in_proj_z.impl.weight": 0.0073262521043149405,
+            "in_proj_a.impl.weight": 0.006990956430655006,
+            "in_proj_b.impl.weight": 0.0074630644198707356,
+            "conv1d.weight": 0.0076078956616215665,
+            "norm.weight": 0.006574550612897235,
+            "out_proj.impl.weight": 0.007391657100486659,
+            "output": 0.007653870331802332,
+            "dx": 0.007888698770256958
+          },
+          "conditioned_control_error": {
+            "A_log": 0.00023553438319512266,
+            "dt_bias": 0.00037370745402506974
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 65,
+          "events": 182,
+          "errors": {
+            "A_log": 0.004690576266972069,
+            "dt_bias": 0.004695784000886471,
+            "in_proj_qkv.impl.weight": 0.00743736376599509,
+            "in_proj_z.impl.weight": 0.007334673416401265,
+            "in_proj_a.impl.weight": 0.008761088592039846,
+            "in_proj_b.impl.weight": 0.007755657961791857,
+            "conv1d.weight": 0.00768875278357509,
+            "norm.weight": 0.006762905615817967,
+            "out_proj.impl.weight": 0.007378612163794899,
+            "output": 0.007563103671117171,
+            "dx": 0.00785091256142185
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0008920602820580118,
+            "dt_bias": 0.0009040298559990935
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        }
+      ]
+    },
+    "tp2": {
+      "passed": true,
+      "device": "NVIDIA L40S",
+      "kernel_head_shards": 2,
+      "tolerance": 0.035,
+      "control_tolerance": 0.035,
+      "passed_raw_unconditioned": true,
+      "worst_conditioned_control_error": 0.0019786039482460674,
+      "norm_errors": {
+        "output": 0.0016771640598610771,
+        "dx": 0.002321900740259842,
+        "dw": 1.1491699011058321e-07
+      },
+      "worst_case_error": 0.010426268488747727,
+      "cases": [
+        {
+          "method": "CQ_IT",
+          "length": 61,
+          "events": 129,
+          "errors": {
+            "A_log": 0.009168903563025762,
+            "dt_bias": 0.008024591989891377,
+            "in_proj_qkv.impl.weight": 0.007550746400614124,
+            "in_proj_z.impl.weight": 0.0072707249005765934,
+            "in_proj_a.impl.weight": 0.007598029496940738,
+            "in_proj_b.impl.weight": 0.007950448737476775,
+            "conv1d.weight": 0.007561550345378216,
+            "norm.weight": 0.007123825938870842,
+            "out_proj.impl.weight": 0.007306015704562459,
+            "output": 0.007514224097896287,
+            "dx": 0.007765420359742038
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0019786039482460674,
+            "dt_bias": 0.0017200317049904208
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "CQ_IT",
+          "length": 64,
+          "events": 135,
+          "errors": {
+            "A_log": 0.00559433057583973,
+            "dt_bias": 0.005833616011220999,
+            "in_proj_qkv.impl.weight": 0.007427127715566082,
+            "in_proj_z.impl.weight": 0.007276292665886106,
+            "in_proj_a.impl.weight": 0.010426268488747727,
+            "in_proj_b.impl.weight": 0.007387749076642803,
+            "conv1d.weight": 0.007446270099611321,
+            "norm.weight": 0.007528845430537878,
+            "out_proj.impl.weight": 0.007309842755526399,
+            "output": 0.007620387473647825,
+            "dx": 0.007834071624525308
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0013664463139914792,
+            "dt_bias": 0.0013969187703995944
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "CQ_IT",
+          "length": 65,
+          "events": 137,
+          "errors": {
+            "A_log": 0.009410993489620673,
+            "dt_bias": 0.0093097877428413,
+            "in_proj_qkv.impl.weight": 0.007465384451752172,
+            "in_proj_z.impl.weight": 0.00729121100436551,
+            "in_proj_a.impl.weight": 0.008453962448026453,
+            "in_proj_b.impl.weight": 0.0074980995542643794,
+            "conv1d.weight": 0.007482148760246714,
+            "norm.weight": 0.008089890836393472,
+            "out_proj.impl.weight": 0.007359334851869684,
+            "output": 0.007657604677334636,
+            "dx": 0.00790354873407178
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0018031976412753088,
+            "dt_bias": 0.001816717344618645
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 61,
+          "events": 172,
+          "errors": {
+            "A_log": 0.003110007544540872,
+            "dt_bias": 0.003365674821513133,
+            "in_proj_qkv.impl.weight": 0.007507802792904722,
+            "in_proj_z.impl.weight": 0.007119077890705875,
+            "in_proj_a.impl.weight": 0.007466179992434515,
+            "in_proj_b.impl.weight": 0.007980112310211498,
+            "conv1d.weight": 0.00779690311013955,
+            "norm.weight": 0.006408115074799685,
+            "out_proj.impl.weight": 0.0072405226217649,
+            "output": 0.007407312882206554,
+            "dx": 0.007775092405810732
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0005999852059160178,
+            "dt_bias": 0.0006509994376727365
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 64,
+          "events": 180,
+          "errors": {
+            "A_log": 0.001599639763139922,
+            "dt_bias": 0.002634143499726476,
+            "in_proj_qkv.impl.weight": 0.007434405458025381,
+            "in_proj_z.impl.weight": 0.0073262521043149405,
+            "in_proj_a.impl.weight": 0.006990956430655006,
+            "in_proj_b.impl.weight": 0.0074630644198707356,
+            "conv1d.weight": 0.0076078956616215665,
+            "norm.weight": 0.006574550612897235,
+            "out_proj.impl.weight": 0.007391657100486659,
+            "output": 0.007653870331802332,
+            "dx": 0.007888698770256958
+          },
+          "conditioned_control_error": {
+            "A_log": 0.00023553438319512266,
+            "dt_bias": 0.00037370745402506974
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 65,
+          "events": 182,
+          "errors": {
+            "A_log": 0.004690576266972069,
+            "dt_bias": 0.004695784000886471,
+            "in_proj_qkv.impl.weight": 0.00743736376599509,
+            "in_proj_z.impl.weight": 0.007334673416401265,
+            "in_proj_a.impl.weight": 0.008761088592039846,
+            "in_proj_b.impl.weight": 0.007755657961791857,
+            "conv1d.weight": 0.00768875278357509,
+            "norm.weight": 0.006762905615817967,
+            "out_proj.impl.weight": 0.007378612163794899,
+            "output": 0.007563103671117171,
+            "dx": 0.00785091256142185
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0008920602820580118,
+            "dt_bias": 0.0009040298559990935
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        }
+      ]
+    },
+    "stress8": {
+      "passed": true,
+      "device": "NVIDIA L40S",
+      "kernel_head_shards": 1,
+      "tolerance": 0.035,
+      "control_tolerance": 0.035,
+      "passed_raw_unconditioned": false,
+      "worst_conditioned_control_error": 0.0028248398461507072,
+      "norm_errors": {
+        "output": 0.0016771640598610771,
+        "dx": 0.002321900740259842,
+        "dw": 1.1491699011058321e-07
+      },
+      "worst_case_error": 0.11385119016440072,
+      "cases": [
+        {
+          "method": "CQ_IT",
+          "length": 61,
+          "events": 129,
+          "errors": {
+            "A_log": 0.01697354440985633,
+            "dt_bias": 0.017763738843661753,
+            "in_proj_qkv.impl.weight": 0.0075956918013397115,
+            "in_proj_z.impl.weight": 0.007312571187745359,
+            "in_proj_a.impl.weight": 0.008826049383103858,
+            "in_proj_b.impl.weight": 0.007557110816004066,
+            "conv1d.weight": 0.007750425525451705,
+            "norm.weight": 0.007749493022120657,
+            "out_proj.impl.weight": 0.007438453566774172,
+            "output": 0.00772862186398785,
+            "dx": 0.007939457365516647
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0018707734144419532,
+            "dt_bias": 0.0017769496207081187
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "CQ_IT",
+          "length": 64,
+          "events": 135,
+          "errors": {
+            "A_log": 0.01175075602148445,
+            "dt_bias": 0.009897471125765,
+            "in_proj_qkv.impl.weight": 0.007642721442990072,
+            "in_proj_z.impl.weight": 0.007211817895082708,
+            "in_proj_a.impl.weight": 0.008549499716892991,
+            "in_proj_b.impl.weight": 0.007518114475007268,
+            "conv1d.weight": 0.0077448564660405695,
+            "norm.weight": 0.007008272808648174,
+            "out_proj.impl.weight": 0.007117107546016297,
+            "output": 0.007447423685358375,
+            "dx": 0.007951957722547715
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0028248398461507072,
+            "dt_bias": 0.0024208991363033525
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "CQ_IT",
+          "length": 65,
+          "events": 137,
+          "errors": {
+            "A_log": 0.022849484558160077,
+            "dt_bias": 0.022018193543390335,
+            "in_proj_qkv.impl.weight": 0.007446395275696486,
+            "in_proj_z.impl.weight": 0.007454674292406939,
+            "in_proj_a.impl.weight": 0.008458851749595892,
+            "in_proj_b.impl.weight": 0.007223839335474852,
+            "conv1d.weight": 0.00733077206582672,
+            "norm.weight": 0.006882568453702013,
+            "out_proj.impl.weight": 0.007346873124867918,
+            "output": 0.0075753096669067205,
+            "dx": 0.007622480881332188
+          },
+          "conditioned_control_error": {
+            "A_log": 0.002219068122679666,
+            "dt_bias": 0.001993247749457901
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 61,
+          "events": 172,
+          "errors": {
+            "A_log": 0.0012128596497123756,
+            "dt_bias": 0.0013849979380185986,
+            "in_proj_qkv.impl.weight": 0.007556097002698491,
+            "in_proj_z.impl.weight": 0.007399898568474436,
+            "in_proj_a.impl.weight": 0.009850698673773754,
+            "in_proj_b.impl.weight": 0.007433742256812453,
+            "conv1d.weight": 0.007631191486234533,
+            "norm.weight": 0.006580838902800139,
+            "out_proj.impl.weight": 0.007271758322115556,
+            "output": 0.0075625998054903495,
+            "dx": 0.00783665329662252
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0004971522093731909,
+            "dt_bias": 0.0005631125626125497
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 64,
+          "events": 180,
+          "errors": {
+            "A_log": 0.11385119016440072,
+            "dt_bias": 0.10354174848046228,
+            "in_proj_qkv.impl.weight": 0.00747673588420304,
+            "in_proj_z.impl.weight": 0.00725096241087147,
+            "in_proj_a.impl.weight": 0.008863925717642988,
+            "in_proj_b.impl.weight": 0.007212920724759859,
+            "conv1d.weight": 0.007731496610182675,
+            "norm.weight": 0.006556273077839644,
+            "out_proj.impl.weight": 0.007263588399948513,
+            "output": 0.007492813451620464,
+            "dx": 0.0077506739063565346
+          },
+          "conditioned_control_error": {
+            "A_log": 0.001972706077475419,
+            "dt_bias": 0.001921518549109557
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": false
+        },
+        {
+          "method": "Bi_I+CQ_T",
+          "length": 65,
+          "events": 182,
+          "errors": {
+            "A_log": 0.002168563325218132,
+            "dt_bias": 0.001738294857946994,
+            "in_proj_qkv.impl.weight": 0.0075629983758479105,
+            "in_proj_z.impl.weight": 0.007313066897283674,
+            "in_proj_a.impl.weight": 0.008482360908359937,
+            "in_proj_b.impl.weight": 0.007496607053007162,
+            "conv1d.weight": 0.007745762518331897,
+            "norm.weight": 0.006334050942846769,
+            "out_proj.impl.weight": 0.007244422682521546,
+            "output": 0.007582438392351958,
+            "dx": 0.007933394182240783
+          },
+          "conditioned_control_error": {
+            "A_log": 0.0010322119987200746,
+            "dt_bias": 0.000825457264659352
+          },
+          "isolation_max_abs": 0.0,
+          "passed": true,
+          "passed_raw_unconditioned": true
+        }
+      ]
+    }
+  }
+}
