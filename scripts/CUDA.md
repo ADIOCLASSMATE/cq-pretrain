@@ -314,3 +314,66 @@ a hard timeout, and record the winner:
 
 Enable with `PRETRAIN_FLEX_ATTENTION=1`; it is opt-in and recorded in
 `run.json`'s `kernel_options`.
+
+## Text cross entropy
+
+The CUDA path had no fused branch: `fused_ce` was gated on `device.type == "npu"`,
+so every chunk built an FP32 `[chunk, vocab]` logits tensor and made eight
+PyTorch passes over it, in both forward and the backward recompute. With
+vocabulary 248320 that is ~1.0 GiB per chunk of pure bandwidth, twice.
+
+`ops/cuda_cross_entropy.py` keeps the chunking, the backward recompute and the
+MCore direct-accumulation protocol and only swaps the per-chunk softmax and
+gradient for flash-attn's Triton cross entropy, which also writes its gradient
+back into the logits buffer. This is numerically the same computation:
+`F.linear` on BF16 inputs already rounds the logits to BF16 before the old path
+upcast them.
+
+Measured on one L40S at vocabulary 248320, width 2048, chunk 1024:
+
+| rows | old ms | fused ms | speedup | old peak | fused peak |
+|---:|---:|---:|---:|---:|---:|
+| 4096 | 224.9 | 105.4 | 2.13x | 5.72 GiB | 3.82 GiB |
+| 6144 | 332.2 | 155.2 | 2.14x | 5.73 GiB | 3.84 GiB |
+| 8192 | 441.1 | 217.2 | 2.03x | 5.75 GiB | 3.85 GiB |
+
+liger-kernel 0.8.5's `fused_linear_cross_entropy` was measured on the same
+shapes and is **slower** here (0.54x at 4096 and 6144 rows, 1.04x at 8192)
+although it uses less memory. It is installed in `.venv-cuda` but the training
+path does not reference it; do not adopt it without re-measuring.
+
+`PRETRAIN_CUDA_FUSED_CE=1` enables the fused path. It refuses itself on NPU,
+on CPU, under `torch.use_deterministic_algorithms`, and whenever TP > 1 --
+vocabulary parallelism needs the original path, which all-reduces the maxima,
+the selected logit and the partition function across the TP group. All six
+refusals are asserted by `scripts/validation/validate_cuda_ce.py`, together with
+an FP64 oracle at the real vocabulary and agreement with the old path at
+production shapes.
+
+## FP8 on Ada, measured before committing to it
+
+Adopting FP8 means replacing the tensor-parallel Linears with TransformerEngine
+ones, which changes parameter structure, the checkpoint schema and the gradient
+protocol. `scripts/validation/bench_fp8.py` measures whether the hardware pays
+for that first, using `torch._scaled_mm` -- the same cuBLASLt FP8 path TE
+reaches -- at this model's shapes. TransformerEngine 2.0.0 reports FP8
+available on sm89.
+
+| GEMM | MxKxN | BF16 ms | FP8 ms | ratio |
+|---|---|---:|---:|---:|
+| lm_head / CE vocab | 8192x2048x248320 | 41.732 | 27.438 | 1.52 |
+| backbone mlp gate_up | 8192x2048x12288 | 2.003 | 1.222 | 1.64 |
+| backbone mlp down | 8192x6144x2048 | 1.022 | 0.584 | 1.75 |
+| backbone attn q | 8192x2048x4096 | 0.664 | 0.374 | 1.77 |
+| backbone attn kv | 8192x2048x1024 | 0.157 | 0.097 | 1.62 |
+| backbone attn o | 8192x2048x2048 | 0.303 | 0.186 | 1.62 |
+| gdn in_proj_all | 8192x2048x8224 | 1.197 | 0.801 | 1.49 |
+| gdn out_proj | 8192x2048x2048 | 0.343 | 0.199 | 1.72 |
+| dit ffn up | 4096x1536x8960 | 0.473 | 0.301 | 1.57 |
+| dit ffn down | 4096x8960x1536 | 0.568 | 0.255 | 2.23 |
+| dit attn qkv | 4096x1536x4608 | 0.308 | 0.154 | 1.99 |
+
+GEMM-time-weighted ceiling: **1.54x**. This is an upper
+bound with pre-quantized inputs and fixed scales; real FP8 training adds a cast
+of every activation and weight, amax reduction and scale updates, and changes
+numerics enough to need a long loss-curve comparison rather than a six-step A/B.
