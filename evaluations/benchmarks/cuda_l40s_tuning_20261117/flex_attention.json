@@ -1,0 +1,209 @@
+{
+  "what": "CQ attention via a mask predicate + PyTorch FlexAttention, replacing a dense [1,1,2S,S] mask handed to SDPA. No kernel was written; the published kernel evaluates the same visibility rule as a mask_mod predicate.",
+  "why": "The dense mask forced SDPA onto its mem-efficient backend: fmha_cutlassB alone was 12.9% of kernel time in the post-fused-norm production profile, and the mask itself is 128 MB at seq 8192.",
+  "tile_selection": {
+    "constraint": "L40S (sm89) has ~99 KiB shared memory/SM; at head_dim=256 FlexAttention's default forward kernel requires 213120 B and cannot compile.",
+    "measured_cost": "BLOCK_N ~2048 B/unit, BLOCK_M ~706 B/unit",
+    "probed": [
+      {
+        "block_m": 128,
+        "block_n": 64,
+        "stages": "default",
+        "shared_memory": 213120,
+        "ok": false
+      },
+      {
+        "block_m": 128,
+        "block_n": 32,
+        "stages": "default",
+        "shared_memory": 147584,
+        "ok": false
+      },
+      {
+        "block_m": 64,
+        "block_n": 64,
+        "stages": "default",
+        "shared_memory": 172032,
+        "ok": false
+      },
+      {
+        "block_m": 64,
+        "block_n": 32,
+        "stages": "default",
+        "shared_memory": 102400,
+        "ok": false,
+        "note": "exceeded the 101376 B limit by 1024 B"
+      },
+      {
+        "block_m": 64,
+        "block_n": 32,
+        "stages": 2,
+        "ok": true,
+        "speedup_fwd": 4.52,
+        "speedup_fwd_bwd": 10.53,
+        "chosen": true
+      },
+      {
+        "block_m": 32,
+        "block_n": 32,
+        "stages": "default",
+        "ok": true,
+        "speedup_fwd_bwd": 10.38
+      },
+      {
+        "block_m": 128,
+        "block_n": 32,
+        "stages": 1,
+        "ok": true,
+        "speedup_fwd_bwd": 1.0,
+        "note": "compiles but collapses; larger tiles are not uniformly better"
+      },
+      {
+        "block_m": 16,
+        "block_n": 16,
+        "stages": "default",
+        "ok": true,
+        "speedup_fwd_bwd": 6.45
+      }
+    ],
+    "method": "one isolated process per candidate with a hard timeout. Inductor's async compile pool does not recover after OutOfResources, so an in-process retry ladder deadlocks (observed: live process, ~1% CPU, idle GPU, no new artifacts)."
+  },
+  "correctness": {
+    "predicate_vs_dense_mask": "bitwise equal; tests/test_cq_predicate.py covers single and multi-document packs, padding rows, tied-sigma image blocks, unconditional queries, real plan-builder layouts and 25 randomized layouts",
+    "gpu_gate": ".runs/flexgate/flex_cq.json",
+    "unconditional_gate": ".runs/flexgate/unconditional.json"
+  },
+  "gpu_equivalence": {
+    "passed": true,
+    "device": "NVIDIA L40S",
+    "capability": "sm89",
+    "tolerance": 0.02,
+    "tiles": {
+      "BLOCK_M": 64,
+      "BLOCK_N": 32,
+      "BLOCK_M1": 32,
+      "BLOCK_N1": 32,
+      "BLOCK_M2": 32,
+      "BLOCK_N2": 32,
+      "num_stages": 2
+    },
+    "worst_error": 0.0040680705569684505,
+    "cases": [
+      {
+        "length": 1536,
+        "images": 1,
+        "rows": 3070,
+        "keys": 1536,
+        "used_flex": true,
+        "errors": {
+          "output": 0.0006820241105742753,
+          "dq": 0.003359192982316017,
+          "dk": 0.0039456868544220924,
+          "dv": 0.002613744232803583
+        },
+        "passed": true
+      },
+      {
+        "length": 2048,
+        "images": 2,
+        "rows": 4093,
+        "keys": 2048,
+        "used_flex": true,
+        "errors": {
+          "output": 0.0007245327578857541,
+          "dq": 0.003365029115229845,
+          "dk": 0.0040680705569684505,
+          "dv": 0.002715670270845294
+        },
+        "passed": true
+      },
+      {
+        "length": 3072,
+        "images": 3,
+        "rows": 6140,
+        "keys": 3072,
+        "used_flex": true,
+        "errors": {
+          "output": 0.0007813325501047075,
+          "dq": 0.0034578442573547363,
+          "dk": 0.004021417815238237,
+          "dv": 0.002665560459718108
+        },
+        "passed": true
+      }
+    ]
+  },
+  "unconditional": {
+    "passed": true,
+    "cases": [
+      {
+        "length": 2048,
+        "images": 2,
+        "unconditional_rows": 768,
+        "unconditional_drift": 0.0,
+        "flex_vs_dense_on_unconditional": 0.0,
+        "conditional_sensitivity": 15.1875,
+        "passed": true
+      },
+      {
+        "length": 3072,
+        "images": 3,
+        "unconditional_rows": 1024,
+        "unconditional_drift": 0.0,
+        "flex_vs_dense_on_unconditional": 0.0,
+        "conditional_sensitivity": 13.5625,
+        "passed": true
+      }
+    ],
+    "device": "NVIDIA L40S"
+  },
+  "end_to_end_2gpu_seq8192": {
+    "flex0": {
+      "mean_seconds": 3.3245301842689514,
+      "peak_memory_gib": 38.28879404067993,
+      "tokens_per_second": 4928.215143759558,
+      "dp": 2,
+      "tp": 1,
+      "grad_accum": 1,
+      "sequence_length": 8192,
+      "kernel_options": {
+        "fused_ce": true,
+        "compile_modulation": false,
+        "attention_tile": "2048",
+        "attention_layout": "SBH",
+        "cpu_noise_cast": "1",
+        "moss_fused_pointwise": "0",
+        "mc2_row": "0",
+        "cuda_fused_norm": true,
+        "backend": "cuda",
+        "grad_reduce_in_fp32": false
+      },
+      "source_identity": "28aae979c08059ab9349621d",
+      "ranks_with_receipts": 2
+    },
+    "flex1": {
+      "mean_seconds": 2.9936522841453552,
+      "peak_memory_gib": 38.2093391418457,
+      "tokens_per_second": 5472.913499931538,
+      "dp": 2,
+      "tp": 1,
+      "grad_accum": 1,
+      "sequence_length": 8192,
+      "kernel_options": {
+        "fused_ce": true,
+        "compile_modulation": false,
+        "attention_tile": "2048",
+        "attention_layout": "SBH",
+        "cpu_noise_cast": "1",
+        "moss_fused_pointwise": "0",
+        "mc2_row": "0",
+        "cuda_fused_norm": true,
+        "backend": "cuda",
+        "grad_reduce_in_fp32": false
+      },
+      "source_identity": "28aae979c08059ab9349621d",
+      "ranks_with_receipts": 2
+    }
+  },
+  "end_to_end_2gpu_speedup": 1.110526496973598
+}

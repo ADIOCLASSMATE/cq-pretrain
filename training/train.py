@@ -395,7 +395,7 @@ def main():
     from ops import flex_cq as _flex
     training_state['kernel_options']['flex_attention']=_flex._ENABLED
     training_state['kernel_options']['flex_tiles']=(
-        _flex.tile_options(cfg.head_dim,'sm%d%d'%torch.cuda.get_device_capability())
+        _flex.tile_options(cfg.head_dim,'%d%d'%torch.cuda.get_device_capability())
         if _flex._ENABLED and accel.BACKEND=='cuda' else None)
     training_state['qwen35_assets']=text_manifest
     if ema is not None:

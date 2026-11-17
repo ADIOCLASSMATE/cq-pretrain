@@ -1,0 +1,63 @@
+{
+  "what": "FlexAttention CQ mask at production scale, 16x L40S",
+  "source_commit": "f67d5c721b9f7a3387a99827bf7fdaaee41ff988",
+  "shape": {
+    "nodes": 2,
+    "gpus": 16,
+    "sequence_length": 8192,
+    "tp": 1,
+    "dp": 16,
+    "global_batch": 128,
+    "grad_accum": 8
+  },
+  "flex_off": {
+    "mean_seconds": 24.50035349527995,
+    "tokens_per_second": 42798.40289659538,
+    "peak_memory_gib": 22.192617416381836,
+    "ranks_with_receipts": 16,
+    "all_losses_finite": true,
+    "world": 16,
+    "tp": 1,
+    "dp": 16,
+    "grad_accum": 8,
+    "sequence_length": 8192,
+    "kernel_options": {
+      "backend": "cuda",
+      "cuda_fused_norm": true,
+      "flex_attention": false,
+      "flex_tiles": null,
+      "grad_reduce_in_fp32": false
+    }
+  },
+  "flex_on": {
+    "mean_seconds": 21.710131963094074,
+    "tokens_per_second": 48298.92336824651,
+    "peak_memory_gib": 22.113162517547607,
+    "ranks_with_receipts": 16,
+    "all_losses_finite": true,
+    "world": 16,
+    "tp": 1,
+    "dp": 16,
+    "grad_accum": 8,
+    "sequence_length": 8192,
+    "kernel_options": {
+      "backend": "cuda",
+      "cuda_fused_norm": true,
+      "flex_attention": true,
+      "flex_tiles": null,
+      "grad_reduce_in_fp32": false
+    }
+  },
+  "flex_speedup": 1.1285,
+  "memory_delta_gib": -0.079,
+  "cumulative": {
+    "pre_optimization_seconds": 30.374,
+    "final_seconds": 21.710131963094074,
+    "speedup": 1.3991,
+    "contributions": "fused norms (1.235x measured at this scale) then FlexAttention"
+  },
+  "caveats": [
+    "Synthetic batches: no VAE decode, no corpus I/O, one image per pack.",
+    "flex_tiles was recorded as null in these runs because the provenance lookup used the wrong key prefix; the runtime path used the correct sm89/head_dim=256 entry (BLOCK_M=64, BLOCK_N=32, num_stages=2), which the GPU equivalence gate and the speedup both confirm. Fixed after these runs so later run.json files record the tiles directly."
+  ]
+}
