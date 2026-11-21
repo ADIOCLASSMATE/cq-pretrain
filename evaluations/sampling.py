@@ -190,7 +190,7 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
             image_tokens+=len(e['video_sequence']['ids']) if 'video_sequence' in e else math.prod(visual[2])//4+2
     scaffold=sum(len(e['input_ids']) for e in elements if e['type']=='text')
     length=max(scaffold+image_tokens+2,cfg.vision_min_pixels//1024+4)
-    packer=Packer(docs,replace(cfg,visual_cache='',visual_uncond_probability=0.,visual_instruction_dropout_probability=0.),
+    packer=Packer(docs,replace(cfg,visual_cache='',rf=1,visual_uncond_probability=0.,visual_instruction_dropout_probability=0.),
                   length,tokens,padding_multiple=0)
     batch,receipt=packer.next()
     if not receipt['documents'][0]['completed']:raise ValueError('Validation example exceeds its pack')

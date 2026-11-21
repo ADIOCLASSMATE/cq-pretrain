@@ -87,6 +87,13 @@ class OccurrenceLossScalingTests(unittest.TestCase):
         command=training_command(args,Path('attempt'))
         self.assertEqual(command[command.index('--data-root')+1],'corpus')
         self.assertEqual(command[0],sys.executable)
+        self.assertNotIn('--rf',command)
+        self.assertNotIn('--sequence-length',command)
+        args.rf=2
+        args.sequence_length=8192
+        command=training_command(args,Path('attempt'))
+        self.assertEqual(command[command.index('--rf')+1],'2')
+        self.assertEqual(command[command.index('--sequence-length')+1],'8192')
 
 
 if __name__=='__main__':unittest.main()

@@ -106,7 +106,12 @@ class Catalog:
         return self.local.cache
 
     def read_rows(self, shard, start, count):
-        return self.read_table(shard, start, count).to_pylist()
+        table = self.read_table(shard, start, count)
+        rows = table.to_pylist()
+        if ('generation_target' not in getattr(table.schema.field('segments').type.value_type, 'names', ())
+                and any(s['kind'] == 'image' for row in rows for s in row['segments'])):
+            raise ValueError('Native visual catalogs require segments.generation_target; use the occurrence-annotated release')
+        return rows
 
     def read_table(self, shard, start, count):
         """Reuse projected row groups across adjacent small tokenizer batches."""

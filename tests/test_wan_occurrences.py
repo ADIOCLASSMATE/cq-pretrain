@@ -176,6 +176,45 @@ def test_release_entry_controls_packing_and_native_jsonl_permissions(tmp_path):
             catalog.close()
 
 
+def test_native_publication_marks_gqa_direction_and_retires_row_only_visual_grants(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from data.catalog import Catalog
+    from corpus_pipeline.production.occurrence_targets import publish
+
+    source = tmp_path/'original'
+    (source/'reports').mkdir(parents=True)
+    (source/'tokenizer').mkdir()
+    row = dict(sample_id='text', format='interleaved', source_shard='', images=[], text_tokens=1,
+               segments=[dict(kind='text', text='hello')], image_loss_allowed=False)
+    picture = dict(kind='image', image_index=0)
+    rows = [row, dict(row, sample_id='gqa', images=[dict(path='a.jpg')], segments=[picture, *row['segments']])]
+    shard = source/'data.parquet'
+    pq.write_table(pa.Table.from_pylist(rows), shard)
+    catalog = json.dumps([dict(path=shard.name,rows=2,bytes=shard.stat().st_size)]).encode()
+    (source/'catalog.json').write_bytes(catalog)
+    (source/'manifest.json').write_text(json.dumps(dict(schema_version='dcvlm.pretrain.v1',phase='complete',
+                                                         source_pool=str(tmp_path),tokenizer_lock=dict(files=[]))))
+    (source/'sources.json').write_text('{"raw_shards":[]}')
+    (source/'reports/validation.json').write_text('{"passed":true}')
+    (source/'COMPLETE.json').write_text(json.dumps(dict(validation_passed=True,catalog_sha256=hashlib.sha256(catalog).hexdigest())))
+    old = Catalog(source)
+    try:
+        assert old.read_rows(0, 0, 1)[0]['sample_id'] == 'text'
+        with pytest.raises(ValueError, match='generation_target'):
+            old.read_rows(0, 1, 1)
+    finally:
+        old.close()
+
+    publish(source, tmp_path/'published', direction='I2T')
+    current = Catalog(tmp_path/'published')
+    try:
+        gqa, = current.read_rows(0, 1, 1)
+        assert gqa['direction'] == 'I2T' and gqa['segments'][0]['generation_target'] is False
+    finally:
+        current.close()
+
+
 def test_rebinding_upstream_assets_keeps_vetoes_on_the_corresponding_occurrence():
     from data.upstream import bound_ref, constrain_bound_occurrences
 

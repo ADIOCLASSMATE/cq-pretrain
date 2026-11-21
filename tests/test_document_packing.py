@@ -11,7 +11,7 @@ import torch
 
 import tests.test_qwen35_vision as fixtures
 from data.generation import WanGenerationInputs
-from data.packing import Packer, ConsumedLoader
+from data.packing import Packer, ConsumedLoader, padded_pack_length
 from models.modeling_umm import JointModel
 from data.batch_layout import build_plan
 from training.renderer_schedule import backward_deferred_renderer, suspend_gradient_readiness
@@ -42,13 +42,53 @@ class DocumentPackingTests(unittest.TestCase):
     def cfg(self,**kwargs):
         values=dict(latent_channels=16,dit_width=128,dit_heads=4,
             dit_ffn=256,dit_layers=2,preserve_documents=True,generation_token_budget=32,
-            freeze_vision=True,freeze_vision_merger=False,tie_word_embeddings=False)
+            freeze_vision=True,freeze_vision_merger=False,tie_word_embeddings=False,rf=1)
         values.update(kwargs)
         return self.fixture.cfg(**values)
 
     def packer(self,rows,cfg=None,length=128,state=None):
         docs=Documents(rows,state['documents']['index'] if state else 0)
         return Packer(docs,cfg or self.cfg(),length,self.fixture.tokens,state)
+
+    def test_physical_width_buckets_and_explicit_alignment(self):
+        for limit in (2048, 4096, 8192):
+            for occupied, expected in ((1, 2048), (2048, 2048), (2049, 4096), (4096, 4096),
+                                       (4097, 8192), (6144, 8192), (6145, 8192), (8192, 8192)):
+                if occupied <= limit:
+                    self.assertEqual(padded_pack_length(occupied, limit), expected)
+        self.assertEqual(padded_pack_length(100, 512), 512)
+        self.assertEqual(padded_pack_length(5000, 8192, 2048), 6144)
+        self.assertEqual(padded_pack_length(17, 4096, 0), 4096)
+
+    def test_packer_uses_only_the_supported_physical_widths(self):
+        for capacity, occupied, expected in ((2048, 1300, 2048), (8192, 1800, 2048),
+                                             (8192, 3000, 4096), (8192, 5000, 8192)):
+            with self.subTest(capacity=capacity, occupied=occupied):
+                row = dict(id='text', templated=False, elements=[text([11] * (occupied - 1))])
+                batch, receipt = self.packer([row], length=capacity).next()
+                self.assertEqual((receipt['occupied'], receipt['physical_length']), (occupied, expected))
+                self.assertEqual(batch.ids.shape, (1, expected))
+
+    def test_buckets_preserve_stream_order_and_resume(self):
+        rows = [dict(id=name, templated=False, elements=[text([11] * n)])
+                for name, n in [('first', 3000), ('next', 1500), ('short', 16)]]
+        packer = self.packer(rows, length=4096)
+        first, first_receipt = packer.next()
+        self.assertEqual(first.ids.shape[1], 4096)
+        self.assertEqual([d['id'] for d in first_receipt['documents']], ['first'])
+        tail, tail_receipt = packer.next()
+        self.assertEqual([d['id'] for d in tail_receipt['documents']], ['next', 'short'])
+        self.assertEqual(tail.ids.shape[1], tail_receipt['physical_length'])
+        self.assertEqual((tail_receipt['occupied'], tail_receipt['physical_length']), (1518, 2048))
+        self.assertTrue(tail.segments[0, 1518:].eq(-1).all())
+        replay, receipt = self.packer(rows, length=4096, state=first_receipt['next_state']).next()
+        self.assertEqual(receipt, tail_receipt)
+        torch.testing.assert_close(replay.ids, tail.ids)
+        legacy = Packer(Documents(rows), self.cfg(), 4096, self.fixture.tokens, padding_multiple=128)
+        _, saved = legacy.next()
+        old_tail, old_receipt = self.packer(rows, length=4096, state=saved['next_state']).next()
+        self.assertEqual(old_tail.ids.shape[1], 1536)
+        self.assertEqual(old_receipt['next_state']['packing']['padding_multiple'], 128)
 
     def pair(self,cfg=None):
         rows=[dict(id='interleaved',format='interleaved',elements=[text([11,12]),picture(),
@@ -57,9 +97,10 @@ class DocumentPackingTests(unittest.TestCase):
         generator=torch.Generator().manual_seed(1703)
         n=sum(batch.generation.lengths)
         batch.latents=torch.randn(n,64,generator=generator)
-        batch.noise=torch.randn(n,64,generator=generator)
-        batch.times=torch.tensor([.2,.5,.8])
-        batch.generation.time_features=torch.randn(3,256,generator=generator)
+        draws=batch.generation.rf
+        batch.noise=torch.randn(draws*n,64,generator=generator)
+        batch.times=torch.linspace(.2,.8,draws*3)
+        batch.generation.time_features=torch.randn(draws*3,256,generator=generator)
         return batch
 
     def test_document_moves_intact_and_decode_is_reused(self):
@@ -153,7 +194,7 @@ class DocumentPackingTests(unittest.TestCase):
     def test_chunked_joint_loss_every_gradient_and_one_backbone_backward(self):
         for recompute in (False,True):
             with self.subTest(recompute=recompute):
-                cfg=self.cfg(checkpoint_dit=recompute,checkpoint_backbone=recompute)
+                cfg=self.cfg(checkpoint_dit=recompute,checkpoint_backbone=recompute,rf=4)
                 torch.manual_seed(482)
                 expected_model=JointModel(cfg).train();actual_model=copy.deepcopy(expected_model)
                 batch=self.pair(cfg);reference_cq=[]
@@ -232,7 +273,7 @@ class DocumentPackingTests(unittest.TestCase):
         try:
             for micro in range(2):
                 group.is_last_microbatch=bool(micro)
-                batch=self.pair(self.cfg(generation_microbatch_images=1) if micro else cfg)
+                batch=self.pair(self.cfg(generation_microbatch_images=1,rf=4) if micro else cfg)
                 (compose_losses(reference(batch), reference.cfg)['loss']*.5).backward()
                 losses=compose_losses(actual(batch, compute_image_loss=not True), actual.cfg)
                 backward_deferred_renderer(actual,batch,losses,.5,wrapped,image_factor=cfg.image_weight)

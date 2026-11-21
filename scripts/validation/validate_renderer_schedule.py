@@ -40,11 +40,11 @@ def make_batch(cfg, micro):
     generator = torch.Generator().manual_seed(770 + P.dp_rank() * 2 + micro)
     batch = fake_batch(cfg, 65, 1, n, seed=93 + P.dp_rank() * 2 + micro)
     images = [np.zeros((32, 48 if i % 2 else 32, 3), dtype=np.uint8) for i in range(n)]
-    layout = WanGenerationInputs.prepare(images, batch.generation.query_counts, 32, token_budget=8)
+    layout = WanGenerationInputs.prepare(images, batch.generation.query_counts, 32, token_budget=8, rf=cfg.rf)
     channels = cfg.latent_channels * 4
     batch.latents = torch.randn(sum(layout.lengths), channels, generator=generator)
-    batch.noise = torch.randn(batch.latents.shape, generator=generator)
-    batch.times = torch.linspace(0.2, 0.8, n)
+    batch.noise = torch.randn(cfg.rf * len(batch.latents), channels, generator=generator)
+    batch.times = torch.linspace(0.2, 0.8, cfg.rf * n)
     half = cfg.wan_freq_dim // 2
     phase = (batch.times * 1000).double()[:, None] * 10000 ** (
         -torch.arange(half, dtype=torch.float64) / half
@@ -208,7 +208,7 @@ def main():
         tp=args.tp,
         passed=all(r["passed"] for r in reports),
         cases=reports,
-        chunk_counts=[len(b.generation.microbatches) for b in batches],
+        chunk_counts=[b.generation.dit_microbatch_count for b in batches],
     )
     (root / f"rank_{rank:05d}.json").write_text(json.dumps(report, indent=2))
     dist.barrier()

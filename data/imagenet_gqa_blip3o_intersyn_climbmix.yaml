@@ -1,0 +1,19 @@
+# 每条记录是一篇独立文档。同一篇 InterSyn 的图文按原顺序放在一起。
+# 每包最多 4,096 个位置，输出对齐到 2,048 或 4,096。按原生的四行块打乱。
+# bash scripts/launch.sh --config configs/qwen35_2b_wan.yaml \
+#   --data-root data/imagenet_gqa_blip3o_intersyn_climbmix.yaml --until-data-end \
+#   --long-document-policy error \
+#   --vision-assets .assets/Qwen3.5-2B-Base --text-assets .assets/Qwen3.5-2B-Base \
+#   --wan-assets .assets/Wan2.1-T2V-1.3B --wan-vae-assets .assets/Wan2.1-VAE --output /path/to/run
+training_geometry:
+  sequence_length: 4096
+  shuffle_block_rows: 4
+  vision_max_pixels: 262144
+  generation_max_pixels: 262144
+sources:
+  - path: /inspire/hdd/global_user/wanjiaxin-253108030048/datasets/cq-pretrain-mix-4096/imagenet_i2t  # image → caption
+  - path: /inspire/hdd/global_user/wanjiaxin-253108030048/datasets/cq-pretrain-mix-4096/imagenet_t2i  # prompt → image
+  - path: /inspire/hdd/global_user/wanjiaxin-253108030048/datasets/cq-pretrain-mix-4096/gqa           # image + question → answer
+  - path: /inspire/hdd/global_user/wanjiaxin-253108030048/datasets/cq-pretrain-mix-4096/blip3o        # GenEval train prompt → image
+  - path: /inspire/hdd/global_user/wanjiaxin-253108030048/datasets/cq-pretrain-mix-4096/intersyn      # ordered text and images
+  - path: /inspire/hdd/global_user/wanjiaxin-253108030048/datasets/cq-pretrain-mix-4096/climbmix      # plain text

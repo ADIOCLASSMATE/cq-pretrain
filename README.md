@@ -53,7 +53,9 @@ NPROC_PER_NODE=2 bash scripts/launch.sh \
 
 ## 数据与缓存
 
-已发布的 DCVLM/GenUND Parquet 目录直接作为 `--data-root`。预处理仍使用 `python -m corpus_pipeline`，规则见 [数据预处理说明](corpus_pipeline/README.md)。DCVLM 保留原生任务结构，不重新生成 T2I50。
+六源混训使用 `--data-root data/imagenet_gqa_blip3o_intersyn_climbmix.yaml`。默认容量为 4,096，打乱后的文档按流中顺序装包，文档之间隔离 attention。装包后按有效长度向上对齐到 2,048 或 4,096。用 `--sequence-length 8192` 可启用 8,192 档。
+
+显式标注图像生成目标的 DCVLM/GenUND Parquet 发行目录也可作为 `--data-root`。预处理入口为 `python -m corpus_pipeline`。[数据预处理说明](corpus_pipeline/README.md)
 
 也可指定 JSONL 或混合来源 YAML：
 
@@ -102,13 +104,13 @@ Ascend 910B 图像 CQ 的 GDN 层前向加反向实测（含 warmup，12 次计�
 
 训练支持 `--validation-suite` 的固定定性样例；T2V 加 `num_frames`、`fps`，V2T 指定视频路径与校验值，视频输出为 MP4。结果保留 suite hash、权重来源、耗时、显存和 HTML。此套件不声称提供官方 benchmark 分数。
 
-I2T 全部保留，仅监督原始文本，不创建视觉生成 query、不运行目标 VAE/DiT。原生单／多轮 T2I 和自然交错文档也全部保留，监督原始文本及允许生成的图像；输入角色的图像和已有 `image_loss_allowed=false` 标记仍不作为生成目标。原始文本包含用户轮和助手轮，人工添加的模板不计文本 loss。
+原生视觉训练发行版在每次图像出现的位置用 `generation_target` 指定生成监督。ImageNet I2T 和 GQA 的图像提供上下文，文本 CE 覆盖原始语料中允许监督的位置和终止／起图标记。ImageNet T2I、BLIP3o 和 InterSyn 的目标图参与 Wan 的 rectified-flow loss。
 
-原生 T2I 的每个生成目标按 `visual_uncond_probability: 0.1` 使用空条件，其余 90% 使用正常前缀，图文 loss 都保留。自然交错文档不做随机 CFG dropout：`I₁ T I₂` 中 `I₁` 无前缀，使用空条件；`I₂` 读取之前的 `I₁ + T`。`T I₁ T I₂` 则两张图都按各自真实前缀生成。原生视频生成目标沿用相同的 10% 规则。
+每个生成目标默认采样 4 组独立的噪声和时间步，用配置项 `data.rf` 或 `--rf` 设置正整数。各次采样共用 VAE latent、backbone 产生的 CQ 条件和 DiT 每层的 cross-attention K/V。DiT 在现有 token 和图数预算内合批，超出预算时分批计算，同图各次采样的 flow loss 取平均。每篇文档只参与一次 packing 和文本 CE，跨卡归一化按原始目标图数计算。
 
 模型只接收生成目标索引和 `Batch.generation_unconditional` 标记，不判断 T2I、交错顺序或采样比例。标记为 True 的视觉 Q 在每层不读取任何 C（空卷积历史、零 GDN 状态、无 attention 读取），保留自身残差和 MLP，输出经 Wan cross-attention 作为 DiT condition；False 或未提供标记时使用正常可见性。标记不改变目标位置、RoPE、query 数量或其他目标的计算，图像与视频共用实现。布局在 CPU 预先准备，逐层 forward 不再构造 mask／事件布局，也不判断数据任务。
 
-数据侧允许在样本或单个视觉目标设置布尔值 `non_cfg`，目标标记优先；显式 True/False 均覆盖默认采样策略。未指定时，数据侧按上述原生 10%／交错真实前缀规则生成标记；I2T 始终不创建生成目标。原生随机选择以样本、图像位置、seed 和 epoch 固定，可精确恢复。评估不随机选择，`make_batch(..., non_cfg=True)` 与 `cfg_null_condition: empty` 的负分支使用同一路径。采样 `guidance` 仍由评估样例指定，默认 1。
+样本或单个目标的 `non_cfg` 可以显式指定空条件（True）或正常前缀（False），目标标记优先。未指定时，无历史的目标使用空条件，有历史的目标按 `visual_uncond_probability` 抽取空条件，默认 10%，InterSyn 同样适用。选择由样本、目标位置、seed 和 epoch 决定，同一目标的 RF 次采样共用这次选择。评估的负分支显式使用空条件，`guidance` 默认 1。
 
 query 数量和空条件策略本身不改变参数形状；本次两层 adapter 改变了权重与优化器形状，旧训练结果不再兼容：训练 checkpoint 仅接受 schema 7，推理快照仅接受 v2；不提供旧三层 adapter 转换。新 checkpoint 的精确 `--resume` 同时校验配置、数据游标、源码和实际启用的 kernel 选项。dynamic query 的语义、梯度、交错前缀及恢复规则有 CPU 回归覆盖，原固定 64 query 的 NPU 吞吐数字不能直接当作新配置的测速结果。
 

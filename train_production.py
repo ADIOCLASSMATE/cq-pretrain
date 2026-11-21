@@ -85,6 +85,10 @@ def training_command(args, attempt):
         '--save-first', '--save-final',
         '--validation-suite', str(args.validation_suite),
         '--validate-first', '--validate-final', '--validate-every', str(args.validate_every)]
+    if (rf := getattr(args, 'rf', None)) is not None:
+        training.extend(['--rf', str(rf)])
+    if (length := getattr(args, 'sequence_length', None)) is not None:
+        training.extend(['--sequence-length', str(length)])
     return [sys.executable, str(ROOT/'launch_job.py'),
             '--nodes', str(args.nodes), '--node-rank', str(args.node_rank),
             '--nproc-per-node', str(args.nproc_per_node),
@@ -166,6 +170,8 @@ def main():
     parser.add_argument('--save-every', type=int, default=100)
     parser.add_argument('--keep-checkpoints', type=int, default=3)
     parser.add_argument('--validate-every', type=int, default=500)
+    parser.add_argument('--rf', type=int, help='Override data.rf for rectified-flow training')
+    parser.add_argument('--sequence-length', type=int, help='Override the published pack capacity')
     parser.add_argument('--steps', type=int, default=0,
                         help='Stop after this many steps instead of consuming the dataset; '
                              'for bounded probes such as verifying a resume end to end')
@@ -177,6 +183,10 @@ def main():
         parser.error('Invalid fixed-size node topology')
     if args.save_every < 1 or args.keep_checkpoints < 1 or args.validate_every < 1:
         parser.error('Require positive checkpoint interval, retention and validation interval')
+    if args.rf is not None and args.rf < 1:
+        parser.error('--rf must be a positive integer')
+    if args.sequence_length is not None and args.sequence_length < 1:
+        parser.error('--sequence-length must be a positive integer')
     for path in (args.config, args.data_root, args.validation_suite):
         if not path.exists():parser.error(f'Missing required path: {path}')
     if args.dry_run:

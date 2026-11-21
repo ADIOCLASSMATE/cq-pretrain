@@ -56,14 +56,20 @@ class RMSNorm(nn.Module):
 
 
 def packed_attention(q, k, v, q_ends, k_ends):
+    """Self-attention batches independent draws. Cross-attention shares each visual's KV."""
     q, k = q.to(v.dtype), k.to(v.dtype)
     result = []
     qa = ka = 0
     for qb, kb in zip(q_ends, k_ends):
-        a, b, c = (t.transpose(0, 1)[None] for t in (q[qa:qb], k[ka:kb], v[ka:kb]))
-        result.append(F.scaled_dot_product_attention(a, b, c)[0].transpose(0, 1))
+        query = q[:, qa:qb]
+        # All query rows for this visual can read its same condition independently.
+        # Folding those rows into one sequence keeps a single copy of K/V in SDPA.
+        a = query.reshape(1, -1, *query.shape[2:]) if k.shape[0] == 1 else query
+        b, c = (t[:, ka:kb].transpose(1, 2) for t in (k, v))
+        y = F.scaled_dot_product_attention(a.transpose(1, 2), b, c)
+        result.append(y.transpose(1, 2).reshape_as(query))
         qa, ka = qb, kb
-    return torch.cat(result)
+    return torch.cat(result, dim=1).flatten(0, 1)
 
 
 def rotary(x, rope):
@@ -92,10 +98,16 @@ class Attention(nn.Module):
     def forward(self, x, layout, context=None, cached_kv=None):
         q = self.norm_q(linear(self.q, x)).reshape(-1, self.heads, self.head_dim)
         k, v = self.project_kv(x if context is None else context) if cached_kv is None else cached_kv
-        if context is None:
+        patches = layout.video_ends[-1]
+        q = q.unflatten(0, (-1, patches))
+        self_attention = context is None and cached_kv is None
+        if self_attention:
+            k, v = (t.unflatten(0, (-1, patches)) for t in (k, v))
             q, k = rotary(q, (layout.cos, layout.sin)), rotary(k, (layout.cos, layout.sin))
+        else:
+            k, v = k.unsqueeze(0), v.unsqueeze(0)
         y = packed_attention(
-            q, k, v, layout.video_ends, layout.video_ends if context is None else layout.text_ends
+            q, k, v, layout.video_ends, layout.video_ends if self_attention else layout.text_ends
         )
         return self.o(y.flatten(1))
 
@@ -117,12 +129,13 @@ class Block(nn.Module):
         )
         self.modulation = nn.Parameter(torch.randn(1, 6, dim) / math.sqrt(dim))
 
-    def forward(self, x, modulation, context, layout, cached_kv=None):
+    def forward(self, x, modulation, context, layout, key=None, value=None):
         # Sample-wise modulation is gathered once before all layers/recomputes.
         shift, scale, gate, fs, fc, fg = (modulation + self.modulation.float()).unbind(1)
         y = self.self_attn(K.modulated_norm(x, scale, shift, self.fused, self.norm1.eps, upcast=True), layout)
         x = K.gated_add(x.float(), y.float(), gate, self.fused)
-        x = x + self.cross_attn(self.norm3(x), layout, context, cached_kv).float()
+        kv = (key, value) if key is not None else None
+        x = x + self.cross_attn(self.norm3(x), layout, context, kv).float()
         y = linear(self.ffn[0], K.modulated_norm(x, fc, fs, self.fused, self.norm2.eps, upcast=True))
         return K.gated_add(x, linear(self.ffn[2], self.ffn[1](y)).float(), fg, self.fused)
 
@@ -182,37 +195,50 @@ class Wan21Generator(nn.Module):
     @torch.no_grad()
     def cache_condition_kv(self, context):
         # Request-local cache: weights and conditioning stay fixed while sampling.
-        return tuple(
-            tuple(t.contiguous() for t in block.cross_attn.project_kv(context)) for block in self.blocks
-        )
+        return tuple(tuple(t.contiguous() for t in pair) for pair in self.project_condition_kv(context))
+
+    def project_condition_kv(self, context):
+        return tuple(block.cross_attn.project_kv(context) for block in self.blocks)
 
     def predict(self, xt, conditions, time_features, layout, projected_conditions=None, cached_kv=None):
         if cached_kv is not None and torch.is_grad_enabled():
             raise ValueError("Condition KV caching is inference-only")
-        time = self.time_embedding(time_features.float())
-        e = self.time_projection(time).reshape(-1, 6, self.cfg.dit_width)
-        modulation = e.index_select(0, layout.video_sample_indices).contiguous()
-        head_time = time.index_select(0, layout.video_sample_indices)
         context = (
             self.project_conditions(conditions, layout)
             if projected_conditions is None
             else projected_conditions
         )
+        return self._predict(xt, time_features, layout, context, cached_kv)
+
+    def _predict(self, xt, time_features, layout, context, condition_kv):
+        time = self.time_embedding(time_features.float()).unflatten(0, (-1, len(layout.lengths)))
+        e = self.time_projection(time).unflatten(-1, (6, self.cfg.dit_width))
+        modulation = e.index_select(1, layout.video_sample_indices).flatten(0, 1)
+        head_time = time.index_select(1, layout.video_sample_indices).flatten(0, 1)
         x = self.patch_embedding(xt)
         for i, block in enumerate(self.blocks):
+            kv = condition_kv[i] if condition_kv is not None else (None, None)
             recompute = self.cfg.checkpoint_dit or i >= self.cfg.dit_layers - self.cfg.checkpoint_dit_layers
             if recompute and self.training and torch.is_grad_enabled():
-                x = checkpoint(block, x, modulation, context, layout, use_reentrant=True)
+                if condition_kv is None and time.shape[0] > 1:
+                    kv = block.cross_attn.project_kv(context)
+                # Give reentrant checkpointing the shared KV as individual gradient inputs.
+                x = checkpoint(block, x, modulation, context if kv[0] is None else None, layout, *kv, use_reentrant=True)
             else:
-                x = block(x, modulation, context, layout, None if cached_kv is None else cached_kv[i])
+                x = block(x, modulation, context, layout, *kv)
         return self.head(x, head_time).float()
 
-    def forward(self, conditions, batch):
+    def forward(self, conditions, batch, *, condition_kv=None):
         layout = batch.generation
-        sigma = batch.times.index_select(0, layout.video_sample_indices)[:, None]
-        xt = (1 - sigma) * batch.latents.float() + sigma * batch.noise.float()
-        prediction = self.predict(xt, conditions, layout.time_features, layout)
-        error = (prediction - (batch.noise.float() - batch.latents.float())).square().mean(-1)
+        clean = batch.latents.float()
+        noise = batch.noise.float().unflatten(0, (layout.rf, clean.shape[0]))
+        times = batch.times.view(layout.rf, len(layout.lengths))
+        sigma = times.index_select(1, layout.video_sample_indices).unsqueeze(-1)
+        velocity = noise - clean
+        xt = torch.addcmul(clean, sigma, velocity).flatten(0, 1)
+        context = self.project_conditions(conditions, layout) if condition_kv is None else None
+        prediction = self._predict(xt, layout.time_features, layout, context, condition_kv).view_as(noise)
+        error = (prediction - velocity).square().mean(dim=(0, 2))
         return (error * layout.loss_weights).sum()
 
     def load_pretrained(self, path):

@@ -113,10 +113,12 @@ def parse_args(argv=None):
     parser.add_argument('--device-prefetch', type=int, default=2, help='Prepared NPU batches ahead; zero is synchronous control')
     parser.add_argument('--preserve-documents',action='store_true',help='Pack complete documents; budget DiT image/CQ pairs independently')
     parser.add_argument('--long-document-policy',choices=('window','error'),help='Policy only for documents longer than the backbone context')
-    parser.add_argument('--dit-microbatch-tokens',type=int,help='Wan latent-token budget per renderer chunk')
-    parser.add_argument('--dit-microbatch-images',type=int,help='Optional DiT image count limit; zero is unlimited')
+    parser.add_argument('--dit-microbatch-tokens',type=int,help='Wan latent-token budget per chunk across all RF draws')
+    parser.add_argument('--dit-microbatch-images',type=int,help='Optional limit on image draws per DiT chunk; zero is unlimited')
+    parser.add_argument('--rf', type=int, help='Rectified-flow draws per generation target (data.rf, default 4)')
     parser.add_argument('--max-images-per-pack', type=int, default=None, help='Legacy fragment packing only; defaults to zero for whole documents')
-    parser.add_argument('--pack-padding-multiple', type=int, default=128, help='Trim unused pack tail and round to this multiple; zero disables')
+    parser.add_argument('--pack-padding-multiple', type=int,
+                        help='Override automatic 2K/4K/8K pack widths with a multiple; zero keeps the full sequence length')
     parser.add_argument('--latent-encoder', choices=('wan','fake'), default='wan')
     parser.add_argument('--vae-dtype', choices=('float32','bfloat16'), default='float32')
     preliminary,_=parser.parse_known_args(argv)
@@ -194,6 +196,7 @@ def main():
     if args.long_document_policy is not None:cfg.long_document_policy=args.long_document_policy
     if args.dit_microbatch_tokens is not None:cfg.generation_token_budget=args.dit_microbatch_tokens
     if args.dit_microbatch_images is not None:cfg.generation_microbatch_images=args.dit_microbatch_images
+    if args.rf is not None:cfg.rf=args.rf
     if not cfg.preserve_documents and (args.dit_microbatch_tokens is not None or args.dit_microbatch_images is not None):
         raise ValueError('DiT microbatch flags require --preserve-documents or the whole-document config')
     if args.max_images_per_pack is None:args.max_images_per_pack=0 if cfg.preserve_documents else 4
@@ -461,7 +464,7 @@ def main():
             online_tokenizer=online_tokenizer,tokenizer_counting_matches_corpus=docs.counting_matches_corpus,
             mode=args.data_mode,
             latent_grid='dynamic',actual_generation_image_tokens='dynamic',
-            generation_max_pixels=cfg.generation_max_pixels,generation_token_budget=cfg.generation_token_budget,
+            generation_max_pixels=cfg.generation_max_pixels,generation_token_budget=cfg.generation_token_budget,rf=cfg.rf,
             fake_latents=args.latent_encoder=='fake',
             local_trainable_parameters=sum(p.numel() for p in model.parameters() if p.requires_grad))
     from utils.experiment import source_hashes
@@ -747,7 +750,7 @@ def main():
                     resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/2**20],device=ACCEL)
                 dist.all_reduce(resource_values,op=dist.ReduceOp.MAX)
                 row.update(body_tokens=counts[2],occupied_tokens=counts[3],images_consumed=counts[1],
-                           generation_images=counts[12],
+                           generation_images=counts[12],flow_samples=counts[12]*cfg.rf,
                            generation_tokens=counts[5],documents_completed=counts[6],
                            t2i_captions_completed=counts[7],i2t_captions_completed=counts[8],
                            active_microbatches=counts[4],data_wait_seconds=resource_values[0].item(),
@@ -848,7 +851,7 @@ def main():
             summary['capacity_slots_per_second']=total_capacity/total_seconds
             summary['capacity_slots_per_second_per_card']=total_capacity/total_seconds/world
             summary['wall_capacity_slots_per_second']=total_capacity/wall_seconds
-            for key in ('occupied_tokens','body_tokens','images_consumed','generation_images',
+            for key in ('occupied_tokens','body_tokens','images_consumed','generation_images','flow_samples',
                         'supervised_text_tokens',
                         'condition_query_tokens','backbone_processed_slots','padding_tokens','active_microbatches','dit_microbatches'):
                 values=[x[key] for x in measurements]

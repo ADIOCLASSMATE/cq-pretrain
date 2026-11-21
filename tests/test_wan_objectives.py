@@ -142,6 +142,36 @@ def test_dynamic_targets_permissions_and_text_image_losses(setup):
     assert any(p.grad is not None and p.grad.abs().sum()>0 for p in model.renderer.parameters())
 
 
+def test_rf_draws_only_repeat_flow_randomness(setup):
+    cfg, tokens = setup
+    assert cfg.rf == 4
+    row = dict(id='mixed', elements=[picture(generation_target=False), text(12), picture(), picture(96,96)])
+    previous = None
+    for rf in (1, 2, 4):
+        current = replace(cfg, rf=rf)
+        batch, receipt = Packer(Documents([row]), current, 128, tokens).next()
+        calls = []
+        def encode(pixels):
+            calls.append(pixels.shape)
+            _, frames, height, width = pixels.shape
+            return pixels.new_zeros((16, (frames-1)//4+1, height//8, width//8))
+        preparer = DevicePreparer(current)
+        preparer.vae = SimpleNamespace(encode=encode)
+        ready = preparer(batch, receipt)
+        assert len(calls) == ready.generation_image_count == 2
+        assert ready.generation_image_indices.tolist() == [1, 2]
+        assert ready.times.numel() == rf*2 and ready.noise.shape[0] == rf*len(ready.latents)
+        assert ready.times.view(rf, 2)[:, 0].unique().numel() == rf
+        assert ready.noise.view(rf, -1)[:, 0].unique().numel() == rf
+        if previous is not None:
+            for name in ('ids', 'text_indices', 'generation_unconditional', 'latents'):
+                torch.testing.assert_close(getattr(ready,name), getattr(previous,name), rtol=0, atol=0)
+        replay = preparer(batch,receipt)
+        for name in ('noise', 'times'):
+            torch.testing.assert_close(getattr(ready,name), getattr(replay,name), rtol=0, atol=0)
+        previous = ready
+
+
 def test_i2t_skips_visual_queries_vae_and_renderer(setup,monkeypatch):
     cfg,tokens=setup
     batch,receipt=Packer(Documents([dict(id='i2t',direction='I2T',non_cfg=True,
@@ -245,10 +275,13 @@ def test_unconditional_choices_resume_exactly(setup):
     torch.testing.assert_close(actual.generation_unconditional,expected.generation_unconditional)
     with pytest.raises(ValueError,match='packing policy'):
         Packer(docs,replace(cfg,visual_uncond_probability=0.),24,tokens,state)
+    with pytest.raises(ValueError,match='packing policy'):
+        Packer(docs,replace(cfg,rf=1),24,tokens,state)
     # A fresh stage may reuse fixed-Q weights without restoring its old data cursor.
     from utils.checkpoint import initialization_model_config
     previous=replace(cfg,visual_query_mode='fixed').to_dict()
     previous.pop('visual_uncond_probability')
+    previous.pop('rf')
     assert initialization_model_config(previous)==initialization_model_config(cfg.to_dict())
 
 

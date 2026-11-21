@@ -15,6 +15,22 @@ from data.batch_layout import build_plan
 from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, generation_target
 
 
+PACK_LENGTH_BUCKETS = (2048, 4096, 8192)
+
+
+def padded_pack_length(occupied, capacity, padding_multiple=None):
+    """Choose the physical width after packing has consumed documents in stream order."""
+    if padding_multiple is None:
+        for width in PACK_LENGTH_BUCKETS:
+            if occupied <= width:
+                return min(width, capacity)
+        return capacity
+    if padding_multiple == 0:
+        return capacity
+    multiples = (occupied + padding_multiple - 1) // padding_multiple
+    return min(capacity, multiples * padding_multiple)
+
+
 def sample_objective(sample_id, probability, seed, epoch, salt):
     """Independent Bernoulli draws keyed by occurrence, safe across TP/restart.
 
@@ -43,10 +59,15 @@ def token_contract(root, cfg):
 
 class Packer:
     def __init__(self, documents, cfg, length, tokens, state=None, pin_device=None,
-                 max_images=0, padding_multiple=0):
+                 max_images=0, padding_multiple=None):
         self.documents, self.cfg, self.length, self.tokens = documents, cfg, length, tokens
         self.pin_device=pin_device
-        if max_images < 0 or padding_multiple < 0:raise ValueError('Packing limits must be nonnegative')
+        if state and padding_multiple is None:
+            # Old cursors record an integer (including zero for fixed width).
+            # Resume their original layout when no new alignment was requested.
+            padding_multiple = (state.get('packing') or {}).get('padding_multiple')
+        if max_images < 0 or (padding_multiple is not None and padding_multiple < 0):
+            raise ValueError('Packing limits must be nonnegative')
         self.max_images,self.padding_multiple=max_images,padding_multiple
         if cfg.preserve_documents and max_images:
             raise ValueError('Whole documents cannot use max_images_per_pack; use the DiT microbatch image limit')
@@ -62,6 +83,8 @@ class Packer:
             padding_multiple=padding_multiple,image_loss_permissions=LOSS_PERMISSION_CONTRACT,
             visual_query_mode=cfg.visual_query_mode,visual_queries=cfg.image_condition_queries,
             visibility='time_block_bidirectional_causal_v1')
+        if padding_multiple is None:
+            self.packing_contract['padding_buckets'] = [n for n in PACK_LENGTH_BUCKETS if n < length] + [length]
         self.packing_contract.update(cfg.wan_objective_policy())
         self.stats=dict(batches=0,pack_seconds=0.,plan_seconds=0.,pin_seconds=0.,
                         atomic_documents=0,long_document_windows=0)
@@ -290,8 +313,8 @@ class Packer:
         # Do not create the obsolete dense [2S,S] mask. The exact compact plan
         # owns masks for only the branches actually evaluated by this method.
         n_images = len(pixels)
-        if self.padding_multiple:
-            used=min(s,math.ceil(position/self.padding_multiple)*self.padding_multiple)
+        used = padded_pack_length(position, s, self.padding_multiple)
+        if used < s:
             ids,segment,sigma=ids[:used],segment[:used],sigma[:used]
             rope,image_queries=rope[:,:used],image_queries[:used]
         indices=np.full((n_images,max(map(len,image_indices),default=0)),-1,np.int64)
@@ -311,7 +334,7 @@ class Packer:
             queries=[math.prod(vision_grids[i])//4 if cfg.visual_query_mode=='native' else cfg.image_condition_queries for i in generation_image_indices]
             batch.generation=WanGenerationInputs.prepare([pixels[i] for i in generation_image_indices],queries,cfg.dit_width//cfg.dit_heads,
                 cfg.generation_token_budget,cfg.generation_microbatch_images,
-                cached_latents=[visual_latents[i] for i in generation_image_indices])
+                cached_latents=[visual_latents[i] for i in generation_image_indices],rf=cfg.rf)
             batch.generation.cache_keys=tuple(visual_cache_keys[i][1] for i in generation_image_indices)
         if vision_pixels:
             from data.vision import VisionInputs
@@ -343,14 +366,14 @@ class Packer:
         self.stats['pack_seconds']+=time.perf_counter()-began
         self.serial += 1
         receipt = dict(serial=self.serial, next_state=self.state_dict(), documents=records,
-                       body_tokens=body_count, occupied=position, images=n_images,
+                       body_tokens=body_count, occupied=position, physical_length=used, images=n_images,
                        generation_images=batch.generation_image_count,
                        condition_query_tokens=int(batch.mainline.query_image.sum()),
                        unconditional_images=sum(generation_unconditional),
                        instruction_dropped_images=sum(instruction_dropped),
                        instruction_dropout_eligible_images=instruction_dropout_eligible_images,
                        generation_tokens=generation_tokens,
-                       dit_microbatches=(max(1,len(batch.generation.microbatches)) if batch.generation else 0),
+                       dit_microbatches=(batch.generation.dit_microbatch_count if batch.generation else 0),
                        ids_sha256=hashlib.sha256(ids.tobytes()).hexdigest())
         return batch, receipt
 

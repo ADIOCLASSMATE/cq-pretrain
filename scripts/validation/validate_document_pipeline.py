@@ -34,7 +34,7 @@ def audit(args,preserve):
         sequence_length=length)
     source=PrefixStream(docs,args.documents)
     packer=Packer(source,cfg,length,token_contract(args.data_root,cfg),
-        max_images=0 if preserve else 16,padding_multiple=128)
+        max_images=0 if preserve else 16)
     result=dict(sequence_length=length,preserve_documents=preserve,documents=args.documents,images=0,body_tokens=0,
         occupied_tokens=0,physical_slots=0,backbone_slots_including_queries=0,
         generation_tokens=0,dit_microbatches=0,document_fragments=0,document_continuations=0,
@@ -54,8 +54,15 @@ def audit(args,preserve):
                 if r['element'] or r['offset']:result['document_continuations']+=1
                 result['document_fragments']+=1
             layout=batch.generation
-            sizes=[sum(p.layout.lengths) for p in layout.microbatches] if layout and layout.microbatches else [sum(layout.lengths)] if layout else []
-            if preserve and any(n>cfg.generation_token_budget for n in sizes):raise AssertionError('Unbounded DiT chunk')
+            sizes = []
+            if layout:
+                if layout.microbatches:
+                    sizes = [sum(part.layout.lengths)*min(part.draws_per_chunk, layout.rf-first)
+                             for part in layout.microbatches for first in part.draw_ranges(layout.rf)]
+                else:
+                    sizes = [sum(layout.lengths)*layout.rf]
+            if preserve and cfg.generation_token_budget and any(n>cfg.generation_token_budget for n in sizes):
+                raise AssertionError('Unbounded DiT chunk')
             if layout and any(h*w*256>cfg.generation_max_pixels for _,h,w in layout.grids):raise AssertionError('Generation pixel cap exceeded')
             if batch.vision and any(h*w*256>cfg.vision_max_pixels for _,h,w in batch.vision.grid_thw):raise AssertionError('Vision pixel cap exceeded')
             for key,amount in dict(images=receipt['images'],body_tokens=receipt['body_tokens'],
@@ -74,7 +81,7 @@ def audit(args,preserve):
     if len(result['document_details'])!=args.documents:raise AssertionError('Missing documents')
     if any(x['completed']!=1 for x in result['document_details'].values()):raise AssertionError('Document not completed exactly once')
     result['pack_count']=len(result['packs'])
-    result['context_capacity_utilization']=result['occupied_tokens']/(8192*result['pack_count'])
+    result['context_capacity_utilization']=result['occupied_tokens']/(length*result['pack_count'])
     result['cpu_documents_per_second']=args.documents/result['cpu_seconds']
     return result
 

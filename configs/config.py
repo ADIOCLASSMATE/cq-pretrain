@@ -111,6 +111,7 @@ class DataConfig:
     preserve_documents: bool = False
     long_document_policy: str = "window"
     generation_microbatch_images: int = 0
+    rf: int = 4  # Independent rectified-flow draws per supervised visual.
     visual_uncond_probability: float = 0.1
     # Drawn only for eligible targets left conditional by the existing null policy.
     visual_instruction_dropout_probability: float = 0.0
@@ -120,6 +121,8 @@ class DataConfig:
     def wan_objective_policy(self):
         policy = dict(visual_uncond_probability=self.visual_uncond_probability,
                       objective_policy="wan_occurrence_prefix_v1")
+        if self.rf != 1:
+            policy['rf'] = self.rf
         if self.visual_instruction_dropout_probability:
             policy['visual_instruction_dropout_probability'] = self.visual_instruction_dropout_probability
         return policy
@@ -139,6 +142,8 @@ class RunConfig(ModelConfig, DataConfig, LossConfig):
             raise ValueError("Generation must fit one 16x16 cell")
         if self.generation_token_budget < 0 or self.generation_microbatch_images < 0:
             raise ValueError("Generation microbatch limits must be nonnegative")
+        if type(self.rf) is not int or self.rf < 1:
+            raise ValueError("rf must be a positive integer")
         if not 0 <= self.visual_uncond_probability <= 1:
             raise ValueError("Unconditional probability must be between 0 and 1")
         if not 0 <= self.visual_instruction_dropout_probability <= 1:

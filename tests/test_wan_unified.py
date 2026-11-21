@@ -79,7 +79,8 @@ def test_wan_native_checkpoint_loading(tmp_path):
 
 
 @pytest.mark.parametrize('recompute',[False,True])
-def test_wan_chunks_preserve_loss_and_every_gradient(recompute):
+@pytest.mark.parametrize('rf,max_images,budget', [(1,1,0), (4,1,0), (4,0,0), (5,0,24)])
+def test_wan_chunks_preserve_loss_and_every_gradient(recompute,rf,max_images,budget):
     import copy
     from types import SimpleNamespace
     from training.renderer_schedule import backward_deferred_renderer
@@ -88,17 +89,46 @@ def test_wan_chunks_preserve_loss_and_every_gradient(recompute):
     bridge=torch.nn.Linear(32,32);renderer=Wan21Generator(cfg)
     other_bridge=copy.deepcopy(bridge);other_renderer=copy.deepcopy(renderer)
     layout=WanGenerationInputs.prepare([np.zeros((32,48,3),np.uint8),
-        np.zeros((5,48,32,3),np.uint8)],[3,7],32,max_images=1)
-    layout.time_features=torch.randn(2,32)
-    batch=SimpleNamespace(generation=layout,latents=torch.randn(sum(layout.lengths),64),
-        noise=torch.randn(sum(layout.lengths),64),times=torch.tensor([.2,.8]))
+        np.zeros((5,48,32,3),np.uint8)],[3,7],32,max_images=max_images,token_budget=budget,rf=rf)
+    patches = sum(layout.lengths)
+    layout.time_features=torch.randn(rf*2,32)
+    batch=SimpleNamespace(generation=layout,latents=torch.randn(patches,64),
+        noise=torch.randn(rf*patches,64),times=torch.rand(rf*2))
     inputs=torch.randn(2,7,32);condition=bridge(inputs)
-    expected=condition.square().mean()+.3*cfg.image_weight*renderer(condition,batch)
+    # Independent RF=1 forwards give the reference for both model and scheduled loss.
+    singles = []
+    for draw in range(rf):
+        visuals = slice(2*draw, 2*(draw+1))
+        single = SimpleNamespace(generation=replace(layout, rf=1, time_features=layout.time_features[visuals]),
+            latents=batch.latents, noise=batch.noise[patches*draw:patches*(draw+1)], times=batch.times[visuals])
+        singles.append(renderer(condition, single))
+    flow = torch.stack(singles).mean()
+    with torch.no_grad():
+        torch.testing.assert_close(renderer(condition, batch), flow)
+    expected=condition.square().mean()+.3*cfg.image_weight*flow
     (expected*.4).backward()
+    # Count the tokens each condition projection actually processes, including recomputation.
+    projected_tokens = {}
+    projections = [other_renderer.text_embedding[0], *(b.cross_attn.kv for b in other_renderer.blocks)]
+    def count(module, args):
+        projected_tokens[module] = projected_tokens.get(module, 0) + args[0].shape[0]
+    for module in projections:
+        module.register_forward_pre_hook(count)
+    dit_chunk_sizes = []
+    other_renderer.patch_embedding.register_forward_pre_hook(lambda module, args: dit_chunk_sizes.append(len(args[0])))
     actual_condition=other_bridge(inputs);text_loss=actual_condition.square().mean()
     losses=dict(loss=text_loss,text_loss=text_loss,image_conditions=actual_condition)
     visits=[];actual_condition.register_hook(lambda gradient:visits.append(True))
-    backward_deferred_renderer(SimpleNamespace(cfg=cfg,renderer=other_renderer),batch,losses,.4,image_factor=cfg.image_weight*.3)
+    if layout.microbatches:
+        backward_deferred_renderer(SimpleNamespace(cfg=cfg,renderer=other_renderer),batch,losses,.4,image_factor=cfg.image_weight*.3)
+    else:
+        losses['loss'] = text_loss + .3*cfg.image_weight*other_renderer(actual_condition,batch)
+        (losses['loss']*.4).backward()
+    if rf > 1:
+        assert all(projected_tokens[module] == sum(layout.query_counts) for module in projections)
+    assert layout.dit_microbatch_count == {(1,1,0):2, (4,1,0):8, (4,0,0):1, (5,0,24):5}[rf,max_images,budget]
+    assert len(dit_chunk_sizes) == layout.dit_microbatch_count and sum(dit_chunk_sizes) == rf * patches
+    assert not budget or max(dit_chunk_sizes) <= budget
     assert visits==[True]
     torch.testing.assert_close(losses['loss'],expected)
     for reference,actual in ((bridge,other_bridge),(renderer,other_renderer)):

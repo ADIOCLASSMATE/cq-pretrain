@@ -13,8 +13,8 @@ class Batch:
     sigma: torch.Tensor               # [B,S], image blocks have tied ranks
     segments: torch.Tensor            # [B,S], independent packed documents
     row_col: torch.Tensor             # [3,S,B], temporal/height/width RoPE
-    noise: torch.Tensor               # [total latent patches, 4C]
-    times: torch.Tensor               # [generation targets]
+    noise: torch.Tensor               # [RF * total latent patches, 4C], draw-major
+    times: torch.Tensor               # [RF * generation targets], draw-major
     generation_image_indices: torch.Tensor  # occurrence indices in this pack, in renderer order
     mainline: object = None
     generation: object = None

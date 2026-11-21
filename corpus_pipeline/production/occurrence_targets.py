@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 from data.loss_permissions import TARGET_FIELDS
 
 
-def write_shard(source, destination):
+def write_shard(source, destination, *, direction=None):
     parquet = pq.ParquetFile(source)
     table = parquet.read().combine_chunks()
     grants = table['image_loss_allowed'].chunk(0)
@@ -31,6 +31,10 @@ def write_shard(source, destination):
                                           names=[*spans.type.names, 'generation_target'])
     output = table.set_column(table.schema.get_field_index('segments'), 'segments',
                               pa.ListArray.from_arrays(segments.offsets, extended))
+    if direction is not None:
+        if direction not in ('I2T', 'T2I') or 'direction' in table.column_names:
+            raise ValueError('Expected one new I2T or T2I direction for the catalog')
+        output = output.append_column('direction', pa.repeat(pa.scalar(direction), len(output)))
     destination.parent.mkdir(parents=True, exist_ok=True)
     pq.write_table(output, destination, compression='zstd', row_group_size=parquet.metadata.row_group(0).num_rows)
     if not pq.read_table(destination).equals(output):
@@ -38,7 +42,7 @@ def write_shard(source, destination):
     return len(table), int(pc.sum(images).as_py() or 0), int(pc.sum(targets).as_py() or 0)
 
 
-def publish(source, destination):
+def publish(source, destination, *, direction=None):
     source, destination = Path(source).resolve(strict=True), Path(destination).absolute()
     if destination.exists():
         raise FileExistsError(destination)
@@ -62,7 +66,7 @@ def publish(source, destination):
             path = Path(shard['path'])
             if path.is_absolute() or '..' in path.parts or (source/path).stat().st_size != shard['bytes']:
                 raise ValueError('Invalid native shard path or size')
-            n, images, enabled = write_shard(source/path, stage/path)
+            n, images, enabled = write_shard(source/path, stage/path, direction=direction)
             if n != shard['rows']:
                 raise ValueError('Native shard row count differs from the published catalog')
             published = dict(shard, bytes=(stage/path).stat().st_size)
@@ -91,5 +95,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path)
     parser.add_argument('destination', type=Path)
+    parser.add_argument('--direction', choices=('I2T', 'T2I'), help='Declare one task direction for all published rows')
     args = parser.parse_args()
-    print(json.dumps(publish(args.source, args.destination)))
+    print(json.dumps(publish(args.source, args.destination, direction=args.direction)))
