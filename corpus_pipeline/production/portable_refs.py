@@ -6,7 +6,6 @@ identity is a process-local verification cache, never a persisted content ID.
 """
 from collections import OrderedDict
 from collections.abc import Mapping
-from functools import lru_cache
 import hashlib
 import json
 import os
@@ -114,10 +113,20 @@ def _asset_path(location, relative):
     return path
 
 
-@lru_cache(maxsize=16)
+_LAYOUT_LOCAL = threading.local()
+
+
 def _layout_db(index, pid):
+    # One connection per thread and process. The image pool resolves references
+    # from several threads at once, and a sqlite3 connection shared between
+    # them fails mid-query with "InterfaceError: bad parameter or other API
+    # misuse" (three 64-rank restarts within ~10 steps each).
     import sqlite3
-    return sqlite3.connect(Path(index).as_uri() + '?mode=ro&immutable=1', uri=True, check_same_thread=False)
+    connections = _LAYOUT_LOCAL.__dict__.setdefault('connections', {})
+    key = (str(index), pid)
+    if key not in connections:
+        connections[key] = sqlite3.connect(Path(index).as_uri() + '?mode=ro&immutable=1', uri=True)
+    return connections[key]
 
 
 def _layout_source(ref, location):
