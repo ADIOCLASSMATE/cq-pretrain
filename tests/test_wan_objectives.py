@@ -34,6 +34,7 @@ def text(*ids):return dict(type='text',input_ids=np.array(ids,dtype=np.int32))
 
 
 def picture(h=64,w=96,**flags):
+    flags.setdefault('generation_target',True)
     return dict(type='image',pixels=np.zeros((h,w,3),np.uint8),**flags)
 
 
@@ -46,17 +47,17 @@ class Documents(fixtures.Documents):
         return super().image(doc,element)
 
 
-def read_documents(rows, encode=lambda value: [11]):
+def read_documents(rows, encode=lambda value: [11], grant_field='generation_target'):
     stream = object.__new__(DocumentStream)
     stream.catalog = SimpleNamespace(read_rows=lambda *args: rows)
     stream.tokenizer = SimpleNamespace(encode_batch=lambda spans, **kw: [SimpleNamespace(ids=encode(s)) for s in spans])
     stream.special_ids = set()
     stream.counting_matches_corpus = False
-    stream.signature = {'view': 'A'}
+    stream.signature = {'view': 'A','generation_target_field':grant_field}
     return stream._load(0, 0, len(rows))['rows']
 
 
-def test_native_roles_survive_stream_and_input_images_never_become_targets():
+def test_native_occurrences_keep_declared_permissions_and_null_flags():
     # Run the real online adapter with a trivial tokenizer and in-memory catalog.
     def segment(role,turn,kind):
         return dict(role=role,turn=turn,kind=kind,text='body',image_index=0)
@@ -64,15 +65,18 @@ def test_native_roles_survive_stream_and_input_images_never_become_targets():
           dict(sample_id='generate',format='conversation',segments=[segment('user',0,'image'),segment('user',0,'text'),segment('assistant',1,'image')]),
           dict(sample_id='interleaved',format='interleaved',segments=[segment(None,None,'text'),segment(None,None,'image')])]
     for row in rows:row.update(images=[dict(path='test.png')],source_shard='',text_tokens=1)
-    rows[0]['non_cfg']=True;rows[1]['non_cfg']=False;rows[2]['images'][0]['non_cfg']=True
+    rows[0].update(direction='I2T',non_cfg=True);rows[1]['non_cfg']=False;rows[2]['images'][0]['non_cfg']=True
+    rows[1]['segments'][0]['image_loss_allowed']=False
+    rows[1]['segments'][-1]['generation_target']=True
+    rows[2]['segments'][-1]['generation_target']=True
     documents=read_documents(rows)
-    assert [d['direction'] for d in documents]==['I2T','T2I',None]
+    assert [d['direction'] for d in documents]==['I2T',None,None]
     assert [[e['generation_target'] for e in d['elements'] if e['type']=='image']
             for d in documents]==[[False],[False,True],[True]]
     assert all(e['supervised'] for e in documents[-1]['elements'] if e['type']=='text')
     assert [d['non_cfg'] for d in documents]==[True,False,None]
     assert [[e['non_cfg'] for e in d['elements'] if e['type']=='image']
-            for d in documents]==[[None],[None,None],[True]]
+            for d in documents]==[[True],[False,False],[True]]
 
 
 def test_native_single_and_multi_turn_dialogues_are_all_retained(setup):
@@ -94,15 +98,15 @@ def test_native_single_and_multi_turn_dialogues_are_all_retained(setup):
 
 
 @pytest.mark.parametrize('leading_text',[False,True])
-def test_interleaved_uses_real_prefix_without_random_cfg_dropout(setup,leading_text):
-    cfg,tokens=setup;cfg=replace(cfg,visual_uncond_probability=1.,visual_instruction_dropout_probability=1.)
+def test_full_interleaved_targets_read_their_own_real_prefix(setup,leading_text):
+    cfg,tokens=setup;cfg=replace(cfg,visual_uncond_probability=0.,visual_instruction_dropout_probability=0.)
     elements=([text(21,22)] if leading_text else [])+[picture(),text(11,12),picture(),text(13)]
     rows=[dict(id='natural',format='interleaved',templated=False,elements=elements)]
     batch,receipt=Packer(Documents(rows),cfg,64,tokens).next()
     assert batch.generation_image_indices.tolist()==[0,1]
     assert batch.generation_unconditional.tolist()==[not leading_text,False]
     assert receipt['unconditional_images']==int(not leading_text)
-    assert receipt['instruction_dropout_eligible_images']==receipt['instruction_dropped_images']==0
+    assert receipt['instruction_dropout_eligible_images']==1 and receipt['instruction_dropped_images']==0
     torch.manual_seed(23);model=JointModel(cfg).eval()
     features=torch.randn(len(batch.vision.content_indices),cfg.width)
     indices=batch.mainline.condition_indices
@@ -120,7 +124,7 @@ def test_interleaved_uses_real_prefix_without_random_cfg_dropout(setup,leading_t
 
 def test_dynamic_targets_permissions_and_text_image_losses(setup):
     cfg,tokens=setup
-    rows=[dict(id='i2t',direction='I2T',elements=[picture(128,128),text(11)]),
+    rows=[dict(id='i2t',direction='I2T',elements=[picture(128,128,image_loss_allowed=False),text(11)]),
           dict(id='natural',format='interleaved',elements=[text(12),picture(),text(13),
               picture(96,96),text(14),picture(image_loss_allowed=False),text(15)])]
     batch,receipt=Packer(Documents(rows),cfg,128,tokens).next()
@@ -140,7 +144,7 @@ def test_dynamic_targets_permissions_and_text_image_losses(setup):
 def test_i2t_skips_visual_queries_vae_and_renderer(setup,monkeypatch):
     cfg,tokens=setup
     batch,receipt=Packer(Documents([dict(id='i2t',direction='I2T',non_cfg=True,
-        elements=[picture(non_cfg=True),text(11)])]),cfg,32,tokens).next()
+        elements=[picture(non_cfg=True,image_loss_allowed=False),text(11)])]),cfg,32,tokens).next()
     assert batch.generation_image_count==0 and not batch.mainline.query_image.any()
     assert batch.generation is None
     preparer=DevicePreparer(cfg,device='cpu',encoder='fake')
@@ -276,7 +280,7 @@ def test_history_queries_keep_prefix_and_cannot_read_instruction_or_target(setup
     def words(role, turn, value):
         return dict(kind='text', role=role, turn=turn, text=value, supervised=True)
     def visual(role, turn, index):
-        return dict(kind='image', role=role, turn=turn, image_index=index, image_loss_allowed=role=='assistant')
+        return dict(kind='image', role=role, turn=turn, image_index=index, generation_target=index==1)
     row = dict(sample_id='edit', format=fmt, direction='T2I', images=[dict(path='source'), dict(path='target')],
                source_shard='', segments=[words('user',0,'older'), words('assistant',1,'reply'),
                visual('user',2,0), words('user',2,'change'), words('user',2,'colour'), visual('assistant',3,1)])
@@ -352,7 +356,7 @@ def test_instruction_dropout_eligibility_and_exact_replay(setup):
         assert receipt['instruction_dropped_images'] == sum(draws)
         if receipt['serial'] == 1:
             state = receipt['next_state']
-            assert old_receipt['next_state']['packing']['objective_policy'] == 'wan_non_cfg_flag_v2'
+            assert old_receipt['next_state']['packing']['objective_policy'] == 'wan_occurrence_prefix_v1'
             assert 'visual_instruction_dropout_probability' not in old_receipt['next_state']['packing']
             replay = Packer(Documents(rows, state['documents']['index']), cfg, 24, tokens, state)
             with pytest.raises(ValueError, match='packing policy'):
@@ -364,12 +368,12 @@ def test_instruction_dropout_eligibility_and_exact_replay(setup):
 
     cfg = replace(cfg, visual_uncond_probability=0., visual_instruction_dropout_probability=1.)
     cases = [
-        [text(50), prompt, picture()],                        # Only a wrapper before the instruction.
-        [history, prompt, source, text(13), picture()],        # Image inside the proposed suffix.
+        [dict(text(50),context_text=False), prompt, picture()],                        # Only a wrapper before the instruction.
+        [history, prompt, source, picture()],        # Image inside the proposed suffix.
         [history, prompt, picture(image_loss_allowed=False)], # Permission denied.
         [history, prompt, picture(non_cfg=False)],            # Explicit full condition.
         [history, prompt, picture(non_cfg=True)],             # Explicit null condition.
-        [source, history, picture()],                         # No user instruction boundary.
+        [source, picture()],                                  # No intervening text.
     ]
     for elements in cases:
         _, receipt = Packer(Documents([dict(id='excluded', elements=elements)]), cfg, 48, tokens).next()
@@ -401,26 +405,29 @@ def test_pruned_edit_conditions_match_training_readouts(setup, visibility):
             torch.testing.assert_close(actual, expected, atol=2e-6, rtol=1e-5)
 
 
-def test_ambiguous_suffix_and_incomplete_document_cannot_be_history(setup):
+def test_last_text_group_ignores_role_and_windows_do_not_invent_history(setup):
     cfg, tokens = setup
     cfg = replace(cfg, visual_uncond_probability=0., visual_instruction_dropout_probability=1.)
     for role, extra in [(None, []), ('user', [dict(kind='text', text='tool result', role='tool', turn=2)])]:
         segments = [dict(kind='text', text='earlier', role='assistant', turn=0),
                     dict(kind='text', text='instruction', role=role, turn=1), *extra,
-                    dict(kind='image', image_index=0, role='assistant', turn=3)]
-        row = dict(sample_id='ambiguous', format='conversation', images=[dict(path='target')], segments=segments)
+                    dict(kind='image', image_index=0, role='assistant', turn=3,generation_target=True)]
+        row = dict(sample_id='ambiguous', format='conversation', image_loss_allowed=True, images=[dict(path='target')], segments=segments)
         doc, = read_documents([row])
         for e in doc['elements']:
             if e['type']=='image':
                 e['pixels'] = picture()['pixels']
         batch, receipt = Packer(Documents([doc]), cfg, 48, tokens).next()
-        assert batch.generation_image_count == 1 and receipt['instruction_dropout_eligible_images'] == 0
-    doc = dict(id='windowed', format='conversation', elements=[
-        dict(text(*([11]*30)), context_text=True), dict(text(12), context_text=True, instruction_start=True), picture()])
-    packer = Packer(Documents([doc]), replace(cfg,preserve_documents=False), 24, tokens)
-    packer.next()
-    batch, receipt = packer.next()
-    assert batch.generation_image_count == 1 and receipt['instruction_dropout_eligible_images'] == 0
+        assert batch.generation_image_count == receipt['instruction_dropout_eligible_images'] == 1
+    for new_group in (False,True):
+        doc = dict(id='windowed', format='conversation', elements=[
+            dict(text(*([11]*30)), context_text=True),
+            dict(text(12), context_text=True, instruction_start=new_group), picture()])
+        packer = Packer(Documents([doc]), replace(cfg,preserve_documents=False), 24, tokens)
+        packer.next()
+        batch, receipt = packer.next()
+        assert batch.generation_image_count == 1
+        assert receipt['instruction_dropout_eligible_images'] == receipt['instruction_dropped_images'] == int(new_group)
 
 
 def test_malformed_history_flags_cannot_hide_a_source_image(setup):

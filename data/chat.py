@@ -88,10 +88,6 @@ def closing():
     return text(TURN_END, True, True)
 
 
-def image(index):
-    return dict(kind='image', image_index=index)
-
-
 def header(role, first):
     """The packer's document BOS stands in for the first ``<|im_start|>``."""
     return scaffold(role if first else IM_START + role)
@@ -112,13 +108,13 @@ def caption_spans(segments, direction, sample_id):
     picture = next(s for s in segments if s['kind'] == 'image')
     spans = [header(ROLE_USER, True)]
     if direction == 'T2I':
-        spans.append(dict(scaffold(choose(T2I_INSTRUCTIONS, sample_id, 't2i')), instruction_start=True))
+        spans.append(scaffold(choose(T2I_INSTRUCTIONS, sample_id, 't2i')))
         spans.append(corpus(body['text']))
         spans.append(closing())
         spans.append(header(ROLE_ASSISTANT, False))
-        spans.append(image(picture['image_index']))
+        spans.append(picture)
     else:
-        spans.append(image(picture['image_index']))
+        spans.append(picture)
         spans.append(scaffold(choose(I2T_INSTRUCTIONS, sample_id, 'i2t')))
         spans.append(closing())
         spans.append(header(ROLE_ASSISTANT, False))
@@ -142,16 +138,14 @@ def conversation_spans(segments):
                 spans.append(closing())
             spans.append(header(ROLE_ASSISTANT if role == 'assistant' else ROLE_USER, first))
             current, first = (role, turn), False
-            pending_instruction = role == 'user'
+            first_text = True
         if segment['kind'] == 'image':
-            spans.append(dict(image(segment['image_index']),role=role))
+            spans.append(segment)
         elif segment['text']:
-            span = dict(corpus(segment['text']), instruction_text=segment.get('role') == 'user')
-            if pending_instruction and segment['text'].strip():
-                # A fallback role is sufficient to reproduce the template, but
-                # only an explicitly attributed turn identifies an instruction.
-                span['instruction_start'] = span['instruction_text']
-                pending_instruction = False
+            span = corpus(segment['text'])
+            if segment['text'].strip():
+                span['instruction_start'] = first_text or segment.get('instruction_start', False)
+                first_text = False
             spans.append(span)
     if current is not None:
         spans.append(closing())
@@ -167,17 +161,14 @@ def causal_spans(segments):
         if current!=key:
             if current is not None:spans.append(closing())
             spans.append(header(role+'\n',current is None));current=key
-            pending_instruction = role == 'user'
+            first_text = True
         if segment['kind']=='image':
-            span=dict(image(segment['image_index']),role=role,image_loss_allowed=segment['image_loss_allowed'])
-            if 'upstream_image' in segment:
-                span['upstream_image']=segment['upstream_image']
-            spans.append(span)
+            spans.append(segment)
         elif segment['text']:
-            span = dict(text(segment['text'], segment['supervised'], False), instruction_text=role == 'user')
-            if pending_instruction and segment['text'].strip():
-                span['instruction_start'] = True
-                pending_instruction = False
+            span = text(segment['text'], segment.get('supervised', True), False)
+            if segment['text'].strip():
+                span['instruction_start'] = first_text or segment.get('instruction_start', False)
+                first_text = False
             spans.append(span)
     if current is not None:spans.append(closing())
     return spans
@@ -185,7 +176,8 @@ def causal_spans(segments):
 
 def natural_spans(segments):
     """Interleaved documents stay natural documents; no chat wrapper."""
-    return [image(s['image_index']) if s['kind'] == 'image' else corpus(s['text'])
+    return [s if s['kind'] == 'image' else
+            dict(text(s['text'],s.get('supervised',True),False),instruction_start=s.get('instruction_start',False))
             for s in segments if s['kind'] == 'image' or s['text']]
 
 
@@ -203,14 +195,12 @@ def build(row):
     segments = row['segments']
     fmt = row.get('format')
     if fmt == 'causal_sequence':
-        return causal_spans(segments),row['direction'],True
+        return causal_spans(segments),row.get('direction'),True
     if fmt == 'caption':
         direction = raw_direction(segments)
         if direction is not None:
             return caption_spans(segments, direction, row['sample_id']), direction, True
         return natural_spans(segments), None, False
     if fmt in ('conversation', 'text_conversation', 'conditional_generation'):
-        roles = [s.get('role') or 'user' for s in segments if s['kind'] == 'image']
-        direction = ('T2I' if 'assistant' in roles else 'I2T') if roles else None
-        return conversation_spans(segments), direction, True
+        return conversation_spans(segments), row.get('direction'), True
     return natural_spans(segments), None, False

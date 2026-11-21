@@ -79,6 +79,8 @@ class Catalog:
         self.meta = dict(identity=identity, manifest=manifest, units=total, block_rows=block_rows,
                          documents=sum(int(x['rows']) for x in self.shards),
                          tokenizer=lock, development=bool(manifest.get('synthetic', False)))
+        if 'training_geometry' in manifest:
+            self.meta['training_geometry'] = manifest['training_geometry']
         self.local = threading.local()
         self.caches, self.lock = [], threading.Lock()
 
@@ -133,7 +135,7 @@ class Catalog:
             begin = ends[group - 1] if group else 0
             key = (shard, group)
             if key not in cache['groups']:
-                columns = self.COLUMNS + [name for name in (*LOSS_PERMISSION_FIELDS,'non_cfg')
+                columns = self.COLUMNS + [name for name in (*LOSS_PERMISSION_FIELDS,'generation_target','non_cfg','direction')
                                            if name in parquet.schema_arrow.names]
                 table = parquet.read_row_group(group, columns=columns, use_threads=False)
                 if table.nbytes <= self.cache_bytes:

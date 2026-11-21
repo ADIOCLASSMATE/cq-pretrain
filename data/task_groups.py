@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 from data import length_choices
+from data.loss_permissions import image_loss_allowed
 
 CONTRACT = 'family_uniform_view_and_text_seed_epoch_v1'
 STAGE1_TRAJECTORIES = 'full_edit_gen80_und20_v1'
@@ -133,7 +134,7 @@ def _render(row, seed, epoch, task=None, view_index=None):
     allowed=any(s['kind']=='image' and s['image_loss_allowed'] for s in segments)
     images=[dict(ref,preserve_full_frame=True) for ref in images]
     return dict(row,format='causal_sequence',segments=segments,images=images,direction='T2I' if allowed else 'I2T',
-        source_shard='',text_tokens=None,image_loss_allowed=allowed,
+        source_shard='',text_tokens=None,image_loss_allowed=image_loss_allowed(row) and allowed,
         training_view=dict(task=kind,index=index,family_id=row['family_id'],text_choices=choices),
         typed_conditions={**{k:v for k,v in selected_condition.items() if v is not None},
                           **{k:row[k] for k in ('mask_bindings',) if k in row}})

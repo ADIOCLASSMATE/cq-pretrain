@@ -163,7 +163,7 @@ def main():
                         help='Published corpus directory or mixed-source YAML')
     parser.add_argument('--validation-suite', type=Path, default=ROOT/'validation_assets/suite.json')
     parser.add_argument('--i2t-image-loss-probability',type=float,default=0.,
-                        help='Legacy MOSS sampling only; Wan always disables I2T image loss')
+                        help='I2T sampling for the MOSS objective; Wan reads release occurrence permissions')
     parser.add_argument('--cfg-null-condition',choices=('empty','empty_t2i','i2t_prefix'),
                         help='Override the null condition from the experiment configuration')
     parser.add_argument('--nodes', type=int, default=int(os.environ.get('PET_NNODES', '8')))

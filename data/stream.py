@@ -12,7 +12,7 @@ from data.catalog import permute
 from data.sources import open_catalog
 from data.images import ImageReader
 from data.tokenizer import tokenizer_root, tokenizer_metadata
-from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed
+from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed, occurrence_flags, occurrence_images
 import data.chat as chat
 import data.captions as captions
 import data.task_groups as task_groups
@@ -40,9 +40,8 @@ class DocumentStream:
         self.catalog = open_catalog(root, source_root, block_rows, cache_bytes)
         geometry = self.catalog.meta.get('training_geometry')
         if geometry and view == 'A' and cfg is not None and native_images:
-            if (cfg.vision_max_pixels != geometry['vision_max_pixels']
-                    or cfg.generation_max_pixels != geometry['generation_max_pixels']
-                    or sequence_length < geometry['sequence_length']):
+            if (any(getattr(cfg, key) != geometry[key] for key in ('vision_max_pixels','generation_max_pixels') if key in geometry)
+                    or sequence_length < geometry.get('sequence_length', sequence_length)):
                 raise ValueError('Training geometry differs from the published length selection')
         membership = self.catalog.check(allow_development)
         self.tokenizer_info=tokenizer_metadata(cfg,self.catalog.meta['tokenizer'])
@@ -54,7 +53,8 @@ class DocumentStream:
                               block_rows=block_rows, native_images=native_images,
                               image_size=image_size, tokenization='qwen35_chat_template_v1',
                               tokenizer=self.tokenizer_info,
-                              image_loss_permissions=LOSS_PERMISSION_CONTRACT)
+                              image_loss_permissions=LOSS_PERMISSION_CONTRACT,
+                              generation_target_field=self.catalog.meta.get('generation_target_field', 'generation_target'))
         if self.catalog.meta.get('caption_sampling'):
             if self.catalog.meta['caption_sampling'] != captions.CONTRACT:
                 raise ValueError('Unsupported caption sampling contract')
@@ -127,7 +127,6 @@ class DocumentStream:
         for row, (layout, direction, templated) in zip(rows, built):
             elements, counted = [], 0
             allowed = image_loss_allowed(row)
-            image_permissions = [image_loss_allowed(row, info) for info in row['images']]
             for span in layout:
                 if span['kind'] == 'text':
                     ids = next(tokens).ids
@@ -141,21 +140,17 @@ class DocumentStream:
                     elements.append(dict(type='text', input_ids=np.asarray(ids, dtype=np.int32),
                                          supervised=span['supervised'],
                                          context_text=not span['synthetic'] and bool(span['text'].strip()),
-                                         instruction_text=span.get('instruction_text', False),
                                          instruction_start=span.get('instruction_start', False)))
                 elif span['kind'] == 'image':
                     if self.signature['view'] == 'A':
-                        logical = row['images'][span['image_index']]
-                        info = span.get('upstream_image', logical)
+                        logical, info = occurrence_images(row, span)
                         locator = (dict(info) if info.get('path') or info.get('frames_path') or info.get('kind')=='rle_mask' else
                                    dict(shard=row['source_shard'], offset=info['offset'],
                                         length=info['length'], sha256=info['sha256']))
                         reference = repr(sorted(locator.items()))
                         elements.append(dict(type='image', image_ref=reference, locator=locator,
-                            image_loss_allowed=image_loss_allowed(row,logical,info,span),
-                            non_cfg=info.get('non_cfg'),
-                            generation_target=(row.get('direction',direction) not in ('I2T','V2T') and
-                                               span.get('role','assistant')=='assistant')))
+                            **occurrence_flags(row,logical,info,span,
+                                grant_field=self.signature.get('generation_target_field','generation_target'))))
                 else:
                     raise ValueError(f'Unknown span kind: {span["kind"]}')
             published_count = row.get('text_tokens')

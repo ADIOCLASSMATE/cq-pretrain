@@ -69,32 +69,16 @@ def cpu_restore_worker(root, rank):
 
 
 class CheckpointRestartTests(unittest.TestCase):
-    def test_old_wan_contract_still_rejects_another_objective_or_source_tree(self):
+    def test_resume_requires_the_same_source_and_objective(self):
         from utils.checkpoint import check_resume_contract
-        old_state = dict(backbone_adapter_sha256='685214d7b070ca5404251ce3a60413b3c2f3b6809916e074b5aa9fa2a784fbde',
-                         data=dict(adapter_sha256='178f411321296755691fa8de032a4c4b9d9f42b7958ced995bc7804007fdb7ef'),
-                         seed=42)
-        first_cutoff_state = dict(backbone_adapter_sha256='7ff2690b35a4319311dc03667258dd1033e482bbd20f74b735f49cf335076230',
-                         data=dict(adapter_sha256='89b8370775043b6a7e4eca126c16efdb8398977c5d3c24b7ece6335557f930d5'),
-                         seed=42)
-        new_state = dict(backbone_adapter_sha256='eea9babf74c113c07e83a65ee48b7bfc7b4a739948f60d85a85e743e4dd51a31',
-                         data=dict(adapter_sha256='7eda378ef7f363c4e28003d63afaafd1d9aa1feb110a4ae42cfdd2377f22e879'),
-                         seed=42)
-        config = dict(renderer='wan', visual_instruction_dropout_probability=0.)
-        manifest = dict(config=dict(renderer='wan'), training_state=old_state)
-        check_resume_contract(manifest, config, new_state)
-        check_resume_contract(dict(config=config, training_state=first_cutoff_state), config, new_state)
-        enabled = dict(config, visual_instruction_dropout_probability=.1)
-        with self.assertRaisesRegex(ValueError, 'checkpoint'):
-            check_resume_contract(dict(config=enabled, training_state=first_cutoff_state), enabled, new_state)
-        with self.assertRaisesRegex(ValueError, 'configuration'):
-            check_resume_contract(manifest, dict(config, visual_instruction_dropout_probability=.1), new_state)
-        for other in (dict(new_state, seed=43), dict(new_state, backbone_adapter_sha256='different'),
-                      dict(new_state, data=dict(adapter_sha256='different'))):
-            with self.assertRaisesRegex(ValueError, 'checkpoint'):
-                check_resume_contract(manifest, config, other)
-        with self.assertRaisesRegex(ValueError, 'checkpoint'):
-            check_resume_contract(dict(manifest, config=config), config, new_state)
+        config=dict(renderer='wan',visual_instruction_dropout_probability=0.)
+        state=dict(data=dict(adapter_sha256='release-adapter'),seed=42)
+        manifest=dict(config=config,training_state=state)
+        check_resume_contract(manifest,config,state)
+        with self.assertRaisesRegex(ValueError,'checkpoint'):
+            check_resume_contract(manifest,config,dict(state,data=dict(adapter_sha256='other')))
+        with self.assertRaisesRegex(ValueError,'configuration'):
+            check_resume_contract(manifest,dict(config,visual_instruction_dropout_probability=.1),state)
 
     def test_old_formats_are_rejected_before_loading_weights(self):
         import utils.checkpoint as checkpoint_io

@@ -39,12 +39,16 @@ class JsonlCatalog:
         return rows
 
     def normalize(self, row, index):
-        task = row.get('task', self.source.get('task', '')).lower()
-        if task not in ('t2v','v2t','t2i','i2t'):
-            raise ValueError('JSONL records require task=t2i/i2t/t2v/v2t')
-        video = task.endswith('v') or task.startswith('v')
+        task = (row.get('task') or self.source.get('task') or '').lower()
+        native = 'segments' in row
+        messages=row.get('messages')
+        if not native and messages is None and task not in ('t2v','v2t','t2i','i2t'):
+            raise ValueError('Caption shorthand requires a direction or explicit segments')
+        video = not native and task in ('t2v','v2t')
         key = 'videos' if video else 'images'
         media = row.get(key)
+        if media is None and native:
+            media=[]
         if media is None:
             media = [dict(path=row.get('video_path' if video else 'image_path'),
                           **{k:row[k] for k in ('frames_path','fps','start_seconds','num_frames') if k in row})]
@@ -55,35 +59,35 @@ class JsonlCatalog:
             if video:
                 item['video']=True
                 item['settings']=self.source.get('video', {'mode':'native'})
-        messages=row.get('messages')
+        common=dict(sample_id=str(row.get('sample_id',f'{self.path.stem}:{index}')),images=media,
+                    source_shard='',text_tokens=None)
+        if native:
+            return dict(row, **common, format=row.get('format','interleaved'))
         if messages is None:
             caption=row[self.source.get('caption_field','caption')]
             visual=dict(type='video' if video else 'image', index=0)
+            if 'generation_target' in row:
+                visual['generation_target'] = row['generation_target']
             text=dict(type='text',text=caption)
             messages=([dict(role='user',content=[text]),dict(role='assistant',content=[visual])]
                 if task.startswith('t') else
                 [dict(role='user',content=[visual]),dict(role='assistant',content=[text])])
-        segments=[]; seen=[]
+        segments=[]
         for turn,message in enumerate(messages):
             content=message['content']
             if isinstance(content,str):content=[dict(type='text',text=content)]
             for item in content:
-                segment=dict(role=message['role'],turn=turn)
-                if item['type']=='text':segment.update(kind='text',text=item['text'])
+                segment=dict(role=message.get('role'),turn=turn)
+                if item['type']=='text':segment.update(item,kind='text')
                 elif item['type'] in ('image','video'):
                     idx=item.get('index',0)
                     if 'video_id' in item:
                         idx=next(i for i,m in enumerate(media) if m.get('id','v0')==item['video_id'])
                     if not 0 <= idx < len(media):raise ValueError('Visual reference out of range')
-                    segment.update(kind='image',image_index=idx);seen.append(message['role'])
+                    segment.update(item,kind='image',image_index=idx)
                 else:raise ValueError(f'Unsupported content type: {item["type"]}')
                 segments.append(segment)
-        target=task.startswith('t')
-        if not seen or any(role != ('assistant' if target else 'user') for role in seen):
-            raise ValueError('Generation targets belong in assistant; understanding visuals belong in user')
-        return dict(row, sample_id=str(row.get('sample_id',f'{self.path.stem}:{index}')),
-                    images=media, segments=segments, format='conversation', direction=task.upper(),
-                    source_shard='', text_tokens=0, image_loss_allowed=target and row.get('image_loss_allowed',True))
+        return dict(row, **common, segments=segments, format='conversation', direction=task.upper() or None)
 
     def close(self): pass
 
@@ -129,9 +133,37 @@ class MixedCatalog:
         for c in self.catalogs:c.close()
 
 
-def open_catalog(root, source_root=None, block_rows=2048, cache_bytes=128<<20):
-    path=Path(root).resolve()
+def release_entry(root):
+    path = Path(root).resolve()
+    if path.is_dir() and (path/'sources.yaml').is_file():
+        return path/'sources.yaml'
+    return path
+
+
+def release_geometry(root):
+    """Read only the entry declaration, before constructing the shuffled block index."""
+    path = release_entry(root)
     if path.is_dir():
+        path = path/'manifest.json'
+    if path.name == 'manifest.json' and path.is_file():
+        entry = json.loads(path.read_text())
+    elif path.suffix in ('.yaml', '.yml') and path.is_file():
+        import yaml
+        entry = yaml.safe_load(path.read_text())
+    else:
+        return {}
+    geometry = entry.get('training_geometry', {})
+    for key in ('sequence_length','shuffle_block_rows','vision_max_pixels','generation_max_pixels'):
+        if key in geometry and (type(geometry[key]) is not int or geometry[key] < 1):
+            raise ValueError(f'training_geometry.{key} must be a positive integer')
+    return geometry
+
+
+def open_catalog(root, source_root=None, block_rows=2048, cache_bytes=128<<20):
+    path=release_entry(root)
+    if path.is_dir() or path.name == 'manifest.json':
+        if path.is_file():
+            path = path.parent
         manifest=json.loads((path/'manifest.json').read_text())
         if manifest.get('schema_version') == 'corpus.combined_training.v1':
             from corpus_pipeline.postprocess.reconcile import file_sha, validate_artifacts
@@ -167,5 +199,23 @@ def open_catalog(root, source_root=None, block_rows=2048, cache_bytes=128<<20):
         return Catalog(path,source_root,block_rows,cache_bytes)
     if path.suffix=='.jsonl':return JsonlCatalog(path,block_rows,{})
     import yaml
-    sources=yaml.safe_load(path.read_text())['sources']
-    return MixedCatalog(path,sources,block_rows,cache_bytes)
+    entry=yaml.safe_load(path.read_text())
+    if 'catalog' in entry:
+        manifest = (path.parent/entry['catalog']).resolve(strict=True)
+        if ('sources' in entry or manifest.name != 'manifest.json' or
+                hashlib.sha256(manifest.read_bytes()).hexdigest() != entry['catalog_sha256']):
+            raise ValueError('Training entry does not match its pinned catalog manifest')
+        catalog = open_catalog(manifest, source_root, block_rows, cache_bytes)
+    else:
+        catalog=MixedCatalog(path,entry['sources'],block_rows,cache_bytes)
+    field = entry.get('generation_target_field', 'generation_target')
+    if field not in ('generation_target','image_loss_allowed'):
+        raise ValueError('Invalid generation_target_field in the release entry')
+    catalog.meta['generation_target_field'] = field
+    if 'training_geometry' in entry:
+        existing = catalog.meta.get('training_geometry', {})
+        geometry = entry['training_geometry']
+        if any(geometry[k] != existing[k] for k in existing.keys() & geometry.keys()):
+            raise ValueError('Training geometry conflicts with the pinned catalog')
+        catalog.meta['training_geometry'] = {**existing, **geometry}
+    return catalog

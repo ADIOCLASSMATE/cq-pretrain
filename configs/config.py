@@ -152,10 +152,9 @@ class DataConfig:
 
     def wan_objective_policy(self):
         policy = dict(visual_uncond_probability=self.visual_uncond_probability,
-                      objective_policy="wan_non_cfg_flag_v2")
+                      objective_policy="wan_occurrence_prefix_v1")
         if self.visual_instruction_dropout_probability:
-            policy.update(objective_policy="wan_instruction_cutoff_v4",
-                          visual_instruction_dropout_probability=self.visual_instruction_dropout_probability)
+            policy['visual_instruction_dropout_probability'] = self.visual_instruction_dropout_probability
         return policy
 
 

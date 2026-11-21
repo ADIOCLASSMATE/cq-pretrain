@@ -102,22 +102,6 @@ def check_resume_contract(manifest, current, training_state):
     if saved_config != current:
         raise ValueError('Resume model configuration differs from the checkpoint')
     saved = manifest.get('training_state')
-    if saved == training_state:
-        return
-    if saved is not None and current.get('visual_instruction_dropout_probability') == 0.:
-        # These two complete, verified source revisions give bit-identical
-        # training with dropout disabled. Still record actual hashes on save.
-        if 'visual_instruction_dropout_probability' not in manifest['config']:  # 7ac9164
-            backbone_hash = '685214d7b070ca5404251ce3a60413b3c2f3b6809916e074b5aa9fa2a784fbde'
-            data_hash = '178f411321296755691fa8de032a4c4b9d9f42b7958ced995bc7804007fdb7ef'
-        else:  # f39df8f
-            backbone_hash = '7ff2690b35a4319311dc03667258dd1033e482bbd20f74b735f49cf335076230'
-            data_hash = '89b8370775043b6a7e4eca126c16efdb8398977c5d3c24b7ece6335557f930d5'
-        data = saved.get('data')
-        if saved.get('backbone_adapter_sha256') == backbone_hash and (data is None or data.get('adapter_sha256') == data_hash):
-            saved = dict(saved, backbone_adapter_sha256='eea9babf74c113c07e83a65ee48b7bfc7b4a739948f60d85a85e743e4dd51a31')
-            if data is not None:
-                saved['data'] = dict(data, adapter_sha256='7eda378ef7f363c4e28003d63afaafd1d9aa1feb110a4ae42cfdd2377f22e879')
     if saved != training_state:
         raise ValueError('Resume schedule, batch or data seed differs from the checkpoint')
 

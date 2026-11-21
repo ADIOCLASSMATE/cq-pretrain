@@ -40,7 +40,7 @@ def parse_args(argv=None):
     parser.add_argument('--image-condition-queries', type=int)
     parser.add_argument('--visual-query-mode',choices=('native','fixed'))
     parser.add_argument('--i2t-image-loss-probability',type=float,
-                        help='Legacy MOSS only; Wan I2T always has zero image loss')
+                        help='I2T sampling for the MOSS objective; Wan reads release occurrence permissions')
     parser.add_argument('--cfg-null-condition',choices=('empty','empty_t2i','i2t_prefix'),
                         help='Null template used by qualitative CFG sampling; inherits the model config')
     parser.add_argument('--tp', type=int, default=1)
@@ -136,6 +136,11 @@ def parse_args(argv=None):
         destinations={a.dest for a in parser._actions}
         if set(defaults)-destinations:parser.error(f'Unknown training settings: {set(defaults)-destinations}')
         parser.set_defaults(**defaults)
+    data_root = preliminary.data_snapshot or parser.get_default('data_snapshot')
+    if data_root:
+        from data.sources import release_geometry
+        geometry = release_geometry(data_root)
+        parser.set_defaults(**{k:geometry[k] for k in ('sequence_length','shuffle_block_rows') if k in geometry})
     args=parser.parse_args(argv)
     if not args.output:parser.error('Set --output or training.output in the experiment config')
     for key in ('validation_suite','init_checkpoint','checkpoint_dir','eval_snapshot_dir'):
@@ -215,6 +220,10 @@ def main():
         from data.packing import token_contract
         catalog = open_catalog(args.data_snapshot, args.source_root, args.shuffle_block_rows)
         membership = catalog.check(args.allow_development_data)
+        geometry = catalog.meta.get('training_geometry', {})
+        for name in ('vision_max_pixels', 'generation_max_pixels'):
+            if name in geometry:
+                setattr(cfg, name, geometry[name])
         data_tokens = token_contract(catalog.path, cfg)
         if args.micro_batch != 1:
             raise ValueError('Real variable-layout adapter currently requires the requested microbatch=1')

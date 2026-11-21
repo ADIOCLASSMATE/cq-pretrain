@@ -5,6 +5,7 @@ import json
 
 import pyarrow.parquet as pq
 from corpus_pipeline.production.common import file_sha
+from data.loss_permissions import bound_flags, occurrence_images
 
 
 CONTRACT = 'draw_existing_candidate_then_bound_upstream_v1'
@@ -68,10 +69,25 @@ def bound_ref(ref, original, row):
     for key in ('preserve_full_frame','conditioning_mask'):
         if key in original:
             result.setdefault(key, original[key])
-    for key in ('image_loss_allowed','dcvlm_image_loss_allowed'):
-        if original.get(key) is False:
-            result[key] = False
+    result.update(bound_flags(original, ref))
     return result
+
+
+def constrain_bound_occurrences(published, bound):
+    """Upstream alternatives bind the same visual slots, even if their asset indices differ."""
+    bound['segments'] = [dict(s) for s in bound['segments']]
+    original = (s for s in published['segments'] if s['kind'] == 'image')
+    selected = (s for s in bound['segments'] if s['kind'] == 'image')
+    for left, right in zip(original, selected, strict=True):
+        logical, prior_media = occurrence_images(published, left)
+        selected_image, selected_media = occurrence_images(bound, right)
+        if not any(logical.get(key) and logical[key] == selected_image.get(key) for key in ('exact_identity', 'sha256')):
+            raise ValueError('Upstream alternative does not match its published visual occurrence')
+        owners = (published, logical, prior_media, left, bound, selected_image, selected_media, right)
+        flags = bound_flags(*owners)
+        if flags.get('generation_target') and not (left.get('generation_target') or right.get('generation_target')):
+            del flags['generation_target']
+        right.update(flags)
 
 
 def caption_record(row, candidate, seed, epoch):
@@ -84,10 +100,12 @@ def caption_record(row, candidate, seed, epoch):
     binding = row.get('_upstream_binding')
     if binding:
         context = binding['contexts'][binding['owners'][key]]
+        published = row
         row = dict(row)
         for field in ('source_policy', 'metadata', 'caption_provenance', 'original_locator_json', 'adapter_metadata_json'):
             row.pop(field, None)
         row.update(context, images=with_roots(context['images'], row))
+        constrain_bound_occurrences(published, row)
     elif isinstance(origin, dict) and origin.get('source') and origin['source'] != row.get('source'):
         raise ValueError('Cross-source caption has no bound image context')
     else:
@@ -253,5 +271,6 @@ def task_record(row, draw, seed, epoch):
         chosen.append(dict(event=slot, choice=local, provenance=options[local]['provenance']))
     scoped['sample_id'] = row['sample_id']
     scoped['images'] = with_roots(scoped['images'], row)
+    constrain_bound_occurrences(draw, scoped)
     scoped['training_view'].update(index=index, source_view_index=v, text_choices=chosen)
     return _resolved(scoped, dict(source=branch['source'], member=branch['source_member'], view=v))

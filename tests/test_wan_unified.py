@@ -211,9 +211,9 @@ def test_native_video_serialization_and_mixed_source_resume(tmp_path):
     np.testing.assert_array_equal(sequence['ids'],official['input_ids'][0].numpy())
     np.save(tmp_path/'frames.npy',rgb.permute(0,2,3,1).numpy())
     Image.fromarray(np.zeros((64,96,3),np.uint8)).save(tmp_path/'image.png')
-    rows=[dict(task='v2t',caption='A dark video.',frames_path='frames.npy',fps=10),
-          dict(task='t2v',caption='Another video.',frames_path='frames.npy',fps=10),
-          dict(task='t2i',caption='A dark image.',image_path='image.png')]
+    rows=[dict(task='v2t',generation_target=False,caption='A dark video.',frames_path='frames.npy',fps=10),
+          dict(task='t2v',generation_target=True,caption='Another video.',frames_path='frames.npy',fps=10),
+          dict(task='t2i',generation_target=True,caption='A dark image.',image_path='image.png')]
     (tmp_path/'items.jsonl').write_text(''.join(json.dumps(x)+'\n' for x in rows))
     import yaml
     source=tmp_path/'sources.yaml'

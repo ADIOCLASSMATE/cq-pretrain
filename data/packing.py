@@ -108,7 +108,8 @@ class Packer:
             item['cache_keys']=identities
             if cached[0] is not None:item['cached_features']=cached[0]['features']
             if cached[1] is not None:item['cached_latent']=cached[1]['latent']
-        if self.cfg.preserve_documents or doc.get('format') in ('conditional_generation','causal_sequence'):
+        if self.cfg.preserve_documents or (self.cfg.renderer != 'wan' and
+                doc.get('format') in ('conditional_generation','causal_sequence')):
             self.prepared_images[key]=self.pending_image[1]
         return self.pending_image[1]
 
@@ -162,27 +163,28 @@ class Packer:
             doc = self.documents.peek()
             if doc is None:
                 break
-            conditional=doc.get('format') in ('conditional_generation','causal_sequence')
+            legacy = cfg.renderer != 'wan'
+            conditional=legacy and doc.get('format') in ('conditional_generation','causal_sequence')
+            legacy_caption=legacy and doc.get('format')=='caption'
             preserve=cfg.preserve_documents or conditional
             signature=getattr(self.documents,'signature',{})
             seed,epoch=signature.get('seed',0),signature.get('epoch',0)
             # Only image-first caption pairs have the fixed trained null
             # prefix. Conversation/interleaved images may have real context.
-            is_null=doc.get('format')=='caption' and doc.get('direction')=='I2T'
+            is_null=legacy_caption and doc.get('direction')=='I2T'
             sampled_image=not is_null or select_i2t_image(doc['id'],cfg.i2t_image_loss_probability,
                 seed,epoch)
-            if cfg.renderer=='wan' and doc.get('direction') in ('I2T','V2T'):sampled_image=False
             # This is an objective permission, independent of source format or
             # random null-target sampling. Validate all flags before packing.
             image_loss_allowed(doc)
-            image_permissions={index:image_loss_allowed(doc,element)
+            image_permissions={index:image_loss_allowed(doc,element,grant_field='generation_target' if not legacy else None)
                 for index,element in enumerate(doc['elements']) if element['type']=='image'}
             continued=bool(self.element or self.offset)
             if not self.prepared_images:self.documents.prefetch_images(doc, self.element)
             if preserve and self.element==0 and self.offset==0:
                 needed=self.document_extent(doc)
                 if needed>s:
-                    if conditional or cfg.long_document_policy=='error' or (doc.get('format')=='caption' and doc.get('direction')=='T2I'):
+                    if conditional or cfg.long_document_policy=='error' or (legacy_caption and doc.get('direction')=='T2I'):
                         raise ValueError(f'Document {doc["id"]} exceeds {s} tokens; preserving its full context needs a longer sequence')
                     # Explicit long-document windows start at an empty pack.
                     if position:break
@@ -206,7 +208,7 @@ class Packer:
             # the first text token can otherwise strand its image in the next
             # pack with a new BOS. Preprocessed image lookahead is cached and
             # reused when this whole document moves to the next pack.
-            if not cfg.preserve_documents and doc.get('format')=='caption' and self.element==0 and self.offset==0:
+            if not cfg.preserve_documents and legacy_caption and self.element==0 and self.offset==0:
                 image_elements=[i for i,e in enumerate(doc['elements']) if e['type']=='image']
                 if len(image_elements)==1:
                     generate_image=sampled_image and image_permissions[image_elements[0]]
@@ -261,19 +263,20 @@ class Packer:
             # BOS, role headers and closings alone do not make a new CFG category.
             instruction_start = -1
             has_history = False
+            # A window can start inside a text block. Its next span alone
+            # does not establish a new instruction boundary.
+            in_text_block = continued
             while self.element < len(doc['elements']) and position < s:
                 e = doc['elements'][self.element]
                 if e['type'] == 'text':
                     available = len(e['input_ids']) - self.offset
                     take = min(available, s - position)
                     if take:
-                        if e.get('instruction_start'):
-                            instruction_start = position if has_history and not continued and self.offset == 0 else -1
-                        elif e.get('context_text') and not e.get('instruction_text'):
-                            # A cutoff cannot keep an intervening assistant/tool
-                            # response while dropping only the user instruction.
-                            instruction_start = -1
-                        has_history |= e.get('context_text', False)
+                        if e.get('context_text', True):
+                            if self.offset == 0 and (not in_text_block or e.get('instruction_start')):
+                                instruction_start = position if has_history else start
+                            in_text_block = True
+                            has_history = True
                         current_record['body_spans'].append((position,take))
                         ids[position:position+take] = e['input_ids'][self.offset:self.offset+take]
                         segment[position:position+take] = seg
@@ -293,20 +296,18 @@ class Packer:
                         sequence=e.get('video_sequence') or image_sequence(grid,t)
                         size=len(sequence['ids'])
                         if position+size>s or (self.max_images and len(pixels)>=self.max_images):break
-                        generate_image=sampled_image and image_permissions[self.element] and e.get('generation_target',True)
+                        generate_image=image_permissions[self.element]
                         unconditional=e.get('non_cfg')
                         if unconditional is None:unconditional=doc.get('non_cfg')
                         explicit_condition = unconditional is not None
                         if unconditional is None:
-                            # Training policy only fills unspecified flags. The
-                            # model consumes the flag, never the source format.
-                            natural=doc.get('format')=='interleaved' or not templated
-                            unconditional=(not (current_record['body_tokens'] or current_record['images']) if natural else
-                                sample_objective(f'{doc["id"]}:{self.element}',cfg.visual_uncond_probability,
-                                                 seed,epoch,'visual-uncond-v1'))
+                            unconditional = not has_history or sample_objective(
+                                f'{doc["id"]}:{self.element}',cfg.visual_uncond_probability,seed,epoch,'visual-uncond-v1')
+                        elif type(unconditional) is not bool:
+                            raise ValueError('non_cfg must be a boolean when specified')
                         generation_unconditional.append(generate_image and unconditional)
                         instruction_starts.append(instruction_start if generate_image else -1)
-                        eligible = generate_image and instruction_start >= 0 and not (explicit_condition or unconditional)
+                        eligible = generate_image and instruction_start > start and not (explicit_condition or unconditional)
                         instruction_dropout_eligible_images += int(eligible)
                         instruction_dropped.append(eligible and sample_objective(
                             f'{doc["id"]}:{self.element}', cfg.visual_instruction_dropout_probability,
@@ -314,6 +315,7 @@ class Packer:
                         # A later target cannot drop across this image, even when
                         # both images and multiple text spans belong to one turn.
                         has_history, instruction_start = True, -1
+                        in_text_block = False
                         stop=position+size;indices=position+sequence['visual']
                         ids[position:stop]=sequence['ids'];segment[position:stop]=seg
                         sigma[position:stop]=sequence['sigma']+position

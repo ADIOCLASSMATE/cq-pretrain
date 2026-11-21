@@ -29,7 +29,7 @@ class Batch:
     # None preserves the historical all-images target set; empty means no DiT.
     generation_image_indices: torch.Tensor | None = None
     generation_unconditional: torch.Tensor | None = None  # [visuals], explicit non-CFG; None = normal C visibility
-    generation_instruction_starts: torch.Tensor | None = None  # [visuals], packed text position; -1 if no split
+    generation_instruction_starts: torch.Tensor | None = None  # [visuals], packed text boundary, document start = empty, -1 = unavailable
     generation_instruction_dropped: torch.Tensor | None = None  # [visuals], read before the instruction start
 
     @property
