@@ -4,10 +4,10 @@ import io
 import numpy as np
 import pytest
 
-PIL = pytest.importorskip("PIL")
-from PIL import Image
+pytest.importorskip("PIL")
+from PIL import Image, ImageOps
 
-from data.images import upright
+from corpus_pipeline.dedup.dcvlm_loss_policy_reader import decode_image_bytes
 
 
 def _jpeg(exif):
@@ -17,30 +17,25 @@ def _jpeg(exif):
     return buffer.getvalue()
 
 
-def _load(blob):
-    image = Image.open(io.BytesIO(blob))
-    image.load()
-    return image
-
-
 def test_unreadable_exif_keeps_the_stored_pixels(capfd):
     blob = _jpeg(b"Exif\x00\x00" + b" " * 64)
-    # The JPEG opener swallows this error for its own DPI lookup; the RGB copy
-    # the reader works on parses the block again and raises.
+    with Image.open(io.BytesIO(blob)) as image:
+        stored = image.convert("RGB")
+    # The reader's next call on the decoded picture; this is what raised in training.
     with pytest.raises(SyntaxError):
-        _load(blob).convert("RGB").getexif()
-    result = upright(_load(blob).convert("RGB"), "abc")
+        ImageOps.exif_transpose(stored)
+    result = ImageOps.exif_transpose(decode_image_bytes(blob))
     assert result.size == (48, 32)
-    assert np.array_equal(np.asarray(result), np.asarray(_load(blob).convert("RGB")))
-    assert '"exif_unreadable": "abc"' in capfd.readouterr().err
+    assert np.array_equal(np.asarray(result), np.asarray(stored))
+    assert "exif_unreadable" in capfd.readouterr().err
 
 
-def test_valid_orientation_is_still_applied():
+def test_valid_orientation_is_still_applied(capfd):
     exif = Image.Exif()
     exif[0x0112] = 6
-    result = upright(_load(_jpeg(exif.tobytes())))
-    assert result.size == (32, 48)
+    assert ImageOps.exif_transpose(decode_image_bytes(_jpeg(exif.tobytes()))).size == (32, 48)
+    assert "exif_unreadable" not in capfd.readouterr().err
 
 
 def test_plain_image_is_untouched():
-    assert upright(_load(_jpeg(None))).size == (48, 32)
+    assert ImageOps.exif_transpose(decode_image_bytes(_jpeg(None))).size == (48, 32)

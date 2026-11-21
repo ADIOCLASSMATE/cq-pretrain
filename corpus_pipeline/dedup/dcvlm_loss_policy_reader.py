@@ -466,6 +466,25 @@ def decode_image(ref, roots, *, view=None, max_pixels=200_000_000):
     return decode_image_bytes(blob, policy=policy, max_pixels=max_pixels)
 
 
+def _drop_unreadable_exif(image, blob):
+    """Readers apply the EXIF orientation after decoding; a damaged block carries none.
+
+    Pillow parses the whole EXIF directory to find the orientation tag and
+    raises ("SyntaxError: not a TIFF file", struct.error, ...) on a damaged
+    block. The pixels are already decoded here, so the block is dropped and the
+    picture is used as stored - what any viewer shows for such a file.
+    """
+    import struct
+    import sys
+    try:
+        image.getexif()
+    except (SyntaxError, ValueError, TypeError, KeyError, IndexError, EOFError, struct.error):
+        image.info.pop('exif', None)
+        image.info.pop('Raw profile type exif', None)
+        image._exif = None
+        print(json.dumps({'exif_unreadable': hashlib.sha256(blob).hexdigest()}), file=sys.stderr, flush=True)
+
+
 def decode_image_bytes(blob, *, policy=None, max_pixels=200_000_000):
     """Apply a SHA-bound release's original/first-frame decoder contract."""
     from PIL import Image
@@ -491,6 +510,7 @@ def decode_image_bytes(blob, *, policy=None, max_pixels=200_000_000):
                     if policy is not None:
                         require(hashlib.sha256(result.tobytes()).hexdigest() == policy['frame0_rgb_sha256'],
                                 'Decoded first-frame pixels differ from repair evidence')
+                    _drop_unreadable_exif(result, blob)
                     return result
         finally:
             Image.MAX_IMAGE_PIXELS = old_bound
