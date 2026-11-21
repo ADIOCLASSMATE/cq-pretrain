@@ -234,8 +234,9 @@ class DocumentStream:
             from corpus_pipeline.production.portable_refs import read_ref_bytes
             from corpus_pipeline.dedup.dcvlm_loss_policy_reader import decode_image_bytes
             from PIL import Image, ImageOps
+            from data.images import upright
             body = read_ref_bytes(locator, roots=os.environ.get('CORPUS_DATASET_ROOTS') or locator.get('_dataset_roots'))
-            picture = ImageOps.exif_transpose(decode_image_bytes(body, policy=locator.get('_decode_policy')))
+            picture = upright(decode_image_bytes(body, policy=locator.get('_decode_policy')), locator.get('sha256'))
             if not self.image_reader.native_resolution:
                 picture = (picture.resize((self.image_reader.image_size,)*2,Image.Resampling.LANCZOS)
                            if locator.get('preserve_full_frame') else
@@ -253,8 +254,10 @@ class DocumentStream:
             body=Path(locator['path']).read_bytes(); sha=hashlib.sha256(body).hexdigest()
             if locator.get('sha256') and sha!=locator['sha256']:raise ValueError('Image content hash changed')
             locator['sha256']=sha
+            from data.images import upright
             with Image.open(io.BytesIO(body)) as image:
-                pixels=np.asarray(ImageOps.exif_transpose(image).convert('RGB')).copy()
+                image.load()
+                pixels=np.asarray(upright(image,sha).convert('RGB')).copy()
         else:
             pixels = self.image_reader.read(locator)
         if self.images_preprocessed:

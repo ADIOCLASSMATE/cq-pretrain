@@ -5,10 +5,27 @@ import io
 import json
 import os
 from pathlib import Path
+import struct
+import sys
 import threading
 
 import numpy as np
 from PIL import Image, ImageOps
+
+
+def upright(image, source=None):
+    """Apply the EXIF orientation; a malformed EXIF block carries none.
+
+    Pillow parses the whole EXIF directory to find the orientation tag and
+    raises (SyntaxError "not a TIFF file", struct.error, ...) when the block is
+    damaged. The pixels are already decoded and hash-verified at that point, so
+    the picture is used as stored - what any viewer shows for such a file.
+    """
+    try:
+        return ImageOps.exif_transpose(image)
+    except (SyntaxError, ValueError, TypeError, KeyError, IndexError, EOFError, struct.error):
+        print(json.dumps({'exif_unreadable': source}), file=sys.stderr, flush=True)
+        return image
 
 
 def atomic_json(path, value):
@@ -80,7 +97,7 @@ class ImageReader:
         with Image.open(io.BytesIO(body)) as image:
             image.seek(0)
             image.load()
-            image = ImageOps.exif_transpose(image).convert('RGB')
+            image = upright(image, locator.get('sha256')).convert('RGB')
             if not self.native_resolution:
                 image = ImageOps.fit(image, (self.image_size, self.image_size),
                                      Image.Resampling.LANCZOS, centering=(.5, .5))
