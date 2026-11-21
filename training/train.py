@@ -120,6 +120,7 @@ def parse_args(argv=None):
     parser.add_argument('--dit-microbatch-tokens',type=int,help='Wan latent-token budget per chunk across all RF draws')
     parser.add_argument('--dit-microbatch-images',type=int,help='Optional limit on image draws per DiT chunk; zero is unlimited')
     parser.add_argument('--rf', type=int, help='Rectified-flow draws per generation target (data.rf, default 4)')
+    parser.add_argument('--timestep-shift', type=float, help='Wan shift applied to logit-normal training times (default 1)')
     parser.add_argument('--max-images-per-pack', type=int, default=None, help='Legacy fragment packing only; defaults to zero for whole documents')
     parser.add_argument('--pack-padding-multiple', type=int,
                         help='Override automatic 2K/4K/8K pack widths with a multiple; zero keeps the full sequence length')
@@ -203,6 +204,7 @@ def main():
     if args.dit_microbatch_tokens is not None:cfg.generation_token_budget=args.dit_microbatch_tokens
     if args.dit_microbatch_images is not None:cfg.generation_microbatch_images=args.dit_microbatch_images
     if args.rf is not None:cfg.rf=args.rf
+    if args.timestep_shift is not None:cfg.timestep_shift=args.timestep_shift
     if not cfg.preserve_documents and (args.dit_microbatch_tokens is not None or args.dit_microbatch_images is not None):
         raise ValueError('DiT microbatch flags require --preserve-documents or the whole-document config')
     if args.max_images_per_pack is None:args.max_images_per_pack=0 if cfg.preserve_documents else 4
@@ -471,6 +473,7 @@ def main():
             mode=args.data_mode,
             latent_grid='dynamic',actual_generation_image_tokens='dynamic',
             generation_max_pixels=cfg.generation_max_pixels,generation_token_budget=cfg.generation_token_budget,rf=cfg.rf,
+            timestep_shift=cfg.timestep_shift,query_interaction=cfg.query_interaction,null_condition=cfg.null_condition,
             fake_latents=args.latent_encoder=='fake',
             local_trainable_parameters=sum(p.numel() for p in model.parameters() if p.requires_grad))
     from utils.experiment import source_hashes

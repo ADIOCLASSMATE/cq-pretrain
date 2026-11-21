@@ -124,6 +124,7 @@ class DataConfig:
     long_document_policy: str = "window"
     generation_microbatch_images: int = 0
     rf: int = 4  # Independent rectified-flow draws per supervised visual.
+    timestep_shift: float = 1.0
     visual_uncond_probability: float = 0.1
     # Drawn only for eligible targets left conditional by the existing null policy.
     visual_instruction_dropout_probability: float = 0.0
@@ -135,6 +136,8 @@ class DataConfig:
                       objective_policy="wan_occurrence_prefix_v1")
         if self.rf != 1:
             policy['rf'] = self.rf
+        if self.timestep_shift != 1.0:
+            policy['timestep_shift'] = self.timestep_shift
         # Defaults are omitted so cursors written before these axes existed resume.
         for name, default in (('query_interaction', 'none'), ('null_condition', 'masked')):
             if getattr(self, name, default) != default:
@@ -160,6 +163,8 @@ class RunConfig(ModelConfig, DataConfig, LossConfig):
             raise ValueError("Generation microbatch limits must be nonnegative")
         if type(self.rf) is not int or self.rf < 1:
             raise ValueError("rf must be a positive integer")
+        if not 0 < self.timestep_shift < float('inf'):
+            raise ValueError("timestep_shift must be finite and positive")
         if not 0 <= self.visual_uncond_probability <= 1:
             raise ValueError("Unconditional probability must be between 0 and 1")
         if not 0 <= self.visual_instruction_dropout_probability <= 1:

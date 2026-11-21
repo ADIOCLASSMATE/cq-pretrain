@@ -93,7 +93,8 @@ def save(path, model, optimizer, step, config, topology, training_state=None, da
 def check_resume_contract(manifest, current, training_state):
     saved_config = manifest['config']
     # Checkpoints predating per-visual RF sampling used a single draw.
-    if {'rf': 1, **saved_config} != {'rf': 1, **current}:
+    defaults = {'rf': 1, 'timestep_shift': 1.0}
+    if {**defaults, **saved_config} != {**defaults, **current}:
         raise ValueError('Resume model configuration differs from the checkpoint')
     saved = manifest.get('training_state')
     if saved != training_state:
@@ -161,7 +162,7 @@ def initialization_model_config(config):
     execution={'checkpoint_backbone','checkpoint_dit','checkpoint_backbone_layers',
         'checkpoint_dit_layers','ce_chunk','keep_attention_activations','preserve_documents',
         'long_document_policy','generation_token_budget','generation_microbatch_images',
-        'visual_uncond_probability','visual_instruction_dropout_probability','rf',
+        'visual_uncond_probability','visual_instruction_dropout_probability','rf','timestep_shift',
         # CQ query count selects how many read-only positions each image emits.
         # It allocates no learned tensor: queries reuse the shared image-mask
         # embedding and the backbone/DiT weights are identical at any Q. A new
@@ -184,7 +185,8 @@ def initialize_model(path, model, config):
         raise ValueError('Unsupported model initialization schema')
     config_values = config.to_dict()
     saved_config = manifest['config']
-    if saved_config.keys() - {'rf'} != config_values.keys() - {'rf'}:
+    optional_data_fields = {'rf', 'timestep_shift'}
+    if saved_config.keys() - optional_data_fields != config_values.keys() - optional_data_fields:
         raise ValueError('Initialization configuration fields differ from checkpoint')
     source_tp=manifest['topology']['tp']
     saved=initialization_model_config(saved_config)

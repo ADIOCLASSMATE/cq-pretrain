@@ -50,7 +50,9 @@ def prepare_wan(preparer,host_batch,generator):
     from data.generation import patch_latent
     began=time.perf_counter();layout=host_batch.generation
     noise=torch.randn(layout.rf*sum(layout.lengths),preparer.cfg.latent_channels*4,generator=generator)
-    times=torch.randn(layout.rf*len(layout.lengths),generator=generator).sigmoid().clamp(1e-5,1-1e-5)
+    times=torch.randn(layout.rf*len(layout.lengths),generator=generator).sigmoid()
+    shift=preparer.cfg.timestep_shift
+    times=(shift*times/(1+(shift-1)*times)).clamp_(1e-5,1-1e-5)
     frequencies=10000**(-torch.arange(preparer.cfg.wan_freq_dim//2,dtype=torch.float64)/(preparer.cfg.wan_freq_dim//2))
     phase=(times*1000).double()[:,None]*frequencies
     features=torch.cat((phase.cos(),phase.sin()),-1).float()

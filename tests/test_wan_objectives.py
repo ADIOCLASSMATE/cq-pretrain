@@ -172,6 +172,39 @@ def test_rf_draws_only_repeat_flow_randomness(setup):
         previous = ready
 
 
+def test_wan_shift_uses_the_same_noise_and_logit_normal_draws(setup):
+    from data.codec import consumption_seed
+    from utils.checkpoint import check_resume_contract, initialization_model_config
+    cfg, tokens = setup
+    row = dict(id='timestep', elements=[text(12), picture()])
+    cfg = replace(cfg, rf=2)
+    batch, receipt = Packer(Documents([row]), cfg, 128, tokens).next()
+    def prepare(current):
+        return DevicePreparer(current, device='cpu', encoder='fake')(batch, receipt)
+    original = prepare(cfg)
+    rng = torch.Generator().manual_seed(consumption_seed(receipt['next_state']['documents']['signature'], receipt['serial']))
+    noise = torch.randn(original.noise.shape, generator=rng)
+    base = torch.randn(original.times.shape, generator=rng).sigmoid()
+    torch.testing.assert_close(original.times, base.clamp(1e-5,1-1e-5), atol=0, rtol=0)
+    shifted_cfg = replace(cfg, timestep_shift=3.0)
+    shifted = prepare(shifted_cfg)
+    torch.testing.assert_close(shifted.noise, noise, atol=0, rtol=0)
+    torch.testing.assert_close(shifted.times, 3*base/(1+2*base), atol=0, rtol=0)
+    assert torch.all(shifted.times > original.times)
+    assert 'timestep_shift' not in cfg.wan_objective_policy()
+    assert shifted_cfg.wan_objective_policy()['timestep_shift'] == 3.0
+    old = cfg.to_dict()
+    del old['timestep_shift']
+    manifest = dict(config=old, training_state={})
+    check_resume_contract(manifest, cfg.to_dict(), {})
+    with pytest.raises(ValueError, match='configuration'):
+        check_resume_contract(manifest, shifted_cfg.to_dict(), {})
+    assert initialization_model_config(old) == initialization_model_config(shifted_cfg.to_dict())
+    for invalid in (0., -1., float('nan'), float('inf')):
+        with pytest.raises(ValueError, match='timestep_shift'):
+            replace(cfg, timestep_shift=invalid).validate()
+
+
 def test_i2t_skips_visual_queries_vae_and_renderer(setup,monkeypatch):
     cfg,tokens=setup
     batch,receipt=Packer(Documents([dict(id='i2t',direction='I2T',non_cfg=True,
