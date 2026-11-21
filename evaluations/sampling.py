@@ -2,8 +2,6 @@
 
 No reference captions enter generation. This is a qualitative regression suite,
 not an official GenEval/COCO score, nor a claim of decontaminated held-out data.
-MOSS schedule/latent decode adapted from OpenMOSS-Team/MOSS-Image-Base
-1ceede80badddd6a7812069619edaa5633587192 (Apache-2.0).
 """
 from dataclasses import replace
 import hashlib
@@ -61,18 +59,6 @@ def save_visual(frames,path,fps):
             for packet in stream.encode(av.VideoFrame.from_ndarray(rgb,format='rgb24')):container.mux(packet)
         for packet in stream.encode():container.mux(packet)
 
-
-def moss_sigmas(steps,shift=5.,total=1000):
-    if steps<1 or shift<=0:raise ValueError('Positive steps and shift required')
-    def grid(count,amount):
-        values=torch.linspace(1,amount/(total+amount-1),count)
-        return amount*values/(1+(amount-1)*values)
-    values=grid(steps,shift)
-    training=grid(total,1.).flip(0)
-    upper=torch.searchsorted(training,values).clamp(max=total-1)
-    lower=(upper-1).clamp(min=0)
-    nearest=torch.where((values-training[lower]).abs()<=(training[upper]-values).abs(),lower,upper)
-    return torch.cat((torch.unique_consecutive(training[nearest]),torch.zeros(1)))
 
 
 def prune_queries(batch,cfg,keep):
@@ -132,7 +118,7 @@ def encode_history(case, tokenizer, processor):
             raise ValueError('History segments must contain text or an image')
         segments.append(dict(segment, supervised=True, image_loss_allowed=False))
     elements, decoded = [], {}
-    for span in chat.causal_spans(segments):
+    for span in chat.conversation_spans(segments, explicit_turns=True):
         if span['kind'] == 'image':
             index = span['image_index']
             images = case.get('images', ())
@@ -147,8 +133,7 @@ def encode_history(case, tokenizer, processor):
             if len(ids):
                 elements.append(dict(type='text', input_ids=ids, supervised=span['supervised'],
                                      context_text=not span['synthetic'] and bool(span['text'].strip()),
-                                     instruction_start=span.get('instruction_start', False),
-                                     instruction_text=span.get('instruction_text', False)))
+                                     instruction_start=span.get('instruction_start', False)))
     return elements
 
 
@@ -160,6 +145,8 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     instruction is fixed rather than hashed: validation must stay comparable
     across steps.
     """
+    if processed is not None and tokenizer is None:
+        raise ValueError('A visual evaluation case requires the chat tokenizer')
     body=np.asarray(text_ids,dtype=np.int32)
     def element(ids,supervised=False,instruction_start=False):
         return dict(type='text',input_ids=ids,supervised=supervised,
@@ -170,19 +157,16 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     if context is not None or history:
         if tokenizer is None or task not in ('T2I','T2V') or processed is None:
             raise ValueError('Contextual generation requires a templated generation target')
-        head,end,user,assistant=encode_spans(tokenizer,[user_header,chat.TURN_END,
-            chat.IM_START+chat.ROLE_USER,chat.IM_START+chat.ROLE_ASSISTANT])
+        head,end,user,assistant,newline=encode_spans(tokenizer,[user_header,chat.IM_END,
+            '\n'+chat.IM_START+chat.ROLE_USER,'\n'+chat.IM_START+chat.ROLE_ASSISTANT,'\n'])
         closing=dict(element(end),supervised=True)
         elements=[element(head)]
         if context is not None:
             source=dict(type='image',generation_target=False,image_loss_allowed=False,prepared=context)
             elements.extend([source,closing,element(user)])
-        elements.extend([element(body,True,instruction_start=True),closing,element(assistant),picture,closing])
+        elements.extend([element(body,True,instruction_start=True),closing,element(assistant),picture,closing,element(newline)])
     elif processed is None:
         elements=[element(body,True)]
-    elif tokenizer is None:
-        # Legacy untemplated layout, retained only for direct unit tests.
-        elements=[element(body,True),picture] if task in ('T2I','T2V') else [picture,element(body,True)]
     elif task in ('T2I','T2V'):
         head,tail=encode_spans(tokenizer,[
             chat.ROLE_USER+(instruction or ('' if task=='T2V' else chat.T2I_INSTRUCTIONS[0])),
@@ -198,7 +182,6 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     if context is not None or history:
         processed={i:processed if e is picture else e['prepared'] for i,e in enumerate(elements) if e['type']=='image'}
     docs=OneDocument(elements,processed)
-    docs.doc['direction']=task
     # Fits the fixed validation examples and does not consume training data.
     image_tokens=0
     for i,e in enumerate(elements):
@@ -217,24 +200,17 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     batch.image_queries=batch.image_queries[:,:used];batch.row_col=batch.row_col[:,:used]
     batch.mainline=build_plan(batch,cfg)
     if not prune:return batch
-    if (context is not None or history) and batch.generation_image_count!=1:
-        raise ValueError('A contextual generation case must have exactly one generation target')
     if task in ('T2I','T2V'):keep=batch.mainline.query_image[0]
     else:keep=batch.mainline.query_positions==used-1
     return prune_queries(batch,cfg,keep)
 
 
-def make_null_batch(cfg,tokens,processed,tokenizer,sequence=None):
-    """Match training: empty visual-Q reads, or an explicit legacy template."""
-    mode=cfg.cfg_null_condition
-    if mode=='empty':
-        return make_batch(cfg,tokens,[],processed,'T2I',tokenizer=tokenizer,sequence=sequence,non_cfg=True)
-    if mode=='empty_t2i':
-        return make_batch(cfg,tokens,[],processed,'T2I',tokenizer=tokenizer,sequence=sequence)
-    if mode=='i2t_prefix':
-        batch=make_batch(cfg,tokens,[],processed,'I2T',prune=False,tokenizer=tokenizer)
-        return prune_queries(batch,cfg,batch.mainline.query_image[0])
-    raise ValueError(f'Unknown CFG null condition: {mode}')
+def make_null_batch(full, cfg):
+    empty = torch.zeros(len(full.image_indices), dtype=torch.bool)
+    empty[full.generation_image_indices] = True
+    batch = replace(full, generation_unconditional=empty, generation_instruction_dropped=None)
+    batch.mainline = build_plan(batch, cfg)
+    return prune_queries(batch, cfg, batch.mainline.query_image[0])
 
 
 def make_history_batch(full, cfg):
@@ -242,17 +218,15 @@ def make_history_batch(full, cfg):
     if full.generation_instruction_starts is None or not full.generation_image_count:
         raise ValueError('History guidance needs a generation target and a known instruction boundary')
     dropped = full.generation_instruction_starts.ge(0)
-    selected = full.generation_image_indices
-    if not (dropped if selected is None else dropped[selected]).all():
-        raise ValueError('History guidance needs an instruction with a nonempty retained prefix')
+    # A target without a removable text suffix keeps its full prefix.
     batch = replace(full, generation_instruction_dropped=dropped)
     batch.mainline = build_plan(batch, cfg)
     return prune_queries(batch, cfg, batch.mainline.query_image[0])
 
 
 @torch.no_grad()
-def score_reference(model,case,tokenizer,tokens,processor,vae):
-    """Fixed teacher-forced caption NLL and one fixed-noise conditional flow loss."""
+def score_reference(model,case,tokenizer,tokens,processor):
+    """Teacher-forced NLL on the reference caption."""
     if not case.get('references'):return {}
     cfg=model.cfg
     processed=context_image(case['image'],case.get('image_sha256'),processor)
@@ -265,23 +239,7 @@ def score_reference(model,case,tokenizer,tokens,processor,vae):
     from ops.cross_entropy import linear_cross_entropy
     weight=model.lm_head.weight if model.lm_head is not None else model.embedding.weight
     nll=linear_cross_entropy(hidden[indices],weight,targets,cfg.ce_chunk)
-    if cfg.renderer=='wan':return dict(reference_text_nll=float(nll),reference_text_tokens=len(targets))
-    batch=make_batch(cfg,tokens,ids,processed,'T2I',tokenizer=tokenizer).to(accel_type())
-    empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device=accel_type(),dtype=model.embedding.weight.dtype)
-    hidden=backbone(model,batch,vision_features=empty)
-    condition=batch.mainline.gather_image_conditions(hidden,batch.generation_image_indices)
-    pixels=torch.from_numpy(processed[0].transpose(2,0,1).copy())[None].to(accel_type()).float().div(127.5).sub(1)
-    mean,std=vae.encode(pixels)
-    rng=torch.Generator(device='cpu').manual_seed(case.get('seed',1234))
-    target=mean.flatten(2).transpose(1,2)[0]+std.flatten(2).transpose(1,2)[0]*torch.randn(sum(batch.generation.lengths),cfg.latent_channels,generator=rng).to(accel_type())
-    batch.latents=target
-    batch.noise=torch.randn(target.shape,generator=rng).to(accel_type())
-    batch.times=torch.tensor([.5],device=accel_type())
-    phase=500.*10000**(-torch.arange(128,dtype=torch.float64)/128)
-    batch.generation.time_features=torch.cat((phase.cos(),phase.sin()))[None].to(device=accel_type(),dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
-    loss=model.renderer(condition,batch)
-    return dict(reference_text_nll=nll.item(),reference_text_tokens=len(targets),conditional_flow_mse=loss.item(),
-                fixed_flow_time=.5,fixed_noise_seed=case.get('seed',1234))
+    return dict(reference_text_nll=float(nll),reference_text_tokens=len(targets))
 
 
 def greedy_token(model,hidden):
@@ -321,23 +279,17 @@ def caption(model,case,tokenizer,tokens,processor):
     if end is not None:stops.add(end)
     from models.decoding import CQDecoder
     limit=case.get('max_new_tokens',48)
-    cached=cfg.method=='CQ_IT';features=None
-    if limit and cached:
+    if limit:
         batch=make_batch(cfg,tokens,[],processed,'I2T',tokenizer=tokenizer,
                          instruction=instruction,sequence=sequence)
         decoder=CQDecoder(model,batch,limit)
     for step in range(limit):
-        if cached:hidden=decoder.hidden
-        else:
-            batch=make_batch(cfg,tokens,emitted,processed,'I2T',tokenizer=tokenizer,
-                instruction=instruction,sequence=sequence).to(accel_type())
-            if features is None:features=model.patch_embed(batch.vision)
-            hidden=backbone(model,batch,vision_features=features)[batch.mainline.output_positions]
+        hidden=decoder.hidden
         token=greedy_token(model,hidden)
         if token in stops:
             reason=f'stop_token_{token}';break
         emitted.append(token)
-        if cached and step+1<limit:decoder.advance(token)
+        if step+1<limit:decoder.advance(token)
     return dict(text=tokenizer.decode(emitted,skip_special_tokens=False),token_ids=emitted,
                 stop_reason=reason,reference_captions=case.get('references',[]),
                 image=source,prompt=case.get('prompt',''))
@@ -357,14 +309,12 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
         raise ValueError('Validation shape violates the training pixel/alignment cap')
     processed,sequence=(video_input(cfg,case) if case['task']=='T2V' else
                         (processor(np.zeros((height,width,3),np.uint8)),None))
-    guidance=case.get('guidance',1. if cfg.renderer=='wan' else 3.)
+    guidance=case.get('guidance',1.)
     s_ctx, s_ins = case.get('s_ctx', guidance), case.get('s_ins', guidance)
     limit = torch.finfo(torch.float32).max  # guidance is applied to FP32 velocities
     if not all(type(s) in (int, float) and -limit <= s <= limit for s in (guidance, s_ctx, s_ins)):
         raise ValueError('Guidance scales must be finite FP32 numbers')
     split = s_ctx != s_ins
-    if split and (cfg.renderer != 'wan' or cfg.cfg_null_condition != 'empty'):
-        raise ValueError('Independent guidance scales require Wan with an empty null condition')
     prefix = encode_history(case, tokenizer, processor)
     prompt_ids = tokenizer.encode(case['prompt'], add_special_tokens=False).ids
     full = make_batch(cfg, tokens, prompt_ids, processed, task, tokenizer=tokenizer,
@@ -385,33 +335,32 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
         hidden = backbone(model, batch, vision_features=features)
         raw = batch.mainline.gather_image_conditions(hidden, batch.generation_image_indices)
         projected = model.renderer.project_conditions(raw, batch.generation)
-        kv = dict(cached_kv=model.renderer.cache_condition_kv(projected)) if cfg.renderer == 'wan' else {}
+        kv = dict(cached_kv=model.renderer.cache_condition_kv(projected))
         return raw, projected, kv
 
+    null_batch = make_null_batch(full, cfg) if history_batch is not None or scale != 1. else None
     full = full.to(accel_type())
     layout = full.generation
     # Both positive branches see the very same source features, computed once.
     features = model.patch_embed(full.vision) if len(full.image_indices) > full.generation_image_count else None
     positive = condition(full, features)
-    negative = None
-    if history_batch is not None or scale != 1.:
-        negative = condition(make_null_batch(cfg,tokens,processed,tokenizer,sequence=sequence).to(accel_type()))
+    negative = condition(null_batch.to(accel_type())) if null_batch is not None else None
     history = condition(history_batch.to(accel_type()), features) if history_batch is not None else None
-    del full, history_batch, features
+    del full, history_batch, null_batch, features
 
     def predict(branch, latent, time):
         raw, projected, kv = branch
         return model.renderer.predict(latent, raw, time, layout, projected, **kv).float()
 
     generator=torch.Generator(device='cpu').manual_seed(case['seed'])
-    latent=torch.randn(sum(layout.lengths),cfg.latent_channels*(4 if cfg.renderer=='wan' else 1),generator=generator).to(accel_type())
-    sigmas=moss_sigmas(case.get('steps',30),case.get('shift',5.))
-    if cfg.renderer=='wan':
-        base=torch.linspace(1.,0.,case.get('steps',30)+1);shift=case.get('shift',5.)
-        sigmas=shift*base/(1+(shift-1)*base)
-    half=cfg.wan_freq_dim//2 if cfg.renderer=='wan' else 128
+    latent=torch.randn(sum(layout.lengths),cfg.latent_channels*4,generator=generator).to(accel_type())
+    if case.get('steps',30)<1 or case.get('shift',5.)<=0:
+        raise ValueError('Positive steps and shift required')
+    base=torch.linspace(1.,0.,case.get('steps',30)+1);shift=case.get('shift',5.)
+    sigmas=shift*base/(1+(shift-1)*base)
+    half=cfg.wan_freq_dim//2
     phase=(sigmas[:-1]*1000).double()[:,None]*10000**(-torch.arange(half,dtype=torch.float64)/half)
-    time_features=torch.cat((phase.cos(),phase.sin()),-1).to(device=accel_type(),dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
+    time_features=torch.cat((phase.cos(),phase.sin()),-1).to(device=accel_type(),dtype=torch.float32)
     for i,(start,end) in enumerate(zip(sigmas[:-1],sigmas[1:])):
         time = time_features[i:i+1]
         velocity = predict(positive, latent, time)
@@ -424,37 +373,17 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
                 velocity = uncond + s_ctx * (hist - uncond) + s_ins * (velocity - hist)
         latent=latent+(float(end)-float(start))*velocity
     if not torch.isfinite(latent).all().item():raise FloatingPointError('Nonfinite generated latent')
-    if cfg.renderer=='wan':
-        from data.generation import unpatch_latent
-        decoded=vae.decode([unpatch_latent(latent,layout.grids[0])])[0]
-        if not torch.isfinite(decoded).all().item():raise FloatingPointError('Nonfinite decoded visual')
-        frames=decoded.clamp(-1,1).add(1).mul(127.5).round().to(torch.uint8).permute(1,2,3,0).cpu().numpy()
-        suffix='png' if len(frames)==1 else 'mp4';name=f"{case['id']}.{suffix}"
-        if P.state().get_tensor_model_parallel_rank()==0:
-            save_visual(frames,output/name,case.get('fps',16))
-        return dict(image=name,prompt=case['prompt'],height=height,width=width,num_frames=len(frames),
-            seed=case['seed'],steps=len(sigmas)-1,guidance=guidance,latent_std=latent.std().item(),
-            **(dict(s_ctx=s_ctx, s_ins=s_ins) if 's_ctx' in case or 's_ins' in case else {}),
-            **({'input':case['image']} if context is not None else {}))
-    h,w=layout.grids[0]
-    z=latent.T.reshape(1,cfg.latent_channels,h,w).float()
-    bn=vae.bn;eps=vae.config.batch_norm_eps
-    z=z*(bn.running_var+eps).sqrt().view(1,-1,1,1)+bn.running_mean.view(1,-1,1,1)
-    z=z.reshape(1,cfg.latent_channels//4,2,2,h,w).permute(0,1,4,2,5,3).reshape(1,cfg.latent_channels//4,2*h,2*w)
-    vae.decoder.to(accel_type());vae.post_quant_conv.to(accel_type())
-    try:
-        pixels=vae.decode(z.to(vae.dtype),return_dict=False)[0]
-        if not torch.isfinite(pixels).all().item():raise FloatingPointError('Nonfinite decoded pixels')
-        pixels=(pixels.clamp(-1,1).add(1).mul(127.5).round().to(torch.uint8)[0].permute(1,2,0).cpu().numpy())
-    finally:
-        device_module().synchronize()
-        vae.decoder.to('cpu');vae.post_quant_conv.to('cpu')
-    if P.state().get_tensor_model_parallel_rank()==0:Image.fromarray(pixels).save(output/f"{case['id']}.png")
-    return dict(image=f"{case['id']}.png",prompt=case['prompt'],height=height,width=width,
-                seed=case['seed'],steps=len(sigmas)-1,guidance=guidance,shift=case.get('shift',5.),
-                cfg_null_condition=cfg.cfg_null_condition,
-                latent_std=latent.std().item(),latent_mean=latent.mean().item())
-
+    from data.generation import unpatch_latent
+    decoded=vae.decode([unpatch_latent(latent,layout.grids[0])])[0]
+    if not torch.isfinite(decoded).all().item():raise FloatingPointError('Nonfinite decoded visual')
+    frames=decoded.clamp(-1,1).add(1).mul(127.5).round().to(torch.uint8).permute(1,2,3,0).cpu().numpy()
+    suffix='png' if len(frames)==1 else 'mp4';name=f"{case['id']}.{suffix}"
+    if P.state().get_tensor_model_parallel_rank()==0:
+        save_visual(frames,output/name,case.get('fps',16))
+    return dict(image=name,prompt=case['prompt'],height=height,width=width,num_frames=len(frames),
+        seed=case['seed'],steps=len(sigmas)-1,guidance=guidance,latent_std=latent.std().item(),
+        **(dict(s_ctx=s_ctx, s_ins=s_ins) if 's_ctx' in case or 's_ins' in case else {}),
+        **({'input':case['image']} if context is not None else {}))
 
 def report_html(output,rows,weight_sources=None):
     parts=['<!doctype html><meta charset="utf-8"><title>CQ validation</title>',
@@ -488,7 +417,6 @@ def report_html(output,rows,weight_sources=None):
 def run_suite(model,suite_path,output,preparer,weight_sources=None):
     from tokenizers import Tokenizer
     from data.vision import NativeImageProcessor
-    if model.cfg.method!='CQ_IT':raise ValueError('This validator implements CQ_IT only')
     if preparer is None or not hasattr(preparer.vae,'vae'):raise ValueError('Frozen generation VAE preparer required')
     suite=json.loads(Path(suite_path).read_text());output=Path(output)
     output.mkdir(parents=True,exist_ok=True)
@@ -503,7 +431,7 @@ def run_suite(model,suite_path,output,preparer,weight_sources=None):
             for index,case in enumerate(suite['cases']):
                 if index%P.dp_size()!=P.dp_rank():continue
                 device_module().reset_peak_memory_stats();started=time.perf_counter()
-                result=(generate(model,case,tokenizer,tokens,processor,preparer.vae if model.cfg.renderer=='wan' else preparer.vae.vae,output)
+                result=(generate(model,case,tokenizer,tokens,processor,preparer.vae,output)
                     if case['task'] in ('T2I','T2V','EDIT') else caption(model,case,tokenizer,tokens,processor))
                 if case['task']=='V2T' and Path(result['image']).suffix=='.npy':
                     path=output/f"{case['id']}.mp4"
@@ -511,7 +439,7 @@ def run_suite(model,suite_path,output,preparer,weight_sources=None):
                         save_visual(np.load(result['image'],allow_pickle=False),path,case['video']['fps'])
                     result['image']=str(path)
                 if case['task']=='I2T' and case.get('score_reference',True):
-                    result.update(score_reference(model,case,tokenizer,tokens,processor,preparer.vae))
+                    result.update(score_reference(model,case,tokenizer,tokens,processor))
                 device_module().synchronize()
                 result.update(id=case['id'],task=case['task'],seconds=time.perf_counter()-started,
                     peak_memory_gib=device_module().max_memory_allocated()/2**30,dp_rank=P.dp_rank(),

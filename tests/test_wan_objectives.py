@@ -1,6 +1,7 @@
 """Complete native tasks, empty CQ reads and ragged generation supervision."""
 from training.loss import compose_losses
 import copy
+from tests.fixtures import ScaffoldTokenizer
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -23,9 +24,9 @@ from tests import test_qwen35_vision as fixtures
 def setup():
     fixtures.NativeVisionContracts.setUpClass()
     fixture=fixtures.NativeVisionContracts()
-    cfg=fixture.cfg(renderer='wan',latent_channels=16,flow_draws=1,dit_width=64,
+    cfg=fixture.cfg(latent_channels=16,dit_width=64,
         dit_heads=2,dit_ffn=128,dit_layers=2,wan_freq_dim=32,
-        visual_query_mode='native',cfg_null_condition='empty',preserve_documents=True)
+        visual_query_mode='native',preserve_documents=True)
     yield cfg,fixture.tokens
     fixtures.NativeVisionContracts.tearDownClass()
 
@@ -47,13 +48,13 @@ class Documents(fixtures.Documents):
         return super().image(doc,element)
 
 
-def read_documents(rows, encode=lambda value: [11], grant_field='generation_target'):
+def read_documents(rows, encode=lambda value: [11]):
     stream = object.__new__(DocumentStream)
     stream.catalog = SimpleNamespace(read_rows=lambda *args: rows)
     stream.tokenizer = SimpleNamespace(encode_batch=lambda spans, **kw: [SimpleNamespace(ids=encode(s)) for s in spans])
     stream.special_ids = set()
     stream.counting_matches_corpus = False
-    stream.signature = {'view': 'A','generation_target_field':grant_field}
+    stream.signature = {'view': 'A'}
     return stream._load(0, 0, len(rows))['rows']
 
 
@@ -149,7 +150,7 @@ def test_i2t_skips_visual_queries_vae_and_renderer(setup,monkeypatch):
     assert batch.generation is None
     preparer=DevicePreparer(cfg,device='cpu',encoder='fake')
     def forbidden(*a,**kw):raise AssertionError('Understanding must skip image generation')
-    monkeypatch.setattr(preparer.vae,'encode',forbidden)
+    monkeypatch.setattr('data.codec.prepare_wan',forbidden)
     ready,_=preparer.prepare(batch,receipt)
     model=JointModel(cfg);monkeypatch.setattr(model.renderer,'forward',forbidden)
     losses=compose_losses(model(ready), model.cfg);losses['loss'].backward()
@@ -221,14 +222,14 @@ def test_empty_condition_matches_inference_without_content_or_gradient_leak(setu
         normal=backbone(model,conditional,vision_features=features.detach())
         torch.testing.assert_close(normal[batch.text_indices],output[batch.text_indices],atol=1e-6,rtol=1e-6)
         processed=NativeImageProcessor(cfg,128)(rows[1]['elements'][1]['pixels'])
-        null=make_null_batch(cfg,tokens,processed,tokenizer=None)
+        null=make_null_batch(make_batch(cfg,tokens,[31,32],processed,'T2I',tokenizer=ScaffoldTokenizer()),cfg)
         inferred=backbone(model,null,vision_features=features.detach()*0)
         torch.testing.assert_close(inferred[null.mainline.condition_indices],condition,atol=1e-6,rtol=1e-6)
-        explicit=make_batch(cfg,tokens,[31,32,33],processed,'T2I',non_cfg=True)
+        explicit=make_batch(cfg,tokens,[31,32,33],processed,'T2I',non_cfg=True,tokenizer=ScaffoldTokenizer())
         assert explicit.mainline.query_unconditional.all()  # Flag survives inference pruning.
         actual=backbone(model,explicit,vision_features=features.detach()+4)
         torch.testing.assert_close(actual[explicit.mainline.condition_indices],condition,atol=1e-6,rtol=1e-6)
-        positive=make_batch(cfg,tokens,[11,12],processed,'T2I')
+        positive=make_batch(cfg,tokens,[11,12],processed,'T2I',tokenizer=ScaffoldTokenizer())
         assert not positive.generation_unconditional.any()  # No random CFG dropout in validation.
 
 
@@ -246,7 +247,7 @@ def test_unconditional_choices_resume_exactly(setup):
         Packer(docs,replace(cfg,visual_uncond_probability=0.),24,tokens,state)
     # A fresh stage may reuse fixed-Q weights without restoring its old data cursor.
     from utils.checkpoint import initialization_model_config
-    previous=replace(cfg,visual_query_mode='fixed',cfg_null_condition='empty_t2i').to_dict()
+    previous=replace(cfg,visual_query_mode='fixed').to_dict()
     previous.pop('visual_uncond_probability')
     assert initialization_model_config(previous)==initialization_model_config(cfg.to_dict())
 

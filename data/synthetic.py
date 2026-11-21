@@ -1,8 +1,7 @@
 """Synthetic native-resolution inputs for the production packer."""
-import torch
 
 
-def fake_vision_batch(cfg,length,batch_size,images,seed,device,dtype):
+def fake_vision_batch(cfg,length,batch_size,images,seed,device):
     """Native rectangular synthetic inputs through the same production packer."""
     import numpy as np
     from data.packing import Packer
@@ -14,7 +13,7 @@ def fake_vision_batch(cfg,length,batch_size,images,seed,device,dtype):
             self.pixels=[rng.integers(0,256,size=(cfg.image_size,cfg.image_size*(1+i%2),3),dtype=np.uint8)
                          for i in range(images)]
             elements=[]
-            for i in range(images):elements.extend((dict(type='text',input_ids=[5,6,7]),dict(type='image',index=i)))
+            for i in range(images):elements.extend((dict(type='text',input_ids=[5,6,7]),dict(type='image',index=i,generation_target=True)))
             elements.append(dict(type='text',input_ids=[8]*length))
             self.doc=dict(id='synthetic',elements=elements)
         def peek(self):return self.doc if self.index==0 else None
@@ -26,14 +25,7 @@ def fake_vision_batch(cfg,length,batch_size,images,seed,device,dtype):
     batch,_=packed
     if len(batch.image_indices)!=images:
         raise ValueError('Synthetic sequence is too short to fit the requested native images')
-    if cfg.renderer=='wan':
-        from data.codec import DevicePreparer
-        receipt=dict(serial=0,next_state=dict(documents=dict(signature=dict(
-            snapshot='synthetic',seed=seed,epoch=0,rank=0))))
-        return DevicePreparer(cfg,device=device,encoder='fake')(batch,receipt)
-    generator=torch.Generator().manual_seed(seed)
-    batch.pixels=batch.pixels.to(dtype).div(127.5).sub(1)
-    batch.latents=torch.randn(images,cfg.image_tokens,cfg.latent_channels,generator=generator,dtype=dtype)
-    batch.noise=torch.randn(images*cfg.flow_draws,cfg.image_tokens,cfg.latent_channels,generator=generator,dtype=dtype)
-    batch.times=torch.randn(images*cfg.flow_draws,generator=generator).sigmoid().clamp(1e-5,1-1e-5)
-    return batch.to(device)
+    from data.codec import DevicePreparer
+    receipt=dict(serial=0,next_state=dict(documents=dict(signature=dict(
+        snapshot='synthetic',seed=seed,epoch=0,rank=0))))
+    return DevicePreparer(cfg,device=device,encoder='fake')(batch,receipt)

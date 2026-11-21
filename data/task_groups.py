@@ -132,7 +132,6 @@ def _render(row, seed, epoch, task=None, view_index=None):
             n=choose(len(candidates),row['family_id'],seed,epoch,f'{index}:{i}')
             event['text']=candidates[n]['text'];choices.append(dict(event=i,choice=n,provenance=candidates[n]['provenance']))
     allowed=any(s['kind']=='image' and s['image_loss_allowed'] for s in segments)
-    images=[dict(ref,preserve_full_frame=True) for ref in images]
     return dict(row,format='causal_sequence',segments=segments,images=images,direction='T2I' if allowed else 'I2T',
         source_shard='',text_tokens=None,image_loss_allowed=image_loss_allowed(row) and allowed,
         training_view=dict(task=kind,index=index,family_id=row['family_id'],text_choices=choices),

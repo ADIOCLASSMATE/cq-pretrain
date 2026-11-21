@@ -18,7 +18,7 @@ import torch.distributed as dist
 import distributed.megatron as P
 from configs.config import tiny_config
 from data.batch import fake_batch
-from data.generation import GenerationInputs, WanGenerationInputs
+from data.generation import WanGenerationInputs
 from distributed.communication import OrderedGradientBuckets, OrderedParameterGathers, finish_parameter_gathers
 from models.modeling_umm import JointModel
 from models.backbone_qwen35 import cast_for_training
@@ -38,29 +38,25 @@ def error(actual, expected):
 def make_batch(cfg, micro):
     n = 3 + (P.dp_rank() + micro) % 3
     generator = torch.Generator().manual_seed(770 + P.dp_rank() * 2 + micro)
-    batch = fake_batch(cfg, 65, 1, n, seed=93 + P.dp_rank() * 2 + micro, dtype=torch.bfloat16)
+    batch = fake_batch(cfg, 65, 1, n, seed=93 + P.dp_rank() * 2 + micro)
     images = [np.zeros((32, 48 if i % 2 else 32, 3), dtype=np.uint8) for i in range(n)]
-    if cfg.renderer == "wan":
-        layout = WanGenerationInputs.prepare(images, batch.generation.query_counts, 32, token_budget=8)
-    else:
-        layout = GenerationInputs.prepare(images, cfg.image_condition_queries, 32, token_budget=18)
-    channels = 64 if cfg.renderer == "wan" else 128
+    layout = WanGenerationInputs.prepare(images, batch.generation.query_counts, 32, token_budget=8)
+    channels = cfg.latent_channels * 4
     batch.latents = torch.randn(sum(layout.lengths), channels, generator=generator)
     batch.noise = torch.randn(batch.latents.shape, generator=generator)
     batch.times = torch.linspace(0.2, 0.8, n)
-    half = cfg.wan_freq_dim // 2 if cfg.renderer == "wan" else 128
+    half = cfg.wan_freq_dim // 2
     phase = (batch.times * 1000).double()[:, None] * 10000 ** (
         -torch.arange(half, dtype=torch.float64) / half
     )
-    layout.time_features = torch.cat((phase.cos(), phase.sin()), -1).float().to(torch.bfloat16)
+    layout.time_features = torch.cat((phase.cos(), phase.sin()), -1).float()
     batch.generation = layout
-    return batch.to("npu")
+    return batch.to("cuda")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tp", type=int, required=True)
-    parser.add_argument("--renderer", choices=("wan", "moss"), default="wan")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     cfg = tiny_config(
@@ -72,65 +68,54 @@ def main():
         linear_value_heads=32,
         linear_head_dim=128,
         tie_word_embeddings=False,
-        renderer="moss",
         dit_width=128,
         dit_heads=4,
         dit_ffn=256,
         dit_layers=2,
-        latent_channels=128,
-        flow_draws=1,
+        latent_channels=16,
+
         checkpoint_backbone=True,
         checkpoint_dit=True,
-        moss_fused_qkv=True,
         qwen_fused_projections=True,
     )
-    if args.renderer == "wan":
-        cfg.renderer = "wan"
-        cfg.latent_channels = 16
-        cfg.wan_freq_dim = 32
-        cfg.vision_encoder = "qwen35"
-        cfg.vision_min_pixels = 1024
-        cfg.vision_max_pixels = 16384
-        cfg.visual_query_mode = "native"
-        cfg.vision_assets = str(args.output / "vision-assets")
-        cfg.visual_uncond_probability = 0.0
-        cfg.cfg_null_condition = "empty"
+    cfg.wan_freq_dim = 32
+    cfg.visual_query_mode = "native"
+    cfg.vision_assets = str(args.output / "vision-assets")
     P.initialize(args.tp, cfg)
-    if args.renderer == "wan":
-        if dist.get_rank() == 0:
-            assets = Path(cfg.vision_assets)
-            assets.mkdir(parents=True, exist_ok=True)
-            vision = dict(
-                depth=2,
-                hidden_act="gelu_pytorch_tanh",
-                hidden_size=32,
-                intermediate_size=64,
-                in_channels=3,
-                num_heads=4,
-                num_position_embeddings=64,
-                out_hidden_size=cfg.width,
-                patch_size=16,
-                spatial_merge_size=2,
-                temporal_patch_size=2,
-                deepstack_visual_indexes=[],
-            )
-            (assets / "config.json").write_text(json.dumps(dict(vision_config=vision)))
-            (assets / "preprocessor_config.json").write_text(
-                json.dumps(
-                    dict(
-                        image_processor_type="Qwen2VLImageProcessorFast",
-                        patch_size=16,
-                        temporal_patch_size=2,
-                        merge_size=2,
-                        image_mean=[0.5] * 3,
-                        image_std=[0.5] * 3,
-                        size=dict(shortest_edge=1024, longest_edge=16384),
-                    )
+    if dist.get_rank() == 0:
+        assets = Path(cfg.vision_assets)
+        assets.mkdir(parents=True, exist_ok=True)
+        vision = dict(
+            depth=2,
+            hidden_act="gelu_pytorch_tanh",
+            hidden_size=32,
+            intermediate_size=64,
+            in_channels=3,
+            num_heads=4,
+            num_position_embeddings=64,
+            out_hidden_size=cfg.width,
+            patch_size=16,
+            spatial_merge_size=2,
+            temporal_patch_size=2,
+            deepstack_visual_indexes=[],
+        )
+        (assets / "config.json").write_text(json.dumps(dict(vision_config=vision)))
+        (assets / "preprocessor_config.json").write_text(
+            json.dumps(
+                dict(
+                    image_processor_type="Qwen2VLImageProcessorFast",
+                    patch_size=16,
+                    temporal_patch_size=2,
+                    merge_size=2,
+                    image_mean=[0.5] * 3,
+                    image_std=[0.5] * 3,
+                    size=dict(shortest_edge=1024, longest_edge=16384),
                 )
             )
-        dist.barrier()
+        )
+    dist.barrier()
     torch.manual_seed(42)
-    model = cast_for_training(JointModel(cfg)).to("npu").train()
+    model = cast_for_training(JointModel(cfg)).to("cuda").train()
     wrapped, optimizer = P.make_optimizer(model, 5e-5, bucket_size=1000000)
     buckets = OrderedGradientBuckets(wrapped)
     gathers = OrderedParameterGathers(wrapped)
@@ -232,7 +217,7 @@ def main():
         summary = dict(
             passed=all(r["passed"] for r in ranks),
             world=dist.get_world_size(),
-            renderer=cfg.renderer,
+            renderer="wan",
             tp=args.tp,
             scope="Small synthetic correctness oracle; real NPU kernels, TP/DP and MCore optimizer; not throughput",
             chunk_counts=sorted({c for r in ranks for c in r["chunk_counts"]}),
@@ -252,7 +237,7 @@ def main():
         )
         (root / "summary.json").write_text(json.dumps(summary, indent=2))
         print(json.dumps(summary), flush=True)
-    gate = torch.tensor(int(report["passed"]), device="npu")
+    gate = torch.tensor(int(report["passed"]), device="cuda")
     dist.all_reduce(gate, op=dist.ReduceOp.MIN)
     passed = bool(gate.item())
     dist.destroy_process_group()

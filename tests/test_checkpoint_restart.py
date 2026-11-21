@@ -33,7 +33,6 @@ def cpu_restore_worker(root, rank):
     model = torch.nn.Linear(3, 2)
     inner = torch.optim.AdamW(model.parameters(), lr=.01)
     optimizer = SimpleNamespace(optimizer=inner)
-    old_config = SimpleNamespace(to_dict=lambda:dict(width=3))
     config = SimpleNamespace(to_dict=lambda:dict(width=3, visual_instruction_dropout_probability=0.))
     topology = dict(tp=1, dp=2, pp=1, cp=1, optimizer_instances=1)
     fake_parallel = SimpleNamespace(get_tensor_model_parallel_rank=lambda:0,
@@ -51,7 +50,7 @@ def cpu_restore_worker(root, rank):
          patch.object(torch.cuda, 'get_rng_state', torch.get_rng_state), \
          patch.object(torch.cuda, 'set_rng_state', torch.set_rng_state):
         path = Path(root)/'step_0000001'
-        checkpoint_io.save(path, model, optimizer, 1, old_config, topology, {'schedule':'same'}, data)
+        checkpoint_io.save(path, model, optimizer, 1, config, topology, {'schedule':'same'}, data)
         expected_loss = update()
         expected_model = copy.deepcopy(model.state_dict())
         expected_optimizer = copy.deepcopy(inner.state_dict())
@@ -71,7 +70,7 @@ def cpu_restore_worker(root, rank):
 class CheckpointRestartTests(unittest.TestCase):
     def test_resume_requires_the_same_source_and_objective(self):
         from utils.checkpoint import check_resume_contract
-        config=dict(renderer='wan',visual_instruction_dropout_probability=0.)
+        config=dict(visual_instruction_dropout_probability=0.)
         state=dict(data=dict(adapter_sha256='release-adapter'),seed=42)
         manifest=dict(config=config,training_state=state)
         check_resume_contract(manifest,config,state)

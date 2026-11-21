@@ -59,7 +59,8 @@ I2T_INSTRUCTIONS = (
 
 ROLE_USER = 'user\n'
 ROLE_ASSISTANT = 'assistant\n'
-TURN_END = '<|im_end|>\n'
+IM_END = '<|im_end|>'
+TURN_END = IM_END + '\n'
 IM_START = '<|im_start|>'
 
 
@@ -73,9 +74,12 @@ def text(value, supervised, synthetic):
     return dict(kind='text', text=value, supervised=supervised, synthetic=synthetic)
 
 
-def corpus(value):
-    """Real corpus text: always supervised, always counted."""
-    return text(value, True, False)
+def corpus(segment):
+    """Count every corpus span and supervise it unless the release opts out."""
+    supervised = segment.get('supervised')
+    if supervised is not None and type(supervised) is not bool:
+        raise ValueError('Text supervision must be boolean when specified')
+    return text(segment['text'], supervised is not False, False)
 
 
 def scaffold(value):
@@ -85,12 +89,13 @@ def scaffold(value):
 
 def closing():
     """Ends a message. Supervised so the model learns to stop, never counted."""
-    return text(TURN_END, True, True)
+    return text(IM_END, True, True)
 
 
 def header(role, first):
     """The packer's document BOS stands in for the first ``<|im_start|>``."""
-    return scaffold(role if first else IM_START + role)
+    # The newline after a terminator belongs to the unsupervised template.
+    return scaffold(role if first else '\n' + IM_START + role)
 
 
 def raw_direction(segments):
@@ -109,7 +114,7 @@ def caption_spans(segments, direction, sample_id):
     spans = [header(ROLE_USER, True)]
     if direction == 'T2I':
         spans.append(scaffold(choose(T2I_INSTRUCTIONS, sample_id, 't2i')))
-        spans.append(corpus(body['text']))
+        spans.append(corpus(body))
         spans.append(closing())
         spans.append(header(ROLE_ASSISTANT, False))
         spans.append(picture)
@@ -118,66 +123,43 @@ def caption_spans(segments, direction, sample_id):
         spans.append(scaffold(choose(I2T_INSTRUCTIONS, sample_id, 'i2t')))
         spans.append(closing())
         spans.append(header(ROLE_ASSISTANT, False))
-        spans.append(corpus(body['text']))
-    spans.append(closing())
+        spans.append(corpus(body))
+    spans.extend((closing(), scaffold('\n')))
     return spans
 
 
-def conversation_spans(segments):
-    """Group stored segments by turn and wrap each in its own message.
-
-    Without this the stored turns are concatenated with no separator at all,
-    which teaches an incorrect document structure.
-    """
-    spans, current, first = [], None, True
+def conversation_spans(segments, *, explicit_turns=False):
+    """Wrap each stored message once and preserve its role and supervision."""
+    spans = []
+    current = None
     for segment in segments:
-        role = segment.get('role') or 'user'
-        turn = segment.get('turn')
+        role = segment['role'] if explicit_turns else segment.get('role') or 'user'
+        turn = segment['turn'] if explicit_turns else segment.get('turn')
+        if role not in ('system', 'user', 'assistant', 'tool'):
+            raise ValueError(f'Invalid conversation role: {role!r}')
         if current != (role, turn):
             if current is not None:
                 spans.append(closing())
-            spans.append(header(ROLE_ASSISTANT if role == 'assistant' else ROLE_USER, first))
-            current, first = (role, turn), False
+            spans.append(header(role + '\n', current is None))
+            current = (role, turn)
             first_text = True
         if segment['kind'] == 'image':
             spans.append(segment)
         elif segment['text']:
-            span = corpus(segment['text'])
+            span = corpus(segment)
             if segment['text'].strip():
                 span['instruction_start'] = first_text or segment.get('instruction_start', False)
                 first_text = False
             spans.append(span)
     if current is not None:
-        spans.append(closing())
-    return spans
-
-
-def causal_spans(segments):
-    """Editing/control data explicitly declares text and image occurrence loss."""
-    spans=[];current=None
-    for segment in segments:
-        role=segment['role'];key=(role,segment['turn'])
-        if role not in ('system','user','assistant','tool'):raise ValueError('Invalid causal role')
-        if current!=key:
-            if current is not None:spans.append(closing())
-            spans.append(header(role+'\n',current is None));current=key
-            first_text = True
-        if segment['kind']=='image':
-            spans.append(segment)
-        elif segment['text']:
-            span = text(segment['text'], segment.get('supervised', True), False)
-            if segment['text'].strip():
-                span['instruction_start'] = first_text or segment.get('instruction_start', False)
-                first_text = False
-            spans.append(span)
-    if current is not None:spans.append(closing())
+        spans.extend((closing(), scaffold('\n')))
     return spans
 
 
 def natural_spans(segments):
     """Interleaved documents stay natural documents; no chat wrapper."""
     return [s if s['kind'] == 'image' else
-            dict(text(s['text'],s.get('supervised',True),False),instruction_start=s.get('instruction_start',False))
+            dict(corpus(s),instruction_start=s.get('instruction_start',False))
             for s in segments if s['kind'] == 'image' or s['text']]
 
 
@@ -195,7 +177,7 @@ def build(row):
     segments = row['segments']
     fmt = row.get('format')
     if fmt == 'causal_sequence':
-        return causal_spans(segments),row.get('direction'),True
+        return conversation_spans(segments, explicit_turns=True),row.get('direction'),True
     if fmt == 'caption':
         direction = raw_direction(segments)
         if direction is not None:

@@ -9,24 +9,14 @@ from ops.gated_delta_layout import DeltaPlan
 
 @dataclass
 class MainlinePlan:
-    method: str
-    prefix: int
     query_positions: torch.Tensor
     query_image: torch.Tensor
     query_rope: torch.Tensor
-    generation_positions: torch.Tensor
-    generation_image: torch.Tensor
-    generation_rope: torch.Tensor
     output_positions: torch.Tensor
     condition_indices: torch.Tensor
-    generation_condition: torch.Tensor
     cq_mask: torch.Tensor
     cq_valid: torch.Tensor
-    gen_mask: torch.Tensor
-    gen_valid: torch.Tensor
-    gen_suffix_mask: torch.Tensor
     cq_plan: AttentionPlan | None = None
-    gen_plan: AttentionPlan | None = None
     output_size: int = 0
     delta_plan: DeltaPlan | None = None
     rope_cos: torch.Tensor | None = None
@@ -37,9 +27,7 @@ class MainlinePlan:
 
     def gather_image_conditions(self, hidden, generation_image_indices):
         """Return one CQ row per generation target, in the renderer's sample order."""
-        indices = self.condition_indices
-        if generation_image_indices is not None:
-            indices = indices.index_select(0, generation_image_indices)
+        indices = self.condition_indices.index_select(0, generation_image_indices)
         # Selected rows can still have padding columns for unequal query counts.
         # The renderer consumes only the valid columns of each target.
         return hidden[indices.clamp_min(0)]
@@ -56,10 +44,8 @@ class MainlinePlan:
 
     def to(self, device, non_blocking=False):
         out = self._map_tensors(lambda t: t.to(device, non_blocking=non_blocking))
-        for name in ("cq", "gen"):
-            plan = getattr(self, name + "_plan")
-            if plan is not None:
-                setattr(out, name + "_plan", plan.bind(out.gen_suffix_mask if name == "gen" else out.cq_mask))
+        if self.cq_plan is not None:
+            out.cq_plan = self.cq_plan.bind(out.cq_mask)
         if self.delta_plan is not None:
             out.delta_plan = self.delta_plan.to(device, non_blocking=non_blocking)
         if self.cq_predicate is not None:
@@ -68,21 +54,9 @@ class MainlinePlan:
 
     def pin_memory(self, device):
         out = self._map_tensors(lambda t: t.pin_memory(device=device) if t.numel() else t)
-        for name in ("cq", "gen"):
-            plan = getattr(self, name + "_plan")
-            if plan is not None:
-                mask = out.gen_suffix_mask if name == "gen" else out.cq_mask
-                setattr(
-                    out,
-                    name + "_plan",
-                    replace(
-                        plan,
-                        mask_pointer=mask.data_ptr(),
-                        mask_version=mask._version,
-                        owner=mask,
-                        tile_masks=(),
-                    ),
-                )
+        if self.cq_plan is not None:
+            out.cq_plan = replace(self.cq_plan, owner=out.cq_mask, mask_pointer=out.cq_mask.data_ptr(),
+                                  mask_version=out.cq_mask._version, tile_masks=())
         if self.delta_plan is not None:
             out.delta_plan = self.delta_plan.pin_memory(device)
         if self.cq_predicate is not None:
@@ -92,10 +66,8 @@ class MainlinePlan:
     def __deepcopy__(self, memo):
         out = self._map_tensors(lambda t: copy.deepcopy(t, memo))
         memo[id(self)] = out
-        for name in ("cq", "gen"):
-            plan = getattr(self, name + "_plan")
-            if plan is not None:
-                setattr(out, name + "_plan", plan.bind(out.gen_suffix_mask if name == "gen" else out.cq_mask))
+        if self.cq_plan is not None:
+            out.cq_plan = self.cq_plan.bind(out.cq_mask)
         out.delta_plan = copy.deepcopy(self.delta_plan, memo)
         out.cq_predicate = copy.deepcopy(self.cq_predicate, memo)
         return out

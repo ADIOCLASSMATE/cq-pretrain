@@ -17,21 +17,25 @@ def main():
     parser.add_argument('--config',default='configs/qwen35_2b_wan.yaml')
     parser.add_argument('--data-root',required=True)
     parser.add_argument('--cache',required=True)
-    parser.add_argument('--device',default='npu:0')
+    parser.add_argument('--device',default='cuda:0')
     parser.add_argument('--rank',type=int,default=0)
     parser.add_argument('--world',type=int,default=1)
-    parser.add_argument('--sequence-length',type=int,default=8192)
+    parser.add_argument('--sequence-length',type=int)
     args=parser.parse_args()
-    if args.device.startswith('npu'):
-        import torch_npu
-        torch.npu.set_device(args.device)
+    if args.device.startswith('cuda'):
+        torch.cuda.set_device(args.device)
     cfg=RunConfig.load(args.config);cfg.visual_cache=args.cache
+    from data.sources import release_geometry
+    geometry=release_geometry(args.data_root)
+    for key in ('vision_max_pixels','generation_max_pixels'):
+        if key in geometry:setattr(cfg,key,geometry[key])
+    if args.sequence_length is None:args.sequence_length=geometry.get('sequence_length',8192)
     cfg.validate();feature_cache,latent_cache=caches(cfg)
     documents=DocumentStream(args.data_root,'A',args.rank,args.world,42,cfg=cfg,
-        native_images=True,sequence_length=args.sequence_length)
+        sequence_length=args.sequence_length)
     packer=Packer(documents,cfg,args.sequence_length,token_contract(args.data_root,cfg))
     vision=vae=None;written=dict(features=0,latents=0,batches=0)
-    dtype=torch.bfloat16 if args.device.startswith('npu') else torch.float32
+    dtype=torch.bfloat16 if args.device.startswith('cuda') else torch.float32
     try:
         while (item:=packer.next()) is not None:
             batch,_=item

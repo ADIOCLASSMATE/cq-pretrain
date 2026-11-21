@@ -36,13 +36,8 @@ def parse_args(argv=None):
     parser.add_argument('--tiny', action='store_true')
     parser.add_argument('--synthetic', action='store_true',
                         help='Use fake_batch with the unchanged production model and CPU planners')
-    parser.add_argument('--method', choices=('CQ_IT','Bi_I+CQ_T'))
     parser.add_argument('--image-condition-queries', type=int)
     parser.add_argument('--visual-query-mode',choices=('native','fixed'))
-    parser.add_argument('--i2t-image-loss-probability',type=float,
-                        help='I2T sampling for the MOSS objective; Wan reads release occurrence permissions')
-    parser.add_argument('--cfg-null-condition',choices=('empty','empty_t2i','i2t_prefix'),
-                        help='Null template used by qualitative CFG sampling; inherits the model config')
     parser.add_argument('--tp', type=int, default=1)
     parser.add_argument('--sequence-length', type=int, default=8192)
     parser.add_argument('--images', type=int, default=2)
@@ -54,7 +49,7 @@ def parse_args(argv=None):
     parser.add_argument('--until-data-end',action='store_true',help='Traverse the remaining finite DCVLM epoch instead of a slot-based step budget')
     parser.add_argument('--warmup', type=int, default=3)
     parser.add_argument('--lr', type=float, default=1e-5)
-    parser.add_argument('--renderer-ema-decay', '--moss-ema-decay', dest='renderer_ema_decay',type=float,default=0.,
+    parser.add_argument('--renderer-ema-decay',type=float,default=0.,
                         help='FP32 distributed optimizer-shard renderer EMA; zero disables')
     parser.add_argument('--min-lr', type=float, help='Cosine floor; defaults to one tenth of --lr')
     parser.add_argument('--lr-decay-style', choices=('constant', 'cosine'), default='constant')
@@ -105,7 +100,7 @@ def parse_args(argv=None):
     recompute.add_argument('--no-checkpoint', action='store_true')
     recompute.add_argument('--checkpoint', action='store_true', help='Recompute backbone and DiT layers')
     parser.add_argument('--split-reference', action='store_true')
-    parser.add_argument('--data-root', '--data-snapshot', dest='data_snapshot', help='Published corpus, JSONL or mixed-source YAML; tokenize raw text online')
+    parser.add_argument('--data-root', help='Published corpus, JSONL or mixed-source YAML; tokenize raw text online')
     parser.add_argument('--data-mode', choices=('A','B'), default='A')
     parser.add_argument('--allow-development-data', action='store_true')
     parser.add_argument('--data-workers', type=int, default=2)
@@ -118,15 +113,12 @@ def parse_args(argv=None):
     parser.add_argument('--device-prefetch', type=int, default=2, help='Prepared NPU batches ahead; zero is synchronous control')
     parser.add_argument('--preserve-documents',action='store_true',help='Pack complete documents; budget DiT image/CQ pairs independently')
     parser.add_argument('--long-document-policy',choices=('window','error'),help='Policy only for documents longer than the backbone context')
-    parser.add_argument('--dit-microbatch-tokens',type=int,help='Wan latent-token budget per renderer chunk; legacy MOSS includes CQ tokens')
+    parser.add_argument('--dit-microbatch-tokens',type=int,help='Wan latent-token budget per renderer chunk')
     parser.add_argument('--dit-microbatch-images',type=int,help='Optional DiT image count limit; zero is unlimited')
     parser.add_argument('--max-images-per-pack', type=int, default=None, help='Legacy fragment packing only; defaults to zero for whole documents')
     parser.add_argument('--pack-padding-multiple', type=int, default=128, help='Trim unused pack tail and round to this multiple; zero disables')
-    parser.add_argument('--latent-encoder', help='wan, moss, fake, kl16, or module:factory')
-    parser.add_argument('--latent-options', type=json.loads, default={})
-    parser.add_argument('--vae-path')
+    parser.add_argument('--latent-encoder', choices=('wan','fake'), default='wan')
     parser.add_argument('--vae-dtype', choices=('float32','bfloat16'), default='float32')
-    parser.add_argument('--vae-chunk', type=int, default=2)
     preliminary,_=parser.parse_known_args(argv)
     if preliminary.config and Path(preliminary.config).suffix in ('.yaml','.yml'):
         import yaml
@@ -136,7 +128,7 @@ def parse_args(argv=None):
         destinations={a.dest for a in parser._actions}
         if set(defaults)-destinations:parser.error(f'Unknown training settings: {set(defaults)-destinations}')
         parser.set_defaults(**defaults)
-    data_root = preliminary.data_snapshot or parser.get_default('data_snapshot')
+    data_root = preliminary.data_root or parser.get_default('data_root')
     if data_root:
         from data.sources import release_geometry
         geometry = release_geometry(data_root)
@@ -150,9 +142,6 @@ def parse_args(argv=None):
         parser.error('Require finite lr > 0 and 0 <= min-lr <= lr')
     if not math.isfinite(args.renderer_ema_decay) or not 0<=args.renderer_ema_decay<1:
         parser.error('Require finite 0 <= renderer-ema-decay < 1')
-    if args.i2t_image_loss_probability is not None and (
-            not math.isfinite(args.i2t_image_loss_probability) or not 0<=args.i2t_image_loss_probability<=1):
-        parser.error('Require finite 0 <= i2t-image-loss-probability <= 1')
     if args.eval_snapshot_every < 0:
         parser.error('Require eval-snapshot-every >= 0')
     if not 0 <= args.optimizer_offload_fraction <= 1:
@@ -185,25 +174,22 @@ def main():
     if args.save_every < 0 or args.keep_checkpoints < 1:
         raise ValueError('Require save-every >= 0 and keep-checkpoints >= 1')
     if args.until_data_end:
-        if not args.data_snapshot:raise ValueError('--until-data-end requires a finite --data-root')
+        if not args.data_root:raise ValueError('--until-data-end requires a finite --data-root')
         args.total_steps=None
         args.steps=(1<<63)-1
     budget=args.total_steps if args.total_steps is not None else args.steps
     if budget <= args.warmup or args.warmup<0 or args.micro_batch < 1 or args.grad_accum < 1:
         raise ValueError('Require steps > warmup and positive batch/accumulation sizes')
     if args.config and args.tiny:raise ValueError('Select either an explicit model config or the tiny validation model')
+    args.random_init = args.random_init or args.tiny
     cfg = (tiny_config(linear_heads=16,linear_head_dim=128) if args.tiny else
            RunConfig.load(args.config or ROOT/'configs/qwen35_2b_wan.yaml'))
     if args.vision_assets is not None:cfg.vision_assets=args.vision_assets
     if args.text_assets is not None:cfg.text_assets=args.text_assets
     if args.wan_assets is not None:cfg.wan_assets=args.wan_assets
     if args.wan_vae_assets is not None:cfg.wan_vae_assets=args.wan_vae_assets
-    if cfg.renderer=='wan' and args.latent_encoder is None:args.latent_encoder='wan'
-    if args.method is not None: cfg.method=args.method
     if args.image_condition_queries is not None: cfg.image_condition_queries=args.image_condition_queries
     if args.visual_query_mode is not None:cfg.visual_query_mode=args.visual_query_mode
-    if args.i2t_image_loss_probability is not None:cfg.i2t_image_loss_probability=args.i2t_image_loss_probability
-    if args.cfg_null_condition is not None:cfg.cfg_null_condition=args.cfg_null_condition
     if args.preserve_documents:cfg.preserve_documents=True
     if args.long_document_policy is not None:cfg.long_document_policy=args.long_document_policy
     if args.dit_microbatch_tokens is not None:cfg.generation_token_budget=args.dit_microbatch_tokens
@@ -211,14 +197,14 @@ def main():
     if not cfg.preserve_documents and (args.dit_microbatch_tokens is not None or args.dit_microbatch_images is not None):
         raise ValueError('DiT microbatch flags require --preserve-documents or the whole-document config')
     if args.max_images_per_pack is None:args.max_images_per_pack=0 if cfg.preserve_documents else 4
-    if args.synthetic and args.data_snapshot:
+    if args.synthetic and args.data_root:
         raise ValueError('--synthetic and --data-root are mutually exclusive')
-    if cfg.preserve_documents and ((not args.data_snapshot and not args.synthetic) or args.max_images_per_pack):
+    if cfg.preserve_documents and ((not args.data_root and not args.synthetic) or args.max_images_per_pack):
         raise ValueError('Whole-document training needs real data and max-images-per-pack=0; bound DiT separately')
-    if args.data_snapshot:
+    if args.data_root:
         from data.sources import open_catalog
         from data.packing import token_contract
-        catalog = open_catalog(args.data_snapshot, args.source_root, args.shuffle_block_rows)
+        catalog = open_catalog(args.data_root, args.source_root, args.shuffle_block_rows)
         membership = catalog.check(args.allow_development_data)
         geometry = catalog.meta.get('training_geometry', {})
         for name in ('vision_max_pixels', 'generation_max_pixels'):
@@ -227,8 +213,6 @@ def main():
         data_tokens = token_contract(catalog.path, cfg)
         if args.micro_batch != 1:
             raise ValueError('Real variable-layout adapter currently requires the requested microbatch=1')
-        if args.data_mode == 'A' and not (args.vae_path or args.latent_encoder):
-            raise ValueError('Multimodal data requires --latent-encoder (fake for tests) or --vae-path')
     if args.ce_chunk is not None:
         cfg.ce_chunk = args.ce_chunk
     cfg.keep_attention_activations=args.keep_attention_activations
@@ -246,18 +230,17 @@ def main():
     from utils.assets import asset_manifest
     from models.backbone_qwen35 import cast_for_training, load_pretrained
     text_manifest=asset_manifest(cfg.text_assets) if cfg.text_assets else None
-    vision_manifest=None
-    if cfg.vision_encoder=='qwen35':
-        from utils.assets import asset_path, vision_config
-        if args.micro_batch!=1:raise ValueError('Native-resolution packing requires micro_batch=1')
-        vision_config(cfg.vision_assets)
-        vision_manifest=json.loads((asset_path(cfg.vision_assets)/'manifest.json').read_text())
-        asset_manifest(cfg.vision_assets)
+    from utils.assets import vision_config
+    if args.micro_batch!=1:raise ValueError('Native-resolution packing requires micro_batch=1')
+    vision_config(cfg.vision_assets)
+    if args.tiny and not args.vision_assets:
+        vision_manifest = dict(synthetic_tower=vision_config(cfg.vision_assets))
+    else:
+        vision_manifest = asset_manifest(cfg.vision_assets)
     if args.deterministic:
         os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
         torch.use_deterministic_algorithms(True)
-    complete_pretrained = (cfg.renderer in ('moss','wan') and bool(cfg.text_assets)
-        and cfg.vision_encoder == 'qwen35' and not args.random_init)
+    complete_pretrained = bool(cfg.text_assets) and not args.random_init
     skip_initialization = bool(args.resume or args.init_checkpoint) or complete_pretrained
     P.initialize(args.tp, cfg, optimizer_instances=args.optimizer_instances,
                  initialize_weights=not skip_initialization)
@@ -317,26 +300,14 @@ def main():
     loaded_weights=None
     if not args.resume and not args.init_checkpoint and not args.random_init:
         if cfg.text_assets:loaded_weights=load_pretrained(model,cfg.text_assets)
-        elif cfg.vision_encoder=='qwen35':model.patch_embed.load_pretrained(cfg.vision_assets)
-        if cfg.renderer in ('moss','wan'):
-            loaded_weights=dict(backbone=loaded_weights,renderer=model.renderer.load_pretrained(
-                cfg.wan_assets if cfg.renderer=='wan' else cfg.moss_assets))
-    # Added blocks have no pretrained source and are built under no_init_weights,
-    # so they must be initialized explicitly here, outside that context. Resume
-    # and init-checkpoint paths restore these tensors from the checkpoint.
-    if (cfg.renderer=='moss' and not args.resume and not args.init_checkpoint
-            and hasattr(model.renderer,'initialize_cross_attention')):
-        initialized=model.renderer.initialize_cross_attention()
-        if initialized:
-            startup.update(cross_attention_projections_initialized=initialized,
-                           cross_attention_residual='ungated',
-                           cross_attention_output_init_std=.02/(2*cfg.dit_layers)**.5)
+        else:model.patch_embed.load_pretrained(cfg.vision_assets)
+        loaded_weights=dict(backbone=loaded_weights,renderer=model.renderer.load_pretrained(cfg.wan_assets))
     model = model.to(device=ACCEL).train()
     if args.init_checkpoint and not args.resume:
         loaded_weights=checkpoint_io.initialize_model(args.init_checkpoint,model,cfg)
     startup['weights_to_device_seconds'] = time.perf_counter()-startup_begin
     if rank == 0:print(json.dumps(dict(startup=startup)),flush=True)
-    if args.data_snapshot and args.data_mode == 'B':
+    if args.data_root and args.data_mode == 'B':
         model.patch_embed.requires_grad_(False)
         model.renderer.requires_grad_(False)
     # Count TP shards once and count replicated tensors once.
@@ -354,7 +325,7 @@ def main():
         grad_reduce_in_fp32=not args.bf16_grad_reduce)
     ema=None
     if args.renderer_ema_decay:
-        if cfg.renderer not in ('moss','wan') or args.data_mode=='B':raise ValueError('EMA requires a trainable renderer')
+        if args.data_mode=='B':raise ValueError('EMA requires a trainable renderer')
         from training.ema import RendererEMA
         ema=RendererEMA(model,optimizer,wrapped,args.renderer_ema_decay)
     frozen_in_buckets=[name for name,p in model.named_parameters()
@@ -362,10 +333,9 @@ def main():
     if frozen_in_buckets:raise RuntimeError(f'Frozen parameters entered gradient buckets: {frozen_in_buckets}')
     training_scope=dict(freeze_vision=cfg.freeze_vision,freeze_vision_merger=cfg.freeze_vision_merger,
                         frozen_parameters_in_gradient_buckets=len(frozen_in_buckets))
-    if cfg.vision_encoder=='qwen35':
-        tower=model.patch_embed.visual
-        training_scope.update(vision_encoder_training=tower.blocks.training,
-                              vision_encoder_recompute=tower.recompute)
+    tower=model.patch_embed.visual
+    training_scope.update(vision_encoder_training=tower.blocks.training,
+                          vision_encoder_recompute=tower.recompute)
     topology = dict(tp=args.tp, dp=dp, pp=1, cp=1, optimizer_instances=args.optimizer_instances)
     training_state = {key: getattr(args, key) for key in ('lr', 'min_lr', 'lr_decay_style',
         'lr_warmup_steps', 'lr_decay_steps', 'seed', 'sequence_length', 'images', 'micro_batch', 'grad_accum')}
@@ -379,8 +349,6 @@ def main():
     training_state['kernel_options'] = dict(
         compile_modulation=_COMPILE_MODULATION,
         attention_tile=os.environ.get('PRETRAIN_ATTENTION_TILE','0'))
-    training_state['kernel_options']['cpu_noise_cast']=os.environ.get('PRETRAIN_CPU_NOISE_CAST','1')
-    training_state['kernel_options']['moss_fused_pointwise']=os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
     # A kernel switch that changes speed or numerics must be attributable from
     # the run record alone, without recovering it from source hashes later.
     import ops.cuda_fused as cuda_fused
@@ -404,16 +372,9 @@ def main():
     if ema is not None:
         training_state['renderer_ema']=dict(schema=ema.schema,module='renderer',decay=ema.decay,dtype='float32',
             adapter_sha256=hashlib.sha256((Path(__file__).parent/'ema.py').read_bytes()).hexdigest())
-    if cfg.renderer=='wan':
-        from data.cache import encoder_identity
-        training_state['wan_assets']=dict(generator=encoder_identity(cfg.wan_assets),vae=encoder_identity(cfg.wan_vae_assets))
-        training_state['wan_adapter_sha256']=hashlib.sha256((ROOT/'models/generator_wan21.py').read_bytes()).hexdigest()
-    if cfg.renderer == 'moss':
-        training_state['moss_assets'] = json.loads((Path(cfg.moss_assets)/'manifest.json').read_text())
-        training_state['moss_adapter_sha256'] = hashlib.sha256(b''.join(
-            (ROOT/name).read_bytes() for name in
-            ('models/moss.py','models/moss_kernels.py','data/generation.py','data/moss_codec.py'))).hexdigest()
-        training_state['moss_pointwise'] = os.environ.get('PRETRAIN_MOSS_FUSED_POINTWISE','0')
+    from data.cache import encoder_identity
+    training_state['wan_assets']=dict(generator=encoder_identity(cfg.wan_assets),vae=encoder_identity(cfg.wan_vae_assets))
+    training_state['wan_adapter_sha256']=hashlib.sha256((ROOT/'models/generator_wan21.py').read_bytes()).hexdigest()
     training_state['backbone_adapter_sha256']=hashlib.sha256(b''.join(
         (ROOT/name).read_bytes() for name in
         ('models/backbone_qwen35.py','ops/gated_delta_layout.py','models/cq_backbone.py',
@@ -421,27 +382,17 @@ def main():
          'ops/attention_layout.py','ops/flex_cq.py','ops/cuda_gated_delta.py','ops/cuda_fused.py',
          'ops/cuda_cross_entropy.py','ops/cuda_compile.py',
          'training/renderer_schedule.py','training/loss.py','ops/cross_entropy.py','ops/functional.py','distributed/megatron.py'))).hexdigest()
-    if vision_manifest is not None:
-        training_state['vision_assets']=vision_manifest
-        training_state['vision_adapter_sha256']=hashlib.sha256(
-            (ROOT/'models/vision_encoder.py').read_bytes()+(ROOT/'models/cq_backbone.py').read_bytes()).hexdigest()
-    resumed_data = {} if args.data_snapshot else None
-    if args.data_snapshot:
+    training_state['vision_assets']=vision_manifest
+    training_state['vision_adapter_sha256']=hashlib.sha256(
+        (ROOT/'models/vision_encoder.py').read_bytes()+(ROOT/'models/cq_backbone.py').read_bytes()).hexdigest()
+    resumed_data = {} if args.data_root else None
+    if args.data_root:
         from data.tokenizer import tokenizer_metadata
         online_tokenizer=tokenizer_metadata(cfg,catalog.meta['tokenizer'])
-        vae_sha=[None]
-        if args.data_mode=='A' and args.vae_path and rank==0:
-            h=hashlib.sha256()
-            with open(args.vae_path,'rb') as handle:
-                for block in iter(lambda:handle.read(8<<20),b''):h.update(block)
-            vae_sha[0]=h.hexdigest()
-        dist.broadcast_object_list(vae_sha,src=0)
         training_state['data'] = dict(snapshot=catalog.meta['identity'], membership=membership['identity'],
-            mode=args.data_mode, vae_path=args.vae_path if args.data_mode=='A' else None,
-            vae_dtype=args.vae_dtype, vae_sha256=vae_sha[0], tokenizer=online_tokenizer,
+            mode=args.data_mode, vae_dtype=args.vae_dtype, tokenizer=online_tokenizer,
             tokenizer_counting_matches_corpus=online_tokenizer==catalog.meta['tokenizer'],
-            latent_encoder=args.latent_encoder or ('kl16' if args.vae_path else None),
-            latent_options=args.latent_options, max_images_per_pack=args.max_images_per_pack,
+            latent_encoder=args.latent_encoder if args.data_mode=='A' else None, max_images_per_pack=args.max_images_per_pack,
             pack_padding_multiple=args.pack_padding_multiple)
         adapter_files=sorted((ROOT/'data').glob('*.py'))
         training_state['data']['adapter_sha256']=hashlib.sha256(b''.join(p.read_bytes() for p in adapter_files)).hexdigest()
@@ -460,7 +411,7 @@ def main():
         if not budget_already_complete:args.warmup=min(args.warmup,args.steps-1)
     # Different DP replicas see different data. TP ranks must see identical data.
     loader = preparer = ordered_buckets = None
-    if args.data_snapshot and not budget_already_complete:
+    if args.data_root and not budget_already_complete:
         from data.stream import DocumentStream
         from data.packing import Packer, ConsumedLoader
         from data.codec import DevicePreparer
@@ -468,22 +419,19 @@ def main():
         from distributed.communication import OrderedGradientBuckets, OrderedParameterGathers, finish_parameter_gathers
         # Spawned CPU workers must not autoload the NPU backend on import.
         os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD']='0'
-        docs = DocumentStream(args.data_snapshot, args.data_mode, P.dp_rank(), dp, args.seed,
+        docs = DocumentStream(args.data_root, args.data_mode, P.dp_rank(), dp, args.seed,
             workers=args.data_workers, prefetch=args.data_prefetch,
             source_root=args.source_root, block_rows=args.shuffle_block_rows, tokenize_rows=args.tokenize_rows,
             image_threads=args.image_workers, image_prefetch=args.image_prefetch,
             state=resumed_data.get('documents') if resumed_data else None,
-            allow_development=args.allow_development_data,native_images=cfg.vision_encoder=='qwen35',
-            image_size=cfg.image_size,cfg=cfg,sequence_length=args.sequence_length)
+            allow_development=args.allow_development_data,cfg=cfg,sequence_length=args.sequence_length)
         packer = Packer(docs, cfg, args.sequence_length, data_tokens, resumed_data or None,
                         pin_device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
                         max_images=args.max_images_per_pack,padding_multiple=args.pack_padding_multiple)
         host_loader = ConsumedLoader(packer, args.data_prefetch, resumed_data or None)
         with torch.random.fork_rng(devices=[DEV.current_device()],device_type=ACCEL):
-            preparer = DevicePreparer(cfg, args.vae_path if args.data_mode=='A' else None,
-                device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
-                vae_dtype=getattr(torch,args.vae_dtype), vae_chunk=args.vae_chunk,
-                encoder=args.latent_encoder if args.data_mode=='A' else None,encoder_options=args.latent_options)
+            preparer = DevicePreparer(cfg, device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
+                vae_dtype=getattr(torch,args.vae_dtype), encoder=args.latent_encoder if args.data_mode=='A' else None)
         loader = DeviceLoader(host_loader, preparer, args.device_prefetch)
         ordered_buckets = OrderedGradientBuckets(wrapped)
         ordered_gathers = OrderedParameterGathers(wrapped)
@@ -491,7 +439,7 @@ def main():
         padding_batch = empty_batch(cfg, data_tokens).to(ACCEL)
     elif not budget_already_complete:
         batch = fake_batch(cfg, args.sequence_length, args.micro_batch, args.images,
-                           seed=args.seed + P.dp_rank(), device=ACCEL, dtype=torch.bfloat16)
+                           seed=args.seed + P.dp_rank(), device=ACCEL)
     environment = dict(torch=torch.__version__,
         device=DEV.get_device_name(DEV.current_device()),
         total_memory=DEV.get_device_properties(DEV.current_device()).total_memory,
@@ -502,7 +450,7 @@ def main():
         capacity_slots_per_update_upper_bound=global_batch*args.sequence_length,
         training_backend=('Megatron Core / NCCL'),
         attention_backend=('upstream flash-linear-attention GatedDeltaNet + PyTorch SDPA'),
-        measured_on=accel.accel_type(), cuda=torch.version.cuda, synthetic=not bool(args.data_snapshot),
+        measured_on=accel.accel_type(), cuda=torch.version.cuda, synthetic=not bool(args.data_root),
         pretrained_weights=loaded_weights,qwen35_assets=text_manifest,startup=startup)
     if ema is not None:
         environment['renderer_ema']=dict(**ema.metadata(),local_storage_bytes=ema.local_bytes,
@@ -512,10 +460,8 @@ def main():
         environment['data'] = dict(snapshot=catalog.meta, membership=membership,
             online_tokenizer=online_tokenizer,tokenizer_counting_matches_corpus=docs.counting_matches_corpus,
             mode=args.data_mode,
-            latent_grid='dynamic' if cfg.renderer in ('moss','wan') else [cfg.image_size//cfg.patch_size]*2+[cfg.latent_channels],
-            actual_generation_image_tokens='dynamic' if cfg.renderer in ('moss','wan') else cfg.image_tokens,
-            generation_max_pixels=cfg.generation_max_pixels if cfg.renderer in ('moss','wan') else cfg.image_size**2,
-            generation_token_budget=cfg.generation_token_budget if cfg.renderer in ('moss','wan') else None,
+            latent_grid='dynamic',actual_generation_image_tokens='dynamic',
+            generation_max_pixels=cfg.generation_max_pixels,generation_token_budget=cfg.generation_token_budget,
             fake_latents=args.latent_encoder=='fake',
             local_trainable_parameters=sum(p.numel() for p in model.parameters() if p.requires_grad))
     from utils.experiment import source_hashes
@@ -567,10 +513,10 @@ def main():
         provenance=dict(source_sha256=environment['source_sha256'],
             dependencies=environment['dependencies'],
             runtime={key:environment[key] for key in ('torch','stack','cuda')},
-            assets={key:training_state[key] for key in ('qwen35_assets','vision_assets','moss_assets','wan_assets')
+            assets={key:training_state[key] for key in ('qwen35_assets','vision_assets','wan_assets')
                     if key in training_state},
             inference_inputs={key:training_state.get('data',{}).get(key) for key in
-                              ('tokenizer','latent_encoder','latent_options','vae_path','vae_dtype','vae_sha256')},
+                              ('tokenizer','latent_encoder','vae_dtype')},
             resumed_from=args.resume,initial_weights=loaded_weights)
         event=save(eval_snapshot_root/f'step_{step:07d}',model,wrapped,step,cfg,topology,
                    ema=ema,provenance=provenance)
@@ -670,8 +616,6 @@ def main():
                     sum(x[0].ids.shape[1]-x[1]['occupied'] for x in micro_batches if x),
                     sum(x[1].get('dit_microbatches',int(bool(x[0].generation_image_count))) for x in micro_batches if x),
                     sum(x[0].generation_image_count for x in micro_batches if x),
-                    sum(x[1].get('i2t_null_candidates',0) for x in micro_batches if x),
-                    sum(x[1].get('i2t_null_images',0) for x in micro_batches if x),
                     sum(x[1]['condition_query_tokens'] for x in micro_batches if x),
                     sum(x[1]['unconditional_images'] for x in micro_batches if x),
                     sum(x[1]['instruction_dropped_images'] for x in micro_batches if x),
@@ -754,8 +698,6 @@ def main():
                     packs=[dict(length=x[0].ids.shape[1],text=x[0].text_indices.numel(),
                         queries=len(x[0].mainline.query_positions),images=len(x[0].image_indices),
                         generation_images=x[0].generation_image_count,
-                        i2t_null_candidates=x[1].get('i2t_null_candidates',0),
-                        i2t_null_images=x[1].get('i2t_null_images',0),
                         vision_patches=sum(x[0].vision.lengths) if x[0].vision else 0,
                         generation_tokens=x[1].get('generation_tokens',0),
                         dit_microbatches=x[1].get('dit_microbatches',1 if x[0].generation_image_count else 0),
@@ -805,15 +747,13 @@ def main():
                     resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/2**20],device=ACCEL)
                 dist.all_reduce(resource_values,op=dist.ReduceOp.MAX)
                 row.update(body_tokens=counts[2],occupied_tokens=counts[3],images_consumed=counts[1],
-                           generation_images=counts[12],i2t_null_candidates=counts[13],i2t_null_images=counts[14],
-                           i2t_null_selection_rate=counts[14]/counts[13] if counts[13] else None,
-                           i2t_null_generation_fraction=counts[14]/counts[12] if counts[12] else None,
+                           generation_images=counts[12],
                            generation_tokens=counts[5],documents_completed=counts[6],
                            t2i_captions_completed=counts[7],i2t_captions_completed=counts[8],
                            active_microbatches=counts[4],data_wait_seconds=resource_values[0].item(),
                            supervised_text_tokens=counts[0],
-                           condition_query_tokens=counts[15],unconditional_images=counts[16],
-                           instruction_dropped_images=counts[17],instruction_dropout_eligible_images=counts[18],
+                           condition_query_tokens=counts[13],unconditional_images=counts[14],
+                           instruction_dropped_images=counts[15],instruction_dropout_eligible_images=counts[16],
                            backbone_processed_slots=counts[9],padding_tokens=counts[10],dit_microbatches=counts[11],
                            data_prepare_seconds=resource_values[1].item(),data_device_wait_seconds=resource_values[2].item(),
                            cpu_peak_rss_gib=resource_values[3].item(),
@@ -860,7 +800,7 @@ def main():
                 status='finite_dataset_complete', measured_updates=0, resumed_from=args.resume), indent=2))
     if rank == 0 and measurements:
         mean_seconds = sum(x['seconds'] for x in measurements)/len(measurements)
-        summary = dict(world=world, **topology, method=cfg.method,image_condition_queries=cfg.image_condition_queries,
+        summary = dict(world=world, **topology, method='CQ_IT',image_condition_queries=cfg.image_condition_queries,
             completed_updates=completed_step,steps=len(measurements),
             mean_seconds=mean_seconds, tokens_per_second=global_batch*args.sequence_length/mean_seconds,
             tokens_per_second_per_card=global_batch*args.sequence_length/mean_seconds/world,
@@ -909,7 +849,7 @@ def main():
             summary['capacity_slots_per_second_per_card']=total_capacity/total_seconds/world
             summary['wall_capacity_slots_per_second']=total_capacity/wall_seconds
             for key in ('occupied_tokens','body_tokens','images_consumed','generation_images',
-                        'i2t_null_candidates','i2t_null_images','supervised_text_tokens',
+                        'supervised_text_tokens',
                         'condition_query_tokens','backbone_processed_slots','padding_tokens','active_microbatches','dit_microbatches'):
                 values=[x[key] for x in measurements]
                 summary[key+'_per_update']=dict(mean=statistics.mean(values),min=min(values),max=max(values))

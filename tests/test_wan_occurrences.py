@@ -49,6 +49,13 @@ def test_tititi_reads_targets_and_content(setup, flags, visibility):
     text_positions=[(full.ids[0]==token).nonzero().item() for token in (21,22,23)]
     spans=[r[r.ge(0)] for r in full.image_indices]
     assert len(spans)==3 and len(full.vision.content_indices)==sum(map(len,spans))
+    from evaluations.sampling import make_null_batch, make_history_batch
+    for branch, want in ((make_null_batch(full,cfg),[0]*3), (make_history_batch(full,cfg),text_positions)):
+        assert torch.equal(branch.mainline.query_rope,full.mainline.query_rope[:,full.mainline.query_image[0]])
+        for i in active:
+            rows = branch.mainline.query_positions.eq(spans[i][0])
+            assert branch.mainline.query_read_sigma[rows].eq(want[i]).all()
+
     for batch in (full,hist):
         plan=batch.mainline
         assert torch.equal(plan.cq_mask,plan.cq_predicate.dense())
@@ -77,7 +84,14 @@ def test_tititi_reads_targets_and_content(setup, flags, visibility):
         changed_ids[0,text_positions]=32
         assert torch.equal(backbone(model,empty,vision_features=features)[query_rows],
                            backbone(model,replace(empty,ids=changed_ids),vision_features=features+2)[query_rows])
-        for batch in (full,hist):
+        from evaluations.sampling import make_null_batch, make_history_batch
+    for branch, want in ((make_null_batch(full,cfg),[0]*3), (make_history_batch(full,cfg),text_positions)):
+        assert torch.equal(branch.mainline.query_rope,full.mainline.query_rope[:,full.mainline.query_image[0]])
+        for i in active:
+            rows = branch.mainline.query_positions.eq(spans[i][0])
+            assert branch.mainline.query_read_sigma[rows].eq(want[i]).all()
+
+    for batch in (full,hist):
             hidden=backbone(model,batch,vision_features=features)
             gathered=batch.mainline.gather_image_conditions(hidden,batch.generation_image_indices)
             consumed=gathered.reshape(-1,cfg.width)[batch.generation.condition_indices]
@@ -139,10 +153,11 @@ def test_release_entry_controls_packing_and_native_jsonl_permissions(tmp_path):
     from data.sources import open_catalog
     from training.train import parse_args
 
-    shorthand = dict(task='t2i',caption='an apple',image_path='image.png')
+    ungranted = dict(images=[dict(path='image.png')],segments=[dict(kind='text',text='an apple'),
+                     dict(kind='image',image_index=0)],generation_target=True)
     native = dict(segments=[dict(kind='image',image_index=0,generation_target=flag) for flag in (True,False,True)],
                   images=[dict(path='image.png')])
-    (tmp_path/'records.jsonl').write_text('\n'.join(map(json.dumps,[shorthand, native])))
+    (tmp_path/'records.jsonl').write_text('\n'.join(map(json.dumps,[ungranted, native])))
     entry = tmp_path/'sources.yaml'
     entry.write_text('training_geometry: {sequence_length: 4096, shuffle_block_rows: 2}\nsources: [{path: records.jsonl}]')
     recipe = tmp_path/'experiment.yaml'
@@ -172,7 +187,8 @@ def test_rebinding_upstream_assets_keeps_vetoes_on_the_corresponding_occurrence(
     bound = dict(published, images=[dict(path='B',exact_identity='B'),dict(path='A',exact_identity='A')],
         segments=[occurrence(1),occurrence(0),occurrence(1),occurrence(1,upstream_image=dict(path='A',generation_target=False))])
     constrain_bound_occurrences(published,bound)
-    doc, = read_documents([bound],grant_field='image_loss_allowed')
+    bound['segments'][0]['generation_target'] = True
+    doc, = read_documents([bound])
     assert [e['generation_target'] for e in doc['elements']]==[True,False,False,False]
     assert bound_ref(dict(exact_identity='A'),dict(exact_identity='A',generation_target=False),published)['generation_target'] is False
     with pytest.raises(ValueError, match='visual occurrence'):
@@ -191,14 +207,13 @@ def test_pinned_training_entry_projects_its_selected_view_without_adding_a_shuff
     digest=hashlib.sha256(manifest.read_bytes()).hexdigest()
     (tmp_path/'COMPLETE.json').write_text(json.dumps(dict(complete=True,manifest_sha256=digest)))
     entry=tmp_path/'sources.yaml'
-    config=dict(catalog=manifest.name,catalog_sha256=digest,generation_target_field='image_loss_allowed')
+    config=dict(catalog=manifest.name,catalog_sha256=digest)
     entry.write_text(yaml.safe_dump(config))
     catalog=open_catalog(tmp_path,block_rows=1)
     try:
         rows=catalog.read_rows(*catalog.block(0))
         assert rows[0]['sample_id']=='0:rows:0'
         assert not read_documents(rows)[0]['elements'][0]['generation_target']
-        assert read_documents(rows,grant_field=catalog.meta['generation_target_field'])[0]['elements'][0]['generation_target']
     finally:catalog.close()
     entry.write_text(yaml.safe_dump(dict(config,training_geometry=dict(sequence_length=4096))))
     with pytest.raises(ValueError,match='geometry conflicts'):

@@ -9,6 +9,7 @@ import torch
 from configs.config import RunConfig
 from corpus_pipeline.production.common import file_sha
 from data.packing import Packer, token_contract
+from data.sources import release_geometry
 from data.stream import DocumentStream
 
 
@@ -42,8 +43,6 @@ class ExampleStream(DocumentStream):
 def verify(root):
     root = Path(root).resolve()
     package = root.parent
-    profile = json.loads((root / 'TRAINING_PROFILE.json').read_bytes())
-    expected = json.loads((root / 'TRAINING_READ_ACCEPTANCE.json').read_bytes())
     published = json.loads((package / 'PACKAGE.json').read_bytes())
     assert file_sha(root / 'manifest.json') == published['manifest_sha256']
     assert file_sha(root / 'source_roots.json') == published['source_roots_sha256']
@@ -53,15 +52,14 @@ def verify(root):
         ).split()
         assert actual == mount and 'ro' in options.split(',')
     cases = json.loads((package / 'READ_CASES.json').read_bytes())
-    previous = {c['case']:c for c in expected['cases']}
-    cfg = RunConfig.load(package / 'reader/configs/qwen35_2b_wan.yaml')
+    cfg = RunConfig.load(Path(__file__).resolve().parents[1] / 'configs/qwen35_2b_wan.yaml')
     cfg.vision_assets = cfg.text_assets = str(package / 'processor')
-    length = profile['sequence_length']
+    length = release_geometry(root)['sequence_length']
     torch.set_num_threads(1)
-    stream = ExampleStream(root, 'A', 0, 1, 42, cfg=cfg, native_images=True,
+    stream = ExampleStream(root, 'A', 0, 1, 42, cfg=cfg,
                            workers=1, prefetch=1, image_threads=1, image_prefetch=1, sequence_length=length)
     try:
-        assert stream.catalog.meta['documents'] == published['records'] == expected['records']
+        assert stream.catalog.meta['documents'] == published['records']
         packer = Packer(stream, cfg, length, token_contract(root, cfg), padding_multiple=128)
         checks = []
         for case in cases:
@@ -79,11 +77,18 @@ def verify(root):
                 assert positions == targets
                 stats = dict(occupied=receipt['occupied'], ce=len(batch.text_indices), flow=len(positions),
                              images=len(images), flow_tokens=receipt['generation_tokens'])
-                if case['case'] in previous:
-                    assert all(previous[case['case']][view][k] == v for k,v in stats.items())
-                result[view] = dict(stats, target_image_positions=positions)
+                stats['target_image_positions'] = positions
+                assert stats == case['expected'][view], (case['case'], view, stats)
+                result[view] = stats
             checks.append(result)
-        assert {c['leaf'] for c in checks} == set(expected['covered_leaves'])
+        def leaves(catalog):
+            if hasattr(catalog, 'catalogs'):
+                for child in catalog.catalogs:
+                    yield from leaves(child)
+            else:
+                yield str(catalog.path.relative_to(root))
+
+        assert {c['leaf'] for c in checks} == set(leaves(stream.catalog))
         return dict(passed=True, records=published['records'], manifest_sha256=published['manifest_sha256'],
                     mounts=published['mounts'], cases=checks)
     finally:

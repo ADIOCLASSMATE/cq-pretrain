@@ -53,7 +53,7 @@ class QwenCQContracts(unittest.TestCase):
 
     def test_text_content_is_official_qwen(self):
         cfg=tiny_config(fused=False);batch=fake_batch(cfg,17,1,1)
-        batch.image_queries.zero_();batch.image_indices=batch.image_indices[:0]
+        batch.generation_image_indices=batch.generation_image_indices[:0];batch.image_queries.zero_();batch.image_indices=batch.image_indices[:0]
         batch.sigma=torch.arange(17)[None];batch.segments.zero_()
         batch.mainline=build_plan(batch,cfg)
         plan=batch.mainline.delta_plan;torch.manual_seed(42)

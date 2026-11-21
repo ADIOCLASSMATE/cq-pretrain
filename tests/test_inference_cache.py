@@ -1,3 +1,4 @@
+from tests.fixtures import ScaffoldTokenizer
 import numpy as np
 import pytest
 import torch
@@ -20,7 +21,7 @@ def test_cached_cq_matches_full_prefix_and_keeps_storage(fused_projections,prefi
     NativeVisionContracts.setUpClass()
     try:
         fixture=NativeVisionContracts()
-        cfg=fixture.cfg(layers=8,renderer='wan',latent_channels=16,flow_draws=1,
+        cfg=fixture.cfg(layers=8,latent_channels=16,
             dit_width=64,dit_heads=2,dit_ffn=128,dit_layers=2,wan_freq_dim=32,
             qwen_fused_projections=fused_projections,linear_value_heads=4,content_visibility=visibility)
         torch.manual_seed(71);model=JointModel(cfg).eval().double()
@@ -37,7 +38,7 @@ def test_cached_cq_matches_full_prefix_and_keeps_storage(fused_projections,prefi
                 sigma=np.concatenate((block['sigma'],[n,n+1],block['sigma']+n+2)),
                 positions=np.concatenate((block['positions'],np.full((3,2,1),block['positions'].max()+1),
                     block['positions']+block['positions'].max()+4),axis=1),text_indices=np.empty(0,dtype=np.int64))
-        batch=make_batch(cfg,fixture.tokens,[],processed,'I2T',sequence=sequence)
+        batch=make_batch(cfg,fixture.tokens,[],processed,'I2T',sequence=sequence,tokenizer=ScaffoldTokenizer())
         features=torch.randn(len(batch.vision.content_indices),cfg.width,dtype=torch.float64) if processed is not None else None
         with torch.no_grad():
             expected=backbone(model,batch,vision_features=features)[batch.mainline.output_positions]
@@ -47,7 +48,7 @@ def test_cached_cq_matches_full_prefix_and_keeps_storage(fused_projections,prefi
             tokens=[]
             for token in [7,9,12,5,11,6,13]:
                 tokens.append(token)
-                fresh=make_batch(cfg,fixture.tokens,tokens,processed,'I2T',sequence=sequence)
+                fresh=make_batch(cfg,fixture.tokens,tokens,processed,'I2T',sequence=sequence,tokenizer=ScaffoldTokenizer())
                 expected=backbone(model,fresh,vision_features=features)[fresh.mainline.output_positions]
                 torch.testing.assert_close(decoder.advance(token),expected,atol=1e-10,rtol=1e-9)
             assert pointers==[{k:v.data_ptr() for k,v in c.items() if isinstance(v,torch.Tensor)} for c in decoder.layers]

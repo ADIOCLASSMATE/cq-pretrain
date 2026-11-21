@@ -23,8 +23,8 @@ def test_t2i_puts_caption_in_user_turn_and_image_in_assistant():
     spans, direction, templated = chat.build(caption_row('T2I'))
     assert templated
     assert direction == 'T2I'
-    assert spans[-1]['kind'] == 'text' and spans[-1]['text'] == chat.TURN_END
-    assert spans[-2]['kind'] == 'image'
+    assert texts(spans[-2:]) == chat.TURN_END
+    assert spans[-3]['kind'] == 'image'
     rendered = texts(spans)
     assert rendered.startswith('user\n')
     assert 'a red bicycle' in rendered
@@ -49,11 +49,27 @@ def test_only_corpus_text_is_supervised_and_counted():
     counted = [s['text'] for s in spans if s['kind'] == 'text' and not s['synthetic']]
     # The caption and every message terminator are learned.
     assert 'a red bicycle' in supervised
-    assert chat.TURN_END in supervised
+    assert supervised == ['a red bicycle', chat.IM_END, chat.IM_END]
     # Role headers, instructions and the thinking prefix are never learned.
     assert not any(t.startswith('user') or t.startswith(chat.IM_START) for t in supervised)
     # Only real corpus text may perturb the published token audit.
     assert counted == ['a red bicycle']
+
+
+def test_chat_end_markers_and_body_newlines_are_the_only_supervised_spans():
+    body = 'first line\nsecond line\n'
+    messages = [dict(kind='text', role=role, turn=i, text=value)
+                for i, (role, value) in enumerate([('user', body), ('assistant', 'reply')])]
+    rows = [caption_row('T2I', body), caption_row('I2T', body),
+            dict(sample_id='conversation', format='conversation', segments=messages),
+            dict(sample_id='causal', format='causal_sequence', segments=messages)]
+    for row in rows:
+        spans, _, _ = chat.build(row)
+        supervised = [s['text'] for s in spans if s['kind'] == 'text' and s['supervised']]
+        assert supervised.count(chat.IM_END) == 2
+        assert [t for t in supervised if t != chat.IM_END] == (
+            [body] if row['format'] == 'caption' else [body, 'reply'])
+        assert texts(spans).count(chat.TURN_END) == 2
 
 
 def test_instruction_is_deterministic_and_varied():
@@ -82,6 +98,17 @@ def test_conversation_turns_are_separated():
     assert 'A cat.' in supervised
 
 
+def test_conversations_preserve_system_and_tool_roles_and_explicit_text_masks():
+    segments = [dict(kind='text', role=role, turn=i, text=role, supervised=flag)
+                for i, (role, flag) in enumerate([('system', False), ('tool', True), ('assistant', None)])]
+    for fmt in ('conversation', 'causal_sequence'):
+        spans, _, _ = chat.build(dict(sample_id='roles', format=fmt, segments=segments))
+        assert texts(spans) == ('system\nsystem' + chat.TURN_END +
+                                chat.IM_START + 'tool\ntool' + chat.TURN_END +
+                                chat.IM_START + 'assistant\nassistant' + chat.TURN_END)
+        assert [s['text'] for s in spans if s['supervised'] and not s['synthetic']] == ['tool', 'assistant']
+
+
 def test_multi_turn_alternation_opens_each_message_once():
     segments = []
     for turn in range(4):
@@ -105,6 +132,18 @@ def test_interleaved_documents_keep_natural_form():
     assert texts(spans) == 'AB', 'natural documents receive no chat scaffolding'
     assert all(s['supervised'] for s in spans if s['kind'] == 'text')
     assert chat.IM_START not in texts(spans)
+
+
+def test_corpus_text_defaults_and_release_veto_apply_to_each_format():
+    for flag, expected in [(None, True), (False, False), (True, True)]:
+        for fmt in ('caption', 'conversation', 'causal_sequence', 'interleaved'):
+            row = caption_row('T2I')
+            row['format'] = fmt
+            row['segments'][0].update(supervised=flag, role='user', turn=0)
+            row['segments'][1].update(role='assistant', turn=1)
+            spans, _, _ = chat.build(row)
+            body, = [s for s in spans if s.get('text') == 'a red bicycle']
+            assert body['supervised'] is expected and not body['synthetic']
 
 
 def test_empty_corpus_spans_are_dropped():
@@ -156,7 +195,7 @@ def document(ident, ids, templated, supervised=True):
 
 
 def pack(docs, length=32):
-    cfg = tiny_config(vision_encoder='none', renderer='none', preserve_documents=False)
+    cfg = tiny_config(preserve_documents=False)
     batch, receipt = Packer(Documents(docs), cfg, length, TOKENS).next()
     return batch, receipt
 
@@ -224,65 +263,3 @@ class QueryPruning(unittest.TestCase):
         plan, _, _ = self.plan_for(torch.empty(0, dtype=torch.long))
         self.assertTrue(len(plan.query_positions) > 0,
                         'a fully unsupervised pack still needs a DDP-safe graph')
-
-
-class ResumeConfigCompatibility(unittest.TestCase):
-    """Adding a defaulted field must not orphan existing checkpoints."""
-
-    def check(self, saved, current, defaults):
-        from dataclasses import fields
-        added = set(current) - set(saved)
-        benign = all(n in defaults and current[n] == defaults[n] for n in added)
-        return benign and {k: v for k, v in current.items() if k not in added} == saved
-
-    def test_new_field_at_default_is_accepted(self):
-        saved = {'width': 4096, 'layers': 32}
-        current = {'width': 4096, 'layers': 32, 'moss_cross_attention': False}
-        self.assertTrue(self.check(saved, current, {'moss_cross_attention': False}))
-
-    def test_new_field_at_non_default_is_rejected(self):
-        saved = {'width': 4096}
-        current = {'width': 4096, 'moss_cross_attention': True}
-        self.assertFalse(self.check(saved, current, {'moss_cross_attention': False}),
-                         'a model that actually changed must not resume')
-
-    def test_changed_existing_field_is_rejected(self):
-        saved = {'width': 4096, 'layers': 32}
-        current = {'width': 2048, 'layers': 32, 'moss_cross_attention': False}
-        self.assertFalse(self.check(saved, current, {'moss_cross_attention': False}))
-
-    def test_removed_field_is_rejected(self):
-        saved = {'width': 4096, 'layers': 32}
-        current = {'width': 4096}
-        self.assertFalse(self.check(saved, current, {}))
-
-    def test_real_config_matches_its_own_dict(self):
-        from configs.config import RunConfig
-        from dataclasses import fields
-        cfg = RunConfig.load(Path(__file__).resolve().parents[1] / 'configs/qwen35_2b_wan.yaml')
-        current = cfg.to_dict()
-        defaults = {f.name: f.default for f in fields(cfg)}
-        saved = {k: v for k, v in current.items() if k != 'moss_cross_attention'}
-        self.assertTrue(self.check(saved, current, defaults),
-                        'the real production config must resume its own checkpoints')
-
-    def strip(self, saved, current):
-        saved = dict(saved)
-        removed = {'work_budget': 0., 'work_weights': [1., .18, 1.72]}
-        for name, inert in removed.items():
-            if name in saved and name not in current and saved[name] == inert:
-                saved.pop(name)
-        return saved == current
-
-    def test_removed_inert_knob_is_accepted(self):
-        saved = {'seed': 42, 'work_budget': 0., 'work_weights': [1., .18, 1.72]}
-        self.assertTrue(self.strip(saved, {'seed': 42}))
-
-    def test_removed_knob_with_active_value_is_rejected(self):
-        saved = {'seed': 42, 'work_budget': 45000.}
-        self.assertFalse(self.strip(saved, {'seed': 42}),
-                         'a checkpoint trained with the knob ON must not resume')
-
-    def test_changed_schedule_is_still_rejected(self):
-        saved = {'seed': 42, 'lr': 5e-5, 'work_budget': 0.}
-        self.assertFalse(self.strip(saved, {'seed': 42, 'lr': 1e-4}))

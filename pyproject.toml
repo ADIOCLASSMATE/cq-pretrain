@@ -12,6 +12,9 @@ dependencies = ["PyYAML", "numpy", "Pillow", "pyarrow", "safetensors", "tokenize
 [tool.setuptools.packages.find]
 include = ["ops*", "distributed*", "models*", "data*", "training*", "configs*", "evaluations*", "utils*", "scripts*", "corpus_pipeline*"]
 
+[tool.setuptools.package-data]
+configs = ["*.yaml", "tiny_vision/*.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

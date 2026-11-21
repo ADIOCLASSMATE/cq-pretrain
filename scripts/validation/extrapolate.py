@@ -13,7 +13,7 @@ rows=[]
 for file in args.summaries:
     measured=json.loads(Path(file).read_text())
     if measured.get('data_mode'):
-        raise ValueError('Real-data epoch estimates require consumed documents/images; use analyze_moss_runs instead of capacity slots')
+        raise ValueError('Real-data epoch estimates require consumed documents/images')
     if measured['profiling']:
         raise ValueError('Use unprofiled timing results for extrapolation')
     tp=measured['tp'];dp=args.target_cards//tp

@@ -37,7 +37,7 @@ class PipelineTests(unittest.TestCase):
     def tearDownClass(cls):cls.temp.cleanup()
 
     def stream(self,view='A',**kwargs):
-        values=dict(rank=0,world=1,seed=9,workers=2,prefetch=3,image_size=32,
+        values=dict(rank=0,world=1,seed=9,workers=2,prefetch=3,
                     block_rows=7,tokenize_rows=3,allow_development=True)
         values.update(kwargs)
         return DocumentStream(self.root,view,**values)
@@ -104,7 +104,8 @@ class PipelineTests(unittest.TestCase):
             for pair in expected:
                 replay=other.next()
                 self.assertEqual(pair[1],replay[1]);self.assertTrue(torch.equal(pair[0].ids,replay[0].ids))
-                self.assertTrue(torch.equal(pair[0].pixels,replay[0].pixels))
+                if pair[0].vision is not None:
+                    torch.testing.assert_close(pair[0].vision.pixel_values,replay[0].vision.pixel_values,rtol=0,atol=0)
                 other.acknowledge(replay[1])
         finally:other.close()
 
@@ -121,7 +122,7 @@ class PipelineTests(unittest.TestCase):
             self.stream(cfg=cfg,sequence_length=1024,state=state)
 
     def test_latent_prefetch_rng_and_contract(self):
-        cfg=tiny_config(vocab_size=151936,latent_channels=8)
+        cfg=tiny_config(vocab_size=151936)
         before=torch.random.get_rng_state().clone();results=[]
         for depth in (0,2):
             host=self.loader();device=DeviceLoader(host,DevicePreparer(cfg,device='cpu',encoder='fake'),depth)
@@ -135,6 +136,7 @@ class PipelineTests(unittest.TestCase):
                 results.append(result)
             finally:device.close()
         self.assertTrue(torch.equal(before,torch.random.get_rng_state()))
+        self.assertTrue(any(latents.numel() for latents,_,_ in results[0]))
         for a,b in zip(*results):
             for x,y in zip(a,b):self.assertTrue(torch.equal(x,y))
 
@@ -146,7 +148,9 @@ class PipelineTests(unittest.TestCase):
                 if items:break
                 stream.advance()
             locator=items[0]['locator']
-            self.assertEqual(stream.image_reader.read(locator).shape,(32,32,3))
+            pixels=stream.image_reader.read(locator)
+            self.assertEqual(pixels.shape[2],3)
+            self.assertGreaterEqual(min(pixels.shape[:2]),256)
             with self.assertRaises(RuntimeError):stream.image_reader.read(dict(locator,sha256='0'*64))
             with self.assertRaises(ValueError):stream.image_reader.read(dict(locator,shard='https://example.invalid/a.tar'))
             with self.assertRaises(ValueError):stream.image_reader.read(dict(locator,offset=-1))

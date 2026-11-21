@@ -36,8 +36,7 @@ def video_sequence(processor,grid,timestamps):
         cursor+=max(h,w);last=stop
     positions[:,last:,0]=np.arange(cursor,cursor+len(ids)-last)
     return dict(ids=ids,visual=visual,sigma=sigma,positions=positions,
-                # Native markers/time strings are structural inputs, not corpus captions.
-                text_indices=np.empty(0,dtype=np.int64))
+                text_indices=np.flatnonzero(ids == processor.tokenizer.convert_tokens_to_ids(processor.vision_start_token)))
 
 
 def image_sequence(grid,tokens):

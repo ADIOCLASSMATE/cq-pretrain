@@ -19,8 +19,22 @@ from tests.fixtures import make_fake, tokenizer_root
 from data.stream import DocumentStream
 from data.codec import DevicePreparer
 from models.modeling_umm import JointModel
-from tests.test_i2t_image_sampling import Documents, row
+import numpy as np
 import tests.test_qwen35_vision as fixtures
+
+
+class Documents(fixtures.Documents):
+    signature=dict(snapshot='sampling-fixture',seed=42,epoch=0,rank=0)
+
+    def state_dict(self):
+        return dict(index=self.index,signature=self.signature.copy())
+
+
+def row(name,direction='I2T',height=64,width=64):
+    text=lambda ids:dict(type='text',input_ids=np.asarray(ids,np.int32))
+    image=dict(type='image',generation_target=True,pixels=np.full((height,width,3),len(name)*13%256,np.uint8))
+    elements=[text([11]),image,text([21,22,23])] if direction=='I2T' else [text([31,32]),image]
+    return dict(id=name,format='caption',direction=direction,elements=elements)
 
 
 class PermissionLoadingTests(unittest.TestCase):
@@ -77,9 +91,8 @@ class PermissionPackingTests(unittest.TestCase):
     def tearDownClass(cls):fixtures.NativeVisionContracts.tearDownClass()
 
     def cfg(self,**kwargs):
-        values=dict(renderer='moss',latent_channels=128,flow_draws=1,dit_width=128,dit_heads=4,
-                    dit_ffn=256,dit_layers=2,preserve_documents=True,generation_token_budget=64,
-                    i2t_image_loss_probability=1,cfg_null_condition='i2t_prefix')
+        values=dict(latent_channels=16,dit_width=128,dit_heads=4,
+                    dit_ffn=256,dit_layers=2,preserve_documents=True,generation_token_budget=64)
         values.update(kwargs)
         return self.fixture.cfg(**values)
 
@@ -87,7 +100,7 @@ class PermissionPackingTests(unittest.TestCase):
         docs=Documents(rows,state['documents']['index'] if state else 0)
         return Packer(docs,cfg,length,self.fixture.tokens,state)
 
-    def test_mixed_image_flags_override_probability_one_in_every_format(self):
+    def test_vetoes_override_occurrence_grants_in_every_format(self):
         cfg=self.cfg()
         for fmt in ('caption','conversation','interleaved'):
             with self.subTest(format=fmt):
@@ -127,11 +140,11 @@ class PermissionPackingTests(unittest.TestCase):
         batch,_=self.packer([entry],cfg).next()
         self.assertEqual(batch.generation_image_indices.tolist(),[1,3])
 
-    def test_denied_moss_image_skips_generation_and_keeps_understanding_gradient(self):
+    def test_denied_image_skips_generation_and_keeps_understanding_gradient(self):
         cfg=self.cfg();entry=row('understand');entry['image_loss_allowed']=False
         batch,receipt=self.packer([entry],cfg).next()
         preparer=DevicePreparer(cfg,device='cpu',encoder='fake')
-        with patch.object(preparer.vae,'encode',side_effect=AssertionError('VAE must be skipped')):
+        with patch('data.codec.prepare_wan',side_effect=AssertionError('VAE must be skipped')):
             ready,_=preparer.prepare(batch,receipt)
         model=JointModel(cfg)
         with patch.object(model.renderer,'forward',side_effect=AssertionError('DiT must be skipped')):
@@ -146,40 +159,3 @@ class PermissionPackingTests(unittest.TestCase):
         cfg=self.cfg();entry=row('invalid');entry['image_loss_allowed']=False
         entry['elements'][1]['image_loss_allowed']='false'
         with self.assertRaisesRegex(ValueError,'boolean'):self.packer([entry],cfg).next()
-
-    def test_legacy_renderer_encodes_only_allowed_targets_and_preserves_all_pixels(self):
-        for vision in ('rgb_patch','qwen35'):
-            for allowed in (False,True):
-                with self.subTest(vision=vision,one_target=allowed):
-                    cfg=(tiny_config(fused=False) if vision=='rgb_patch' else
-                         self.fixture.cfg(renderer='legacy',preserve_documents=False))
-                    rows=[row('denied',height=32,width=32),row('other',height=32,width=32)]
-                    rows[0]['image_loss_allowed']=False;rows[1]['image_loss_allowed']=allowed
-                    batch,receipt=self.packer(rows,cfg).next()
-                    self.assertEqual(batch.generation_image_indices.tolist(),[1] if allowed else [])
-                    raw=batch.pixels.clone()
-                    preparer=DevicePreparer(cfg,device='cpu',encoder='fake');encoded=[]
-                    encode=preparer.vae.encode
-                    with patch.object(preparer.vae,'encode',side_effect=lambda x:(encoded.append(x.clone()),encode(x))[1]):
-                        ready,_=preparer.prepare(batch,receipt)
-                    self.assertEqual(sum(len(x) for x in encoded),int(allowed))
-                    self.assertEqual(len(ready.latents),int(allowed))
-                    expected=raw.float().div(127.5).sub(1)
-                    torch.testing.assert_close(ready.pixels,expected.to(torch.bfloat16),rtol=0,atol=0)
-                    if allowed:torch.testing.assert_close(encoded[0],expected[1:],rtol=0,atol=0)
-                    # CPU model uses FP32 parameters; production runs autocast.
-                    ready.pixels=ready.pixels.float()
-                    model=JointModel(cfg)
-                    if allowed:
-                        losses=compose_losses(model(ready), model.cfg)
-                        self.assertGreater(losses['image_loss'].item(),0)
-                    else:
-                        with patch.object(model.renderer,'forward',side_effect=AssertionError('DiT must be skipped')):
-                            losses=compose_losses(model(ready), model.cfg)
-                        self.assertEqual(losses['image_loss'].item(),0)
-                    losses['loss'].backward()
-                    self.assertTrue(any(p.grad is not None and p.grad.abs().sum()>0 for p in model.patch_embed.parameters()))
-                    if not allowed:self.assertTrue(all(p.grad is None for p in model.renderer.parameters()))
-
-
-if __name__=='__main__':unittest.main()

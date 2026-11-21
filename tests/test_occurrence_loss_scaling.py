@@ -12,7 +12,7 @@ from distributed.communication import OrderedGradientBuckets
 from training.train import data_loss_scales, parse_args
 
 
-class I2TLossScalingTests(unittest.TestCase):
+class OccurrenceLossScalingTests(unittest.TestCase):
     def test_production_rendezvous_preserves_cuda_runtime_selection(self):
         import launch_job
         for overrides in ({}, {'PRETRAIN_PYTHON':'/job/python','TORCH_EXTENSIONS_DIR':'/job/extensions'}):
@@ -76,37 +76,16 @@ class I2TLossScalingTests(unittest.TestCase):
         self.assertEqual(set(counts),{id(p) for p in parameters})
         self.assertEqual(set(counts.values()),{1})
 
-    def test_training_cli_inherits_config_and_accepts_explicit_recipe(self):
-        with patch('sys.argv',['train','--output','unused']):
-            args=parse_args()
-        self.assertIsNone(args.i2t_image_loss_probability)
-        self.assertIsNone(args.cfg_null_condition)
-        with patch('sys.argv',['train','--output','unused','--i2t-image-loss-probability','.2',
-                               '--cfg-null-condition','i2t_prefix']):
-            args=parse_args()
-        self.assertEqual(args.i2t_image_loss_probability,.2)
-        self.assertEqual(args.cfg_null_condition,'i2t_prefix')
-        for value in ('-0.1','1.1','nan','inf'):
-            with self.subTest(value=value),patch('sys.argv',['train','--output','unused',
-                    '--i2t-image-loss-probability',value]),patch('sys.stderr'):
-                with self.assertRaises(SystemExit):parse_args()
-
-    def test_production_command_forwards_new_and_previous_recipe(self):
+    def test_production_command_forwards_release_root(self):
         if not (Path(__file__).resolve().parents[1]/'train_production.py').is_file():
             self.skipTest('Local production launcher is not part of the portable source tree')
         from train_production import training_command
         args=SimpleNamespace(nodes=8,nproc_per_node=16,node_rank=0,config=Path(__file__).resolve().parents[1]/'configs/qwen35_2b_wan.yaml',
             output=Path('output'),data_root=Path('corpus'),steps=0,save_every=100,
             keep_checkpoints=3,validation_suite=Path('suite.json'),validate_every=500)
-        for probability,null in ((.2,'i2t_prefix'),(1.,'empty_t2i')):
-            args.i2t_image_loss_probability=probability;args.cfg_null_condition=null
-            command=training_command(args,Path('attempt'))
-            self.assertEqual(command[command.index('--i2t-image-loss-probability')+1],str(probability))
-            self.assertEqual(command[command.index('--cfg-null-condition')+1],null)
         import sys
-        args.cfg_null_condition=None
         command=training_command(args,Path('attempt'))
-        self.assertNotIn('--cfg-null-condition',command)
+        self.assertEqual(command[command.index('--data-root')+1],'corpus')
         self.assertEqual(command[0],sys.executable)
 
 

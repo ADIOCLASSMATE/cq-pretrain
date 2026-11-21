@@ -7,12 +7,8 @@ def tokenizer_root(root,cfg):
     if cfg is not None and cfg.text_assets:
         from utils.assets import asset_path
         return asset_path(cfg.text_assets)
-    root=Path(root)
-    if (root/'manifest.json').is_file():
-        manifest=json.loads((root/'manifest.json').read_text())
-        if manifest.get('schema') == 'corpus.baseline_union.v1':
-            root=(root/manifest['training_catalog']['path']).parent
-    return root/'tokenizer'
+    path=Path(root)
+    return (path.parent if path.is_file() else path)/'tokenizer'
 
 
 def tokenizer_metadata(cfg,published):

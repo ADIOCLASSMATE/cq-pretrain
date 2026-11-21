@@ -171,8 +171,6 @@ class NativeImageProcessor:
             2,
         ):
             raise ValueError("Processor geometry differs from Qwen3.5-0.8B")
-        self.target_size = cfg.image_size
-        self.generation_dynamic = cfg.renderer in ("moss", "wan")
         self.generation_max_pixels = cfg.generation_max_pixels
         self.pad_color = tuple(round(x * 255) for x in self.processor.image_mean)
 
@@ -191,24 +189,13 @@ class NativeImageProcessor:
         left, top = (width - w) // 2, (height - h) // 2
         return ImageOps.expand(image, (left, top, width - w - left, height - h - top), fill=self.pad_color)
 
-    def __call__(self, native_rgb, preserve_full_frame=False):
+    def __call__(self, native_rgb):
         import numpy as np
-        from PIL import Image, ImageOps
+        from PIL import Image
 
         original = Image.fromarray(native_rgb)
         result = self.processor(images=self.supported_aspect(original), return_tensors="pt", device="cpu")
         grid = tuple(map(int, result["image_grid_thw"][0].tolist()))
-        # Both paths start from the original image. MOSS retains the full
-        # image with proportional resize and edge padding; only the legacy
-        # square KL16 target below uses a center crop.
-        if self.generation_dynamic:
-            from data.generation import target_image
-
-            target = target_image(original, self.generation_max_pixels)
-        elif preserve_full_frame:
-            target=original.resize((self.target_size,self.target_size),Image.Resampling.LANCZOS)
-        else:
-            target = ImageOps.fit(
-                original, (self.target_size, self.target_size), Image.Resampling.LANCZOS, centering=(0.5, 0.5)
-            )
+        from data.generation import target_image
+        target = target_image(original, self.generation_max_pixels)
         return np.asarray(target, dtype=np.uint8).copy(), result["pixel_values"], grid

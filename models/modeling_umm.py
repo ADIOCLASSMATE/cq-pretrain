@@ -3,7 +3,6 @@
 from torch import nn
 import distributed.megatron as P
 from ops.cross_entropy import linear_cross_entropy
-from models.legacy import RGBPatchLinear, FlowRenderer
 from models.backbone_qwen35 import QwenBlock, RMSNorm
 from models.cq_backbone import backbone
 from models.generator_wan21 import Wan21Generator
@@ -29,20 +28,10 @@ class JointModel(nn.Module):
         self.cfg = cfg
         self.config = P._config
         self.embedding = P.make_embedding(cfg.vocab_size, cfg.width)
-        if cfg.vision_encoder == "qwen35":
-            self.patch_embed = QwenVisionInput(cfg)
-        else:
-            self.patch_embed = RGBPatchLinear(cfg.width, cfg.patch_size)
+        self.patch_embed = QwenVisionInput(cfg)
         self.layers = nn.ModuleList([QwenBlock(cfg, index) for index in range(cfg.layers)])
         self.final_norm = RMSNorm(cfg.width, cfg.norm_eps)
-        if cfg.renderer == "wan":
-            self.renderer = Wan21Generator(cfg)
-        elif cfg.renderer == "moss":
-            from models.moss import MOSSRenderer
-
-            self.renderer = MOSSRenderer(cfg)
-        else:
-            self.renderer = FlowRenderer(cfg)
+        self.renderer = Wan21Generator(cfg)
         self.lm_head = None if cfg.tie_word_embeddings else OutputHead(cfg)
 
     @property

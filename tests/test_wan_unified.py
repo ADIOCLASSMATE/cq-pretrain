@@ -9,8 +9,8 @@ from models.generator_wan21 import Wan21Generator
 
 
 def small_config(**kwargs):
-    return tiny_config(renderer='wan',width=32,dit_width=64,dit_heads=2,dit_layers=2,
-        dit_ffn=128,latent_channels=16,wan_freq_dim=32,flow_draws=1,**kwargs)
+    return tiny_config(width=32,dit_width=64,dit_heads=2,dit_layers=2,
+        dit_ffn=128,latent_channels=16,wan_freq_dim=32,**kwargs)
 
 
 def native_state(model):
@@ -27,11 +27,9 @@ def native_state(model):
 def test_training_cast_keeps_only_wan_time_layers_in_fp32():
     from models.modeling_umm import JointModel
     from models.backbone_qwen35 import cast_for_training
-    for renderer,channels,dtype in [('wan',16,torch.float32),('moss',128,torch.bfloat16)]:
-        cfg=replace(small_config(),renderer=renderer,latent_channels=channels)
-        model=cast_for_training(JointModel(cfg))
-        assert model.renderer.time_embedding[0].weight.dtype==dtype
-        assert model.embedding.weight.dtype==torch.bfloat16
+    model=cast_for_training(JointModel(small_config()))
+    assert model.renderer.time_embedding[0].weight.dtype==torch.float32
+    assert model.embedding.weight.dtype==torch.bfloat16
 
 
 def test_packed_wan_matches_diffusers_forward_and_backward():
@@ -127,18 +125,18 @@ def test_cache_identity_atomic_resume_and_tamper(tmp_path):
 @pytest.mark.parametrize("visibility", ["visual_block", "causal"])
 def test_video_blocks_and_understanding_queries(visibility):
     from data.batch import Batch
-    from data.batch_layout import build_visual_plan
+    from data.batch_layout import build_plan
     from types import SimpleNamespace
     cfg=small_config(visual_query_mode='native',content_visibility=visibility)
     s=16; spans=torch.tensor([[2,3,4,5,7,8,9,10],[12,13,-1,-1,-1,-1,-1,-1]])
     sigma=torch.arange(s)[None];sigma[0,2:6]=2;sigma[0,7:11]=7;sigma[0,12:14]=12
     empty=torch.empty(0)
-    batch=Batch(torch.zeros(1,s,dtype=torch.long),empty,empty,spans,torch.tensor([1,11,15]),
+    batch=Batch(torch.zeros(1,s,dtype=torch.long),empty,spans,torch.tensor([1,11,15]),
         torch.zeros(1,s,dtype=torch.bool),sigma,torch.zeros(1,s,dtype=torch.long),
-        torch.arange(s).float()[None,:,None].expand(3,-1,-1).clone(),empty,empty,empty,empty,
+        torch.arange(s).float()[None,:,None].expand(3,-1,-1).clone(),empty,empty,
         vision=SimpleNamespace(grid_thw=((2,4,4),(1,2,4))),generation_image_indices=torch.tensor([1]))
     original_sigma=batch.sigma.clone()
-    plan=build_visual_plan(batch,cfg)
+    plan=build_plan(batch,cfg)
     torch.testing.assert_close(batch.sigma,original_sigma,rtol=0,atol=0)
     assert plan.query_image.sum()==2
     assert plan.condition_indices.shape==(2,2) # An understanding video cannot increase target Q padding.
@@ -168,13 +166,13 @@ def test_video_blocks_and_understanding_queries(visibility):
         torch.testing.assert_close(forward(changed)[s+len(batch.text_indices):],
                                    expected[s+len(batch.text_indices):],rtol=0,atol=0)
     batch.generation_image_indices=torch.empty(0,dtype=torch.long)
-    plan=build_visual_plan(batch,cfg)
+    plan=build_plan(batch,cfg)
     assert not plan.query_image.any() and plan.output_size==s
     assert plan.condition_indices.shape==(2,0)
     # A video target uses the same flag as an image, across all native time blocks.
     batch.generation_image_indices=torch.tensor([0,1])
     batch.generation_unconditional=torch.tensor([True,False])
-    plan=build_visual_plan(batch,cfg)
+    plan=build_plan(batch,cfg)
     assert plan.query_unconditional.sum()==8
     content=torch.randn(s+len(plan.query_positions),1,cfg.width)
     with torch.no_grad():
@@ -209,20 +207,28 @@ def test_native_video_serialization_and_mixed_source_resume(tmp_path):
     official=processor(text=[processor.video_token],videos=[rgb[selected]],do_sample_frames=False,
         do_resize=False,video_metadata=[native_video_metadata(times)],return_tensors='pt')
     np.testing.assert_array_equal(sequence['ids'],official['input_ids'][0].numpy())
+    boi = processor.tokenizer.convert_tokens_to_ids(processor.vision_start_token)
+    np.testing.assert_array_equal(sequence['text_indices'],np.flatnonzero(sequence['ids']==boi))
+    assert len(sequence['text_indices']) == grid[0]
     np.save(tmp_path/'frames.npy',rgb.permute(0,2,3,1).numpy())
     Image.fromarray(np.zeros((64,96,3),np.uint8)).save(tmp_path/'image.png')
-    rows=[dict(task='v2t',generation_target=False,caption='A dark video.',frames_path='frames.npy',fps=10),
-          dict(task='t2v',generation_target=True,caption='Another video.',frames_path='frames.npy',fps=10),
-          dict(task='t2i',generation_target=True,caption='A dark image.',image_path='image.png')]
+    def document(caption, asset, target):
+        text=dict(kind='text',text=caption)
+        visual=dict(kind='image',image_index=0,generation_target=target)
+        return dict(format='caption',images=[asset],segments=[text,visual] if target else [visual,text])
+
+    video=dict(video=True,frames_path='frames.npy',fps=10)
+    rows=[document('A dark video.',video,False),document('Another video.',video,True),
+          document('A dark image.',dict(path='image.png'),True)]
     (tmp_path/'items.jsonl').write_text(''.join(json.dumps(x)+'\n' for x in rows))
     import yaml
     source=tmp_path/'sources.yaml'
     source.write_text(yaml.safe_dump(dict(sources=[dict(path='items.jsonl',video=settings)])))
-    cfg=small_config(vision_encoder='qwen35',vision_assets=str(assets),text_assets=str(assets),
+    cfg=small_config(vision_assets=str(assets),text_assets=str(assets),
         vocab_size=248320,vision_min_pixels=1024,vision_max_pixels=6144,generation_max_pixels=6144,
         preserve_documents=True,image_condition_queries=7)
     def stream(state=None):
-        return DocumentStream(source,'A',0,1,42,cfg=cfg,native_images=True,sequence_length=512,
+        return DocumentStream(source,'A',0,1,42,cfg=cfg,sequence_length=512,
             workers=1,prefetch=1,image_threads=1,block_rows=1,tokenize_rows=1,state=state)
     docs=stream()
     try:
@@ -239,8 +245,8 @@ def test_native_video_serialization_and_mixed_source_resume(tmp_path):
         assert batch.mainline.query_image.sum()==14
         assert sorted(batch.generation.grids)==[(1,4,6),(2,4,6)]
         assert len(batch.vision.ends)==5 # 2 + 2 native video blocks, one image.
-        from data.batch_layout import build_visual_plan
-        native=build_visual_plan(batch,replace(cfg,visual_query_mode='native'))
+        from data.batch_layout import build_plan
+        native=build_plan(batch,replace(cfg,visual_query_mode='native'))
         expected=torch.cat([batch.row_col[:,batch.image_indices[i][batch.image_indices[i]>=0]]
                             for i in batch.generation_image_indices.tolist()],1)
         torch.testing.assert_close(native.query_rope[:,native.query_image[0]],expected,rtol=0,atol=0)

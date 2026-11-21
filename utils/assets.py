@@ -39,10 +39,6 @@ def asset_manifest(path, verify=False):
     allowed = {
         ("Qwen/Qwen3.5-2B-Base", "b1485b2fa6dfa1287294f269f5fb618e03d52d7c"),
         ("Qwen/Qwen3.5-0.8B", "2fc06364715b967f1860aea9cf38778875588b17"),
-        ("Qwen/Qwen3.5-9B", "c202236235762e1c871ad0ccb60c8ee5ba337b9a"),
-        # Base checkpoint: identical architecture, vocab and merges; it only
-        # lacks the four post-training tokens (<think>, tool responses).
-        ("Qwen/Qwen3.5-9B-Base", "68c46c4b3498877f3ef123c856ecfde50c39f404"),
     }
     if (data["model_id"], data["revision"]) not in allowed:
         raise ValueError("Unexpected Qwen3.5 checkpoint identity")

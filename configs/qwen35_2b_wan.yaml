@@ -1,5 +1,4 @@
 model:
-  renderer: wan
   image_condition_queries: 64
   visual_query_mode: native
   content_visibility: visual_block
@@ -11,10 +10,8 @@ data:
   vision_max_pixels: 262144
   generation_max_pixels: 262144
   generation_token_budget: 65536
-  i2t_image_loss_probability: 0.0
   visual_uncond_probability: 0.1
   visual_instruction_dropout_probability: 0.0
-  cfg_null_condition: empty
 
 loss:
   text_weight: 0.05
@@ -37,7 +34,6 @@ training:
   renderer_ema_decay: 0.999
   pack_padding_multiple: 128
   device_prefetch: 2
-  vae_chunk: 2
   data_workers: 2
   data_prefetch: 12
   tokenize_rows: 32

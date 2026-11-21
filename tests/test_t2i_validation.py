@@ -1,10 +1,11 @@
+from tests.fixtures import ScaffoldTokenizer
 import copy
 import unittest
 import numpy as np
 import torch
 
-from tests.test_qwen35_vision import NativeVisionContracts
-from evaluations.sampling import make_batch, moss_sigmas
+from tests import test_qwen35_vision as vision_fixtures
+from evaluations.sampling import make_batch
 from models.cq_backbone import backbone
 from models.modeling_umm import JointModel
 from data.vision import NativeImageProcessor
@@ -14,23 +15,23 @@ from data.packing import Packer
 class ValidationContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        NativeVisionContracts.setUpClass()
-        cls.fixture=NativeVisionContracts()
+        vision_fixtures.NativeVisionContracts.setUpClass()
+        cls.fixture=vision_fixtures.NativeVisionContracts()
         torch.set_num_threads(1)
 
     @classmethod
-    def tearDownClass(cls):NativeVisionContracts.tearDownClass()
+    def tearDownClass(cls):vision_fixtures.NativeVisionContracts.tearDownClass()
 
     def cfg(self):
-        return self.fixture.cfg(layers=4,renderer='moss',latent_channels=128,flow_draws=1,
+        return self.fixture.cfg(layers=4,preserve_documents=True,latent_channels=16,
             dit_width=128,dit_heads=4,dit_ffn=256,dit_layers=2)
 
     def test_pruned_image_queries_match_full_and_cannot_read_target(self):
         torch.manual_seed(27);cfg=self.cfg();tokens=self.fixture.tokens
         image=np.random.default_rng(9).integers(0,256,(64,96,3),dtype=np.uint8)
         processed=NativeImageProcessor(cfg,128)(image)
-        full=make_batch(cfg,tokens,[11,12,13],processed,'T2I',prune=False)
-        lean=make_batch(cfg,tokens,[11,12,13],processed,'T2I')
+        full=make_batch(cfg,tokens,[11,12,13],processed,'T2I',prune=False,tokenizer=ScaffoldTokenizer())
+        lean=make_batch(cfg,tokens,[11,12,13],processed,'T2I',tokenizer=ScaffoldTokenizer())
         model=JointModel(cfg).eval()
         with torch.no_grad():
             expected=backbone(model,full)[full.mainline.condition_indices]
@@ -42,8 +43,8 @@ class ValidationContracts(unittest.TestCase):
         torch.manual_seed(33);cfg=self.cfg();tokens=self.fixture.tokens
         image=np.random.default_rng(3).integers(0,256,(64,64,3),dtype=np.uint8)
         processed=NativeImageProcessor(cfg,128)(image)
-        full=make_batch(cfg,tokens,[19,20,21],processed,'I2T',prune=False)
-        lean=make_batch(cfg,tokens,[19,20,21],processed,'I2T')
+        full=make_batch(cfg,tokens,[19,20,21],processed,'I2T',prune=False,tokenizer=ScaffoldTokenizer())
+        lean=make_batch(cfg,tokens,[19,20,21],processed,'I2T',tokenizer=ScaffoldTokenizer())
         model=JointModel(cfg).eval()
         with torch.no_grad():
             expected=backbone(model,full)[full.ids.shape[1]-1]
@@ -60,7 +61,7 @@ class ValidationContracts(unittest.TestCase):
             def __init__(self):
                 self.index=0
                 self.docs=[dict(id='previous',format='text',elements=[dict(type='text',input_ids=np.arange(39)+10)]),
-                    dict(id='caption',format='caption',direction='T2I',elements=[dict(type='text',input_ids=np.array([7,8,9])),dict(type='image')])]
+                    dict(id='caption',format='caption',direction='T2I',elements=[dict(type='text',input_ids=np.array([7,8,9])),dict(type='image',generation_target=True)])]
             def peek(self):return self.docs[self.index] if self.index<len(self.docs) else None
             def advance(self):self.index+=1
             def prefetch_images(self,*args):pass
@@ -76,21 +77,6 @@ class ValidationContracts(unittest.TestCase):
         self.assertTrue((second.mainline.cq_mask[0,0,48+second.mainline.query_image[0].nonzero().flatten()[0],1:4]==False).all())
         self.assertGreater(start,3)
 
-    def test_condition_projection_cache_and_schedule(self):
-        cfg=self.cfg();torch.manual_seed(7)
-        model=JointModel(cfg).eval()
-        from data.generation import GenerationInputs
-        layout=GenerationInputs.prepare([np.zeros((32,48,3),np.uint8)],cfg.image_condition_queries,32)
-        condition=torch.randn(1,cfg.image_condition_queries,cfg.width)
-        xt=torch.randn(sum(layout.lengths),cfg.latent_channels);time=torch.randn(1,256)
-        with torch.no_grad():
-            expected=model.renderer.predict(xt,condition,time,layout)
-            projected=model.renderer.project_conditions(condition,layout)
-            actual=model.renderer.predict(xt,None,time,layout,projected)
-        torch.testing.assert_close(actual,expected,rtol=0,atol=0)
-        grid=moss_sigmas(30)
-        self.assertEqual(grid[0].item(),1.);self.assertEqual(grid[-1].item(),0.)
-        self.assertTrue(torch.all(grid[:-1]>grid[1:]))
 
     def test_selective_attention_recompute_preserves_all_backbone_gradients(self):
         torch.manual_seed(153);cfg=self.cfg();cfg.checkpoint_backbone=True
@@ -98,7 +84,7 @@ class ValidationContracts(unittest.TestCase):
         baseline=JointModel(cfg).train();selected=JointModel(other).train()
         selected.load_state_dict(baseline.state_dict(),strict=True)
         processed=NativeImageProcessor(cfg,128)(np.random.default_rng(5).integers(0,256,(64,64,3),dtype=np.uint8))
-        batch=make_batch(cfg,self.fixture.tokens,[13,14,15],processed,'I2T',prune=False)
+        batch=make_batch(cfg,self.fixture.tokens,[13,14,15],processed,'I2T',prune=False,tokenizer=ScaffoldTokenizer())
         expected=backbone(baseline,batch);actual=backbone(selected,copy.deepcopy(batch))
         target=torch.randn_like(expected)
         (expected-target).square().mean().backward()

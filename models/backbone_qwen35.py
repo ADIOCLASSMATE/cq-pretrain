@@ -257,20 +257,18 @@ class GatedAttention(nn.Module):
     def forward(self, x, rope, plan, content_length, reference=False, cache=None):
         cfg = self.cfg
         s = content_length
-        g = len(plan.generation_positions) - plan.prefix if len(plan.generation_positions) else 0
-        keys = s + g
         n, b, _ = x.shape
         q, gate = self.q_proj(x).reshape(n, b, cfg.heads // P.tp_size(), 2 * cfg.head_dim).chunk(2, -1)
         q = self.q_norm(q, cfg.fused and not reference)
         k, v = (
-            self.kv_proj(x[:keys]).chunk(2, -1)
+            self.kv_proj(x[:s]).chunk(2, -1)
             if cfg.qwen_fused_projections
-            else (self.k_proj(x[:keys]), self.v_proj(x[:keys]))
+            else (self.k_proj(x[:s]), self.v_proj(x[:s]))
         )
         k = self.k_norm(
-            k.reshape(keys, b, cfg.kv_heads // P.tp_size(), cfg.head_dim), cfg.fused and not reference
+            k.reshape(s, b, cfg.kv_heads // P.tp_size(), cfg.head_dim), cfg.fused and not reference
         )
-        v = v.reshape(keys, b, cfg.kv_heads // P.tp_size(), cfg.head_dim)
+        v = v.reshape(s, b, cfg.kv_heads // P.tp_size(), cfg.head_dim)
         dim = int(cfg.head_dim * cfg.partial_rotary_factor)
 
         def rotate(t, cos, sin):
@@ -279,7 +277,7 @@ class GatedAttention(nn.Module):
             )
 
         q = rotate(q, *rope)
-        k = rotate(k, rope[0][:keys], rope[1][:keys])
+        k = rotate(k, rope[0][:s], rope[1][:s])
         if cache is not None:
             if torch.is_grad_enabled():
                 raise ValueError("CQ state caching is inference-only")
@@ -289,9 +287,8 @@ class GatedAttention(nn.Module):
             cache["k"][: s - 1].copy_(k[:-1])
             cache["v"][: s - 1].copy_(v[:-1])
             cache["length"] = s - 1
-        cq = q if not g else torch.cat((q[:s], q[keys:]))
         y = attend(
-            cq,
+            q,
             k[:s],
             v[:s],
             plan.cq_mask,
@@ -300,19 +297,6 @@ class GatedAttention(nn.Module):
             cfg.fused and not reference,
             None if reference else plan.cq_predicate,
         )
-        if g:
-            kg = torch.cat((k[: plan.prefix], k[s:keys]))
-            vg = torch.cat((v[: plan.prefix], v[s:keys]))
-            gy = attend(
-                q[s:keys],
-                kg,
-                vg,
-                plan.gen_suffix_mask,
-                plan.gen_valid[:, plan.prefix :],
-                None if reference else plan.gen_plan,
-                cfg.fused and not reference,
-            )
-            y = torch.cat((y[:s], gy, y[s:]))
         return self.o_proj(y * gate.flatten(-2).sigmoid())
 
 

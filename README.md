@@ -31,8 +31,6 @@
 - `distributed/megatron.py`、`distributed/communication.py`、`distributed/mc2.py` 分别负责 Megatron 接入、通信调度与计算通信融合。
 - `utils/dependencies.py` 管理依赖环境，`utils/file_sync.py` 管理文件同步。
 
-`configs/legacy/` 与 MOSS 参考模块仅保留旧实验的数值回归；新生产入口使用 Wan 配置。9B/MOSS checkpoint 与此架构不兼容，需新开训练阶段。
-
 `JointModel.forward` 返回未加权的 `text_loss`、可选 `image_loss`；`compute_image_loss=False` 返回公开的 `image_conditions`。`training.loss.compose_losses` 组合目标，`training.renderer_schedule` 调度分块反向；模型不读取任务采样概率、loss 权重或 DP 缩放值。`ops/` 和 `distributed/` 不导入数据、模型或训练循环；模型也不导入数据／训练模块。CQ 布局定义在 `models/cq_layout.py`，CPU 批次布局由 `data/batch_layout.py` 构建。
 
 ## 环境与启动

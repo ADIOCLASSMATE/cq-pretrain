@@ -12,10 +12,10 @@ import torch
 
 from data.batch import Batch
 from data.batch_layout import build_plan
-from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed
+from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, generation_target
 
 
-def sample_objective(sample_id, probability, seed=0, epoch=0, salt='i2t-null-v1'):
+def sample_objective(sample_id, probability, seed, epoch, salt):
     """Independent Bernoulli draws keyed by occurrence, safe across TP/restart.
 
     Separate salts keep objectives independent. A new epoch redraws them;
@@ -25,9 +25,6 @@ def sample_objective(sample_id, probability, seed=0, epoch=0, salt='i2t-null-v1'
     if probability == 0:return False
     digest=hashlib.sha256(f'{salt}:{seed}:{epoch}:{sample_id}'.encode()).digest()
     return int.from_bytes(digest[:8],'big') < int(probability*(1 << 64))
-
-
-select_i2t_image = sample_objective  # Legacy MOSS checkpoint/test contract.
 
 
 def token_contract(root, cfg):
@@ -47,8 +44,6 @@ def token_contract(root, cfg):
 class Packer:
     def __init__(self, documents, cfg, length, tokens, state=None, pin_device=None,
                  max_images=0, padding_multiple=0):
-        if cfg.vision_encoder == 'rgb_patch' and length < cfg.image_tokens + 4:
-            raise ValueError('Sequence must fit one whole image with document/image boundaries')
         self.documents, self.cfg, self.length, self.tokens = documents, cfg, length, tokens
         self.pin_device=pin_device
         if max_images < 0 or padding_multiple < 0:raise ValueError('Packing limits must be nonnegative')
@@ -57,7 +52,6 @@ class Packer:
             raise ValueError('Whole documents cannot use max_images_per_pack; use the DiT microbatch image limit')
         self.element, self.offset = 0, 0
         self.serial = 0
-        self.processor = None
         self.pending_image = None
         self.prepared_images={}
         self.document_size=None
@@ -68,18 +62,13 @@ class Packer:
             padding_multiple=padding_multiple,image_loss_permissions=LOSS_PERMISSION_CONTRACT,
             visual_query_mode=cfg.visual_query_mode,visual_queries=cfg.image_condition_queries,
             visibility='time_block_bidirectional_causal_v1')
-        if cfg.i2t_image_loss_probability != 1:
-            self.packing_contract['i2t_image_loss_probability']=cfg.i2t_image_loss_probability
-            self.packing_contract['i2t_sampling']='sample_seed_epoch_sha256_v1'
-        if cfg.renderer=='wan':
-            self.packing_contract.update(cfg.wan_objective_policy())
-        self.stats=dict(batches=0,pack_seconds=0.,plan_seconds=0.,pin_seconds=0.,atomic_captions=0,
+        self.packing_contract.update(cfg.wan_objective_policy())
+        self.stats=dict(batches=0,pack_seconds=0.,plan_seconds=0.,pin_seconds=0.,
                         atomic_documents=0,long_document_windows=0)
-        if cfg.vision_encoder == 'qwen35':
-            from data.vision import NativeImageProcessor
-            self.processor = NativeImageProcessor(cfg,length)
+        from data.vision import NativeImageProcessor
+        self.processor = NativeImageProcessor(cfg,length)
         if state:
-            restored=state.get('packing') if cfg.preserve_documents else state.get('packing',self.packing_contract)
+            restored=state.get('packing')
             if restored!=self.packing_contract:
                 raise ValueError('Document packing policy or limits differ on resume')
             self.element, self.offset, self.serial = state['element'], state['offset'], state['serial']
@@ -108,8 +97,7 @@ class Packer:
             item['cache_keys']=identities
             if cached[0] is not None:item['cached_features']=cached[0]['features']
             if cached[1] is not None:item['cached_latent']=cached[1]['latent']
-        if self.cfg.preserve_documents or (self.cfg.renderer != 'wan' and
-                doc.get('format') in ('conditional_generation','causal_sequence')):
+        if self.cfg.preserve_documents:
             self.prepared_images[key]=self.pending_image[1]
         return self.pending_image[1]
 
@@ -126,9 +114,6 @@ class Packer:
         for index,e in enumerate(doc['elements']):
             if size>self.length:break
             if e['type']=='image':
-                if self.processor is None:
-                    size+=self.cfg.image_tokens+2
-                    continue
                 _,_,grid=self.prepare_image(doc,index)
                 item=doc['elements'][index]
                 size+=len(item['video_sequence']['ids']) if 'video_sequence' in item else math.prod(grid)//4+2
@@ -145,57 +130,38 @@ class Packer:
         ids = np.full(s, t['eos'], np.int64)
         segment = np.full(s, -1, np.int64)
         sigma = np.arange(s, dtype=np.int64)
-        rope = np.zeros((3 if cfg.renderer=='wan' else 2, s, 1), np.float32)
+        rope = np.zeros((3, s, 1), np.float32)
         image_queries = np.zeros(s, bool)
         text_indices, image_indices, pixels, records = [], [], [], []
         generation_image_indices=[]
         generation_unconditional=[]
         instruction_starts, instruction_dropped = [], []
         instruction_dropout_eligible_images = 0
-        i2t_null_candidates=i2t_null_images=0
         vision_pixels,vision_grids=[],[]
         visual_features,visual_latents,visual_cache_keys=[],[],[]
         position, seg, body_count = 0, 0, 0
         generation_tokens=0
-        atomic_generation_in_batch=False
         current_record = None
         while position < s:
             doc = self.documents.peek()
             if doc is None:
                 break
-            legacy = cfg.renderer != 'wan'
-            conditional=legacy and doc.get('format') in ('conditional_generation','causal_sequence')
-            legacy_caption=legacy and doc.get('format')=='caption'
-            preserve=cfg.preserve_documents or conditional
             signature=getattr(self.documents,'signature',{})
             seed,epoch=signature.get('seed',0),signature.get('epoch',0)
-            # Only image-first caption pairs have the fixed trained null
-            # prefix. Conversation/interleaved images may have real context.
-            is_null=legacy_caption and doc.get('direction')=='I2T'
-            sampled_image=not is_null or select_i2t_image(doc['id'],cfg.i2t_image_loss_probability,
-                seed,epoch)
-            # This is an objective permission, independent of source format or
-            # random null-target sampling. Validate all flags before packing.
-            image_loss_allowed(doc)
-            image_permissions={index:image_loss_allowed(doc,element,grant_field='generation_target' if not legacy else None)
+            image_permissions={index:generation_target(doc,element)
                 for index,element in enumerate(doc['elements']) if element['type']=='image'}
             continued=bool(self.element or self.offset)
             if not self.prepared_images:self.documents.prefetch_images(doc, self.element)
-            if preserve and self.element==0 and self.offset==0:
+            if cfg.preserve_documents and self.element==0 and self.offset==0:
                 needed=self.document_extent(doc)
                 if needed>s:
-                    if conditional or cfg.long_document_policy=='error' or (legacy_caption and doc.get('direction')=='T2I'):
+                    if cfg.long_document_policy=='error':
                         raise ValueError(f'Document {doc["id"]} exceeds {s} tokens; preserving its full context needs a longer sequence')
                     # Explicit long-document windows start at an empty pack.
                     if position:break
                 elif position and s-position<needed:
                     break
                 else:self.stats['atomic_documents']+=1
-                if conditional and self.max_images:
-                    count=sum(e['type']=='image' for e in doc['elements'])
-                    if count>self.max_images:
-                        raise ValueError('Conditional generation requires all input and target images in one pack')
-                    if position and len(pixels)+count>self.max_images:break
             # Empty text elements are legal in real interleaved documents.
             # Look through them before reserving a BOS: the next actual element
             # may be an image that cannot fit in the remaining pack space.
@@ -204,38 +170,12 @@ class Packer:
                 if first['type']!='text' or self.offset<len(first['input_ids']):break
                 self.element+=1;self.offset=0
             first = doc['elements'][self.element] if self.element < len(doc['elements']) else None
-            # A caption pair must keep its conditioning context. Reserving only
-            # the first text token can otherwise strand its image in the next
-            # pack with a new BOS. Preprocessed image lookahead is cached and
-            # reused when this whole document moves to the next pack.
-            if not cfg.preserve_documents and legacy_caption and self.element==0 and self.offset==0:
-                image_elements=[i for i,e in enumerate(doc['elements']) if e['type']=='image']
-                if len(image_elements)==1:
-                    generate_image=sampled_image and image_permissions[image_elements[0]]
-                    if self.processor is not None:
-                        target,_,grid=self.prepare_image(doc,image_elements[0])
-                        image_tokens=math.prod(grid)//4
-                        nt=(target.shape[0]*target.shape[1]//256+cfg.image_condition_queries) if generate_image else 0
-                    else:
-                        image_tokens=cfg.image_tokens;nt=0
-                    needed=sum(len(e['input_ids']) for e in doc['elements'] if e['type']=='text')+image_tokens+4
-                    if needed>s and doc.get('direction')=='T2I':
-                        raise ValueError(f'Caption pair {doc["id"]} needs {needed} tokens; cannot preserve its context in {s}')
-                    if needed<=s and position and (s-position<needed or
-                            (self.max_images and len(pixels)>=self.max_images) or
-                            (cfg.renderer=='moss' and cfg.generation_token_budget and generation_tokens+nt>cfg.generation_token_budget)):
-                        break
-                    if needed<=s:self.stats['atomic_captions']+=1
             if first and first['type']=='image' and self.max_images and len(pixels)>=self.max_images:break
-            if first and first['type']=='image' and self.processor is not None:
-                generate_image=sampled_image and image_permissions[self.element]
-                first_target,_,grid=self.prepare_image(doc)
-                if generate_image and not preserve and cfg.renderer=='moss' and generation_image_indices and cfg.generation_token_budget:
-                    first_tokens=first_target.shape[0]*first_target.shape[1]//256+cfg.image_condition_queries
-                    if generation_tokens+first_tokens>cfg.generation_token_budget:break
+            if first and first['type']=='image':
+                _,_,grid=self.prepare_image(doc)
                 needed=(len(first['video_sequence']['ids'])+1 if 'video_sequence' in first else math.prod(grid)//4+3)
             else:
-                needed = cfg.image_tokens + 3 if first and first['type'] == 'image' else 2
+                needed = 2
             if position and s - position < needed:
                 break
             # A continuation receives a fresh unlabelled opener; its body tokens
@@ -243,7 +183,6 @@ class Packer:
             # Natural interleaved documents are plain text, not conversations,
             # so they open directly at their first element with no <|im_start|>.
             start = position
-            atomic_generation_in_batch|=conditional
             templated = doc.get('templated', True)
             rope_cursor = 0
             if templated:
@@ -290,94 +229,47 @@ class Packer:
                     if self.offset == len(e['input_ids']):
                         self.element += 1; self.offset = 0
                 elif e['type'] == 'image':
-                    if cfg.renderer=='wan':
-                        from data.sequence import image_sequence
-                        target,processed,grid=self.prepare_image(doc)
-                        sequence=e.get('video_sequence') or image_sequence(grid,t)
-                        size=len(sequence['ids'])
-                        if position+size>s or (self.max_images and len(pixels)>=self.max_images):break
-                        generate_image=image_permissions[self.element]
-                        unconditional=e.get('non_cfg')
-                        if unconditional is None:unconditional=doc.get('non_cfg')
-                        explicit_condition = unconditional is not None
-                        if unconditional is None:
-                            unconditional = not has_history or sample_objective(
-                                f'{doc["id"]}:{self.element}',cfg.visual_uncond_probability,seed,epoch,'visual-uncond-v1')
-                        elif type(unconditional) is not bool:
-                            raise ValueError('non_cfg must be a boolean when specified')
-                        generation_unconditional.append(generate_image and unconditional)
-                        instruction_starts.append(instruction_start if generate_image else -1)
-                        eligible = generate_image and instruction_start > start and not (explicit_condition or unconditional)
-                        instruction_dropout_eligible_images += int(eligible)
-                        instruction_dropped.append(eligible and sample_objective(
-                            f'{doc["id"]}:{self.element}', cfg.visual_instruction_dropout_probability,
-                            seed, epoch, 'visual-instruction-drop-v1'))
-                        # A later target cannot drop across this image, even when
-                        # both images and multiple text spans belong to one turn.
-                        has_history, instruction_start = True, -1
-                        in_text_block = False
-                        stop=position+size;indices=position+sequence['visual']
-                        ids[position:stop]=sequence['ids'];segment[position:stop]=seg
-                        sigma[position:stop]=sequence['sigma']+position
-                        rope[:,position:stop]=sequence['positions']+rope_cursor
-                        image_queries[indices]=True;image_indices.append(indices)
-                        text_indices.extend((position+sequence['text_indices']).tolist())
-                        if generate_image:
-                            generation_image_indices.append(len(pixels))
-                            shape=target.shape if target.ndim==4 else (1,*target.shape)
-                            generation_tokens+=((shape[0]-1)//4+1)*(shape[1]//16)*(shape[2]//16)
-                        pixels.append(target);vision_pixels.append(processed);vision_grids.append(grid)
-                        visual_features.append(e.get('cached_features'));visual_latents.append(e.get('cached_latent'))
-                        visual_cache_keys.append(e.get('cache_keys',(None,None)))
-                        rope_cursor+=int(sequence['positions'].max())+1;position=stop
-                        self.element+=1;current_record['images']+=1
-                        self.pending_image=None;self.prepared_images.pop((doc['id'],self.element-1),None)
-                        continue
-                    generate_image=sampled_image and image_permissions[self.element]
-                    if self.max_images and len(pixels)>=self.max_images:break
-                    if self.processor is not None:
-                        target,processed,grid=self.prepare_image(doc)
-                        height,width=grid[1]//2,grid[2]//2
-                        if cfg.renderer=='moss':
-                            nt=(target.shape[0]*target.shape[1]//256+cfg.image_condition_queries) if generate_image else 0
-                            if not preserve and generation_image_indices and cfg.generation_token_budget and generation_tokens+nt>cfg.generation_token_budget:break
-
-                    else:
-                        height=width=math.isqrt(cfg.image_tokens)
-                    n = height*width
-                    if s - position < n + 2:
-                        break
-                    ids[position], segment[position] = t['boi'], seg
-                    rope[:, position, 0] = rope_cursor
-                    # Structural BOI/EOI are valid A targets, never corpus tokens.
-                    text_indices.append(position)
-                    position += 1; rope_cursor += 1
-                    end = position+n
-                    ids[position:end], segment[position:end] = t['image'], seg
-                    image_queries[position:end] = True
-                    image_indices.append(np.arange(position, end, dtype=np.int64))
-                    if generate_image:generation_image_indices.append(len(image_indices)-1)
-                    if is_null:
-                        i2t_null_candidates+=1
-                        i2t_null_images+=int(generate_image)
-                    sigma[position:end], sigma[end] = position + 1, position
-                    local = np.arange(n)
-                    rope[0, position:end, 0] = rope_cursor + local // width
-                    rope[1, position:end, 0] = rope_cursor + local % width
-                    rope_cursor += max(height,width)
-                    ids[end], segment[end] = t['eoi'], seg
-                    rope[:, end, 0] = rope_cursor
-                    # EOI reads a strictly smaller sigma than the image body, so
-                    # it is predicted without ever seeing the picture: its loss is
-                    # structurally near zero and carries no signal.
-                    if self.processor is not None:
-                        pixels.append(target);vision_pixels.append(processed);vision_grids.append(grid)
-                        if cfg.renderer=='moss':generation_tokens+=nt
-                        self.pending_image=None
-                        self.prepared_images.pop((doc['id'],self.element),None)
-                    else:pixels.append(self.documents.image(doc, self.element))
-                    position = end + 1; rope_cursor += 1
-                    self.element += 1; current_record['images'] += 1
+                    from data.sequence import image_sequence
+                    target,processed,grid=self.prepare_image(doc)
+                    sequence=e.get('video_sequence') or image_sequence(grid,t)
+                    size=len(sequence['ids'])
+                    if position+size>s or (self.max_images and len(pixels)>=self.max_images):break
+                    generate_image=image_permissions[self.element]
+                    unconditional=e.get('non_cfg')
+                    if unconditional is None:unconditional=doc.get('non_cfg')
+                    explicit_condition = unconditional is not None
+                    if unconditional is None:
+                        unconditional = not has_history or sample_objective(
+                            f'{doc["id"]}:{self.element}',cfg.visual_uncond_probability,seed,epoch,'visual-uncond-v1')
+                    elif type(unconditional) is not bool:
+                        raise ValueError('non_cfg must be a boolean when specified')
+                    generation_unconditional.append(generate_image and unconditional)
+                    instruction_starts.append(instruction_start if generate_image else -1)
+                    eligible = generate_image and instruction_start > start and not (explicit_condition or unconditional)
+                    instruction_dropout_eligible_images += int(eligible)
+                    instruction_dropped.append(eligible and sample_objective(
+                        f'{doc["id"]}:{self.element}', cfg.visual_instruction_dropout_probability,
+                        seed, epoch, 'visual-instruction-drop-v1'))
+                    # A later target cannot drop across this image, even when
+                    # both images and multiple text spans belong to one turn.
+                    has_history, instruction_start = True, -1
+                    in_text_block = False
+                    stop=position+size;indices=position+sequence['visual']
+                    ids[position:stop]=sequence['ids'];segment[position:stop]=seg
+                    sigma[position:stop]=sequence['sigma']+position
+                    rope[:,position:stop]=sequence['positions']+rope_cursor
+                    image_queries[indices]=True;image_indices.append(indices)
+                    text_indices.extend((position+sequence['text_indices']).tolist())
+                    if generate_image:
+                        generation_image_indices.append(len(pixels))
+                        shape=target.shape if target.ndim==4 else (1,*target.shape)
+                        generation_tokens+=((shape[0]-1)//4+1)*(shape[1]//16)*(shape[2]//16)
+                    pixels.append(target);vision_pixels.append(processed);vision_grids.append(grid)
+                    visual_features.append(e.get('cached_features'));visual_latents.append(e.get('cached_latent'))
+                    visual_cache_keys.append(e.get('cache_keys',(None,None)))
+                    rope_cursor+=int(sequence['positions'].max())+1;position=stop
+                    self.element+=1;current_record['images']+=1
+                    self.pending_image=None;self.prepared_images.pop((doc['id'],self.element-1),None)
                 else:
                     raise ValueError(f'Unsupported corpus element: {e["type"]}')
             if self.element == len(doc['elements']) and position < s:
@@ -402,27 +294,19 @@ class Packer:
             used=min(s,math.ceil(position/self.padding_multiple)*self.padding_multiple)
             ids,segment,sigma=ids[:used],segment[:used],sigma[:used]
             rope,image_queries=rope[:,:used],image_queries[:used]
-        indices=np.full((n_images,max(map(len,image_indices),default=cfg.image_tokens)),-1,np.int64)
+        indices=np.full((n_images,max(map(len,image_indices),default=0)),-1,np.int64)
         for i,span in enumerate(image_indices):indices[i,:len(span)]=span
         batch = Batch(ids=torch.from_numpy(ids[None]),
-            pixels=torch.from_numpy(np.stack(pixels).transpose(0,3,1,2).copy()) if pixels and cfg.renderer not in ('moss','wan') else torch.empty(0,3,cfg.image_size,cfg.image_size,dtype=torch.uint8),
-            latents=torch.empty(0, cfg.image_tokens, cfg.latent_channels),
+            generation_image_indices=torch.tensor(generation_image_indices,dtype=torch.long),
+            latents=torch.empty(0, cfg.latent_channels * 4),
             image_indices=torch.from_numpy(indices),
             text_indices=torch.tensor(text_indices, dtype=torch.long), image_queries=torch.from_numpy(image_queries[None]),
             sigma=torch.from_numpy(sigma[None]), segments=torch.from_numpy(segment[None]), row_col=torch.from_numpy(rope),
-            noise=torch.empty(0), times=torch.empty(0), mask=torch.empty(0,dtype=torch.bool), valid_rows=torch.empty(0,dtype=torch.bool))
-        if cfg.renderer in ('moss','wan') or len(generation_image_indices)!=n_images:
-            batch.generation_image_indices=torch.tensor(generation_image_indices,dtype=torch.long)
-        if cfg.renderer=='wan':
-            batch.generation_unconditional=torch.tensor(generation_unconditional,dtype=torch.bool)
-            batch.generation_instruction_starts = torch.tensor(instruction_starts, dtype=torch.long)
-            batch.generation_instruction_dropped = torch.tensor(instruction_dropped, dtype=torch.bool)
-        if generation_image_indices and cfg.renderer=='moss':
-            from data.generation import GenerationInputs
-            batch.generation=GenerationInputs.prepare([pixels[i] for i in generation_image_indices],cfg.image_condition_queries,cfg.dit_width//cfg.dit_heads,
-                token_budget=cfg.generation_token_budget if cfg.preserve_documents or atomic_generation_in_batch else 0,
-                max_images=cfg.generation_microbatch_images if cfg.preserve_documents or atomic_generation_in_batch else 0)
-        if generation_image_indices and cfg.renderer=='wan':
+            noise=torch.empty(0), times=torch.empty(0))
+        batch.generation_unconditional=torch.tensor(generation_unconditional,dtype=torch.bool)
+        batch.generation_instruction_starts = torch.tensor(instruction_starts, dtype=torch.long)
+        batch.generation_instruction_dropped = torch.tensor(instruction_dropped, dtype=torch.bool)
+        if generation_image_indices:
             from data.generation import WanGenerationInputs
             queries=[math.prod(vision_grids[i])//4 if cfg.visual_query_mode=='native' else cfg.image_condition_queries for i in generation_image_indices]
             batch.generation=WanGenerationInputs.prepare([pixels[i] for i in generation_image_indices],queries,cfg.dit_width//cfg.dit_heads,
@@ -433,7 +317,7 @@ class Packer:
             from data.vision import VisionInputs
             batch.vision=VisionInputs.prepare(torch.cat(vision_pixels),vision_grids,
                 torch.from_numpy(np.concatenate(image_indices)),self.processor.config)
-        if batch.vision is not None and cfg.renderer=='wan':
+        if batch.vision is not None:
             batch.vision.cache_keys=tuple(x[0] for x in visual_cache_keys)
             if any(x is not None for x in visual_features):
                 cached=[];online_pixels=[];online_grids=[];online_indices=[];offset=0
@@ -461,12 +345,10 @@ class Packer:
         receipt = dict(serial=self.serial, next_state=self.state_dict(), documents=records,
                        body_tokens=body_count, occupied=position, images=n_images,
                        generation_images=batch.generation_image_count,
-                       condition_query_tokens=(int(batch.mainline.query_image.sum()) if cfg.method=='CQ_IT'
-                                               else n_images*cfg.image_condition_queries),
+                       condition_query_tokens=int(batch.mainline.query_image.sum()),
                        unconditional_images=sum(generation_unconditional),
                        instruction_dropped_images=sum(instruction_dropped),
                        instruction_dropout_eligible_images=instruction_dropout_eligible_images,
-                       i2t_null_candidates=i2t_null_candidates,i2t_null_images=i2t_null_images,
                        generation_tokens=generation_tokens,
                        dit_microbatches=(max(1,len(batch.generation.microbatches)) if batch.generation else 0),
                        ids_sha256=hashlib.sha256(ids.tobytes()).hexdigest())

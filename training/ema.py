@@ -1,7 +1,7 @@
 """FP32 renderer EMA on Megatron distributed-optimizer shards.
 
 Updates require no collectives and never duplicate a full DiT on every DP rank.
-Evaluation temporarily installs EMA master shards and uses the existing MOSS
+Evaluation temporarily installs EMA master shards and uses the Wan
 parameter buckets to gather them. Online masters (including FP32 aliases into
 model buffers) are restored in a finally block before training can continue.
 """
@@ -93,7 +93,7 @@ class RendererEMA:
     def _publish(self):
         for target,master in zip(self.model_shards,self.masters,strict=True):target.copy_(master)
         # The ordered-gather adapter forwards force_sync directly. All ranks
-        # visit the same MOSS-containing bucket list, even with no local shards.
+        # visit the same renderer bucket list, even with no local shards.
         for group in self.groups:group.start_param_sync(force_sync=True)
 
     @contextmanager

@@ -56,34 +56,17 @@ def build_delta_plan(batch, plan, cfg):
     if batch.ids.device.type != "cpu" or batch.ids.shape[0] != 1:
         raise ValueError("Prepare Qwen3.5 CQ plans on CPU, microbatch=1")
     s = batch.ids.shape[1]
-    generation = plan.generation_positions.tolist()
-    suffix = len(generation) - plan.prefix if generation else 0
-    keys = s + suffix
+    keys = s
     nq = len(plan.query_positions)
     sigmas = batch.sigma[0].tolist()
     segments = batch.segments[0].tolist()
-    # Source indices address the shared hidden=[C,G_suffix,Q] GEMM layout.
-    branches = [[(i, segments[i], sigmas[i], True) for i in range(s) if segments[i] >= 0]]
-    if generation:
-        # Masked-generation branch has its own causal/image-block order.
-        gi = plan.generation_image[0].tolist()
-        gsig = []
-        group = -1
-        was_image = False
-        for image in gi:
-            if not image or not was_image:
-                group += 1
-            gsig.append(group)
-            was_image = image
-        branches.append(
-            [
-                (i if i < plan.prefix else s + i - plan.prefix, segments[p], gsig[i], i >= plan.prefix)
-                for i, p in enumerate(generation)
-                if segments[p] >= 0
-            ]
-        )
-    if not branches[0]:
-        branches[0] = [(0, 0, 0, True)]  # zero-loss EOF graph
+    # Each segment has one content stream. CQ reads never write to it.
+    docs = {}
+    for i, doc in enumerate(segments):
+        if doc >= 0:
+            docs.setdefault(doc, []).append((sigmas[i], i))
+    if not docs:
+        docs[0] = [(0, 0)]  # zero-loss EOF graph
     query_by_doc = {}
     unconditional = (
         plan.query_unconditional.tolist() if plan.query_unconditional is not None else [False] * nq
@@ -106,63 +89,57 @@ def build_delta_plan(batch, plan, cfg):
     qhistory = []
     cb = [0]
     eb = [0]
-    for branch_id, branch in enumerate(branches):
-        docs = {}
-        for item in branch:
-            docs.setdefault(item[1], []).append(item)
-        for doc, items in docs.items():
-            groups = {}
-            for item in sorted(items, key=lambda x: (x[2], x[0])):
-                groups.setdefault(item[2], []).append(item)
-            queries = query_by_doc.get(doc, {}) if branch_id == 0 else {}
-            # A numerical cutoff can lie between writes (including zero in a
-            # later packed document). Read just before the first rank >= cutoff.
-            missing = [r for r in queries if r is not None and r not in groups] if read_sigmas is not None else []
-            if missing:
-                ranks = list(groups)
-                for cutoff in missing:
-                    before = bisect_left(ranks, cutoff)
-                    if before == len(ranks):
-                        raise ValueError("Query cutoff exceeds the document's last content rank")
-                    queries.setdefault(ranks[before], []).extend(queries.pop(cutoff))
-            if None in queries:
-                # Explicit non-CFG Q reads before any C write, with empty conv
-                # history and zero recurrent state, regardless of target position.
-                first = next(iter(groups))
-                queries[first] = queries.pop(None) + queries.get(first, [])
-            history = []
-            for sigma, group_items in groups.items():
-                if branch_id == 0:
-                    for _, hidden_idx in queries.get(sigma, []):
-                        qi = len(qsource)
-                        qsource.append(hidden_idx)
-                        prev = history[-(cfg.linear_conv_kernel - 1) :] if cfg.linear_conv_kernel > 1 else []
-                        qhistory.append([-1] * (cfg.linear_conv_kernel - 1 - len(prev)) + prev)
-                        event_q.append(("q", qi))
-                        event_write.append(-1)
-                        out_events.append(len(event_q) - 1)
-                        out_hidden.append(hidden_idx)
-                members = []
-                for hidden_idx, _, _, emit in group_items:
-                    ci = len(order)
-                    order.append(hidden_idx)
-                    members.append((ci, hidden_idx, emit))
+    for doc, items in docs.items():
+        groups = {}
+        for rank, index in sorted(items):
+            groups.setdefault(rank, []).append(index)
+        queries = query_by_doc.get(doc, {})
+        # A numerical cutoff can lie between writes (including zero in a
+        # later packed document). Read just before the first rank >= cutoff.
+        missing = [r for r in queries if r is not None and r not in groups] if read_sigmas is not None else []
+        if missing:
+            ranks = list(groups)
+            for cutoff in missing:
+                before = bisect_left(ranks, cutoff)
+                if before == len(ranks):
+                    raise ValueError("Query cutoff exceeds the document's last content rank")
+                queries.setdefault(ranks[before], []).extend(queries.pop(cutoff))
+        if None in queries:
+            # Explicit non-CFG Q reads before any C write, with empty conv
+            # history and zero recurrent state, regardless of target position.
+            first = next(iter(groups))
+            queries[first] = queries.pop(None) + queries.get(first, [])
+        history = []
+        for sigma, group_items in groups.items():
+            for _, hidden_idx in queries.get(sigma, []):
+                qi = len(qsource)
+                qsource.append(hidden_idx)
+                prev = history[-(cfg.linear_conv_kernel - 1) :] if cfg.linear_conv_kernel > 1 else []
+                qhistory.append([-1] * (cfg.linear_conv_kernel - 1 - len(prev)) + prev)
+                event_q.append(("q", qi))
+                event_write.append(-1)
+                out_events.append(len(event_q) - 1)
+                out_hidden.append(hidden_idx)
+            members = []
+            for hidden_idx in group_items:
+                ci = len(order)
+                order.append(hidden_idx)
+                members.append((ci, hidden_idx))
+                event_q.append(("c", ci))
+                event_write.append(ci)
+                history.append(ci)
+                if len(group_items) == 1:
+                    out_events.append(len(event_q) - 1)
+                    out_hidden.append(hidden_idx)
+            if len(group_items) > 1:
+                # Bidirectional content visibility within the image group.
+                for ci, hidden_idx in members:
                     event_q.append(("c", ci))
-                    event_write.append(ci)
-                    history.append(ci)
-                    if len(group_items) == 1 and emit:
-                        out_events.append(len(event_q) - 1)
-                        out_hidden.append(hidden_idx)
-                if len(group_items) > 1:
-                    # Bidirectional content visibility within the image group.
-                    for ci, hidden_idx, emit in members:
-                        event_q.append(("c", ci))
-                        event_write.append(-1)
-                        if emit:
-                            out_events.append(len(event_q) - 1)
-                            out_hidden.append(hidden_idx)
-            cb.append(len(order))
-            eb.append(len(event_q))
+                    event_write.append(-1)
+                    out_events.append(len(event_q) - 1)
+                    out_hidden.append(hidden_idx)
+        cb.append(len(order))
+        eb.append(len(event_q))
     nc = len(order)
     long = lambda xs: torch.tensor(xs, dtype=torch.long)
     eq = [i if kind == "c" else nc + i for kind, i in event_q]
@@ -192,32 +169,7 @@ def build_delta_plan(batch, plan, cfg):
 
 def rope_tables(batch, plan, cfg):
     """Official interleaved temporal/height/width partial RoPE for static images."""
-    c = batch.row_col.float()
-    q = plan.query_rope.float()
-    if c.shape[0] == 3:
-        content = c
-    else:
-        ct = c[0].clone()
-        for indices in batch.image_indices:
-            indices = indices[indices.ge(0)]
-            if len(indices):
-                ct[indices] = c[0, indices[0]]
-        content = torch.stack((ct, c[0], c[1]))
-    if q.shape[0] == 3:
-        query = q
-    else:
-        qt = torch.where(plan.query_image[0, :, None], content[0, plan.query_positions], q[0])
-        query = torch.stack((qt, q[0], q[1]))
-    positions = [content]
-    if len(plan.generation_positions):
-        g = plan.generation_rope.float()
-        gt = g[0].clone()
-        for indices in plan.generation_condition:
-            if len(indices):
-                gt[indices] = g[0, indices[0]]
-        positions.append(torch.stack((gt, g[0], g[1]))[:, plan.prefix :])
-    positions.append(query)
-    return position_rope(torch.cat(positions, dim=1), cfg)
+    return position_rope(torch.cat((batch.row_col, plan.query_rope), dim=1), cfg)
 
 
 def position_rope(pos, cfg):

@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 import tests.test_qwen35_vision as fixtures
-from data.generation import GenerationInputs
+from data.generation import WanGenerationInputs
 from data.packing import Packer, ConsumedLoader
 from models.modeling_umm import JointModel
 from data.batch_layout import build_plan
@@ -21,7 +21,7 @@ def text(ids):return dict(type='text',input_ids=np.asarray(ids,dtype=np.int32))
 
 
 def picture(h=64,w=64,seed=0):
-    return dict(type='image',pixels=np.random.default_rng(seed).integers(0,256,(h,w,3),dtype=np.uint8))
+    return dict(type='image',generation_target=True,pixels=np.random.default_rng(seed).integers(0,256,(h,w,3),dtype=np.uint8))
 
 
 class Documents(fixtures.Documents):
@@ -40,8 +40,8 @@ class DocumentPackingTests(unittest.TestCase):
     def tearDownClass(cls):fixtures.NativeVisionContracts.tearDownClass()
 
     def cfg(self,**kwargs):
-        values=dict(renderer='moss',latent_channels=128,flow_draws=1,dit_width=128,dit_heads=4,
-            dit_ffn=256,dit_layers=2,preserve_documents=True,generation_token_budget=64,
+        values=dict(latent_channels=16,dit_width=128,dit_heads=4,
+            dit_ffn=256,dit_layers=2,preserve_documents=True,generation_token_budget=32,
             freeze_vision=True,freeze_vision_merger=False,tie_word_embeddings=False)
         values.update(kwargs)
         return self.fixture.cfg(**values)
@@ -56,8 +56,8 @@ class DocumentPackingTests(unittest.TestCase):
         batch,_=self.packer(rows,cfg).next()
         generator=torch.Generator().manual_seed(1703)
         n=sum(batch.generation.lengths)
-        batch.latents=torch.randn(n,128,generator=generator)
-        batch.noise=torch.randn(n,128,generator=generator)
+        batch.latents=torch.randn(n,64,generator=generator)
+        batch.noise=torch.randn(n,64,generator=generator)
         batch.times=torch.tensor([.2,.5,.8])
         batch.generation.time_features=torch.randn(3,256,generator=generator)
         return batch
@@ -74,7 +74,7 @@ class DocumentPackingTests(unittest.TestCase):
         self.assertFalse(r2['documents'][0]['window_continuation'])
         self.assertIsNone(r2['documents'][0]['window_reason'])
         self.assertEqual(r2['images'],3)
-        self.assertGreater(r2['generation_tokens'],64)
+        self.assertGreater(r2['generation_tokens'],32)
         self.assertEqual(r2['dit_microbatches'],2)
         self.assertEqual(packer.documents.image_reads,3)
         self.assertEqual([(p.start,p.stop) for p in second.generation.microbatches],[(0,2),(2,3)])
@@ -94,11 +94,11 @@ class DocumentPackingTests(unittest.TestCase):
             weights.append(p.loss_weights);targets.append(chunk.latents);noise.append(chunk.noise);times.append(chunk.times)
             self.assertEqual(chunk.latents.untyped_storage().data_ptr(),batch.latents.untyped_storage().data_ptr())
             self.assertEqual(p.cos.untyped_storage().data_ptr(),batch.generation.cos.untyped_storage().data_ptr())
-            self.assertLessEqual(p.ends[-1],64)
-            for i,end in enumerate(p.ends):
-                start=p.ends[i-1] if i else 0;n=p.lengths[i]
-                self.assertEqual(p.video_indices[p.video_sample_indices==i].tolist(),list(range(start,start+n)))
-                self.assertEqual(p.text_indices[i*16:(i+1)*16].tolist(),list(range(start+n,end)))
+            self.assertLessEqual(p.video_ends[-1],32)
+            for i,end in enumerate(p.video_ends):
+                start=p.video_ends[i-1] if i else 0
+                self.assertTrue(p.video_sample_indices[start:end].eq(i).all())
+                self.assertEqual(p.condition_indices[i*16:(i+1)*16].tolist(),list(range(i*16,(i+1)*16)))
         for chunks,expected in ((weights,batch.generation.loss_weights),(targets,batch.latents),
                                 (noise,batch.noise),(times,batch.times)):
             torch.testing.assert_close(torch.cat(chunks),expected,rtol=0,atol=0)
@@ -108,24 +108,23 @@ class DocumentPackingTests(unittest.TestCase):
 
     def test_indivisible_pair_and_single_chunk_fast_path(self):
         image=np.zeros((64,64,3),dtype=np.uint8)
-        with self.assertRaisesRegex(ValueError,'above DiT budget'):
-            GenerationInputs.prepare([image],16,32,token_budget=31)
-        layout=GenerationInputs.prepare([image],16,32,token_budget=32)
+        with self.assertRaisesRegex(ValueError,'above budget'):
+            WanGenerationInputs.prepare([image],16,32,token_budget=15)
+        layout=WanGenerationInputs.prepare([image],16,32,token_budget=16)
         self.assertEqual(layout.microbatches,())
         with self.assertRaisesRegex(ValueError,'max_images_per_pack'):
             Packer(Documents([]),self.cfg(),128,self.fixture.tokens,max_images=1)
 
     def test_document_mask_is_bitwise_equal_to_full_comparisons(self):
-        for method in ('CQ_IT','Bi_I+CQ_T'):
-            cfg=self.cfg(method=method)
-            rows=[dict(id='a',elements=[text([]),text([11]),picture(),text([12])]),
-                  dict(id='b',elements=[text([21,22]),picture(32,64),text([23])])]
-            batch,receipt=self.packer(rows,cfg).next()
-            self.assertFalse(receipt['documents'][0]['window_continuation'])
-            full_cfg=copy.deepcopy(cfg);full_cfg.preserve_documents=False
-            expected=build_plan(batch,full_cfg)
-            torch.testing.assert_close(batch.mainline.cq_mask,expected.cq_mask,rtol=0,atol=0)
-            torch.testing.assert_close(batch.mainline.cq_valid,expected.cq_valid,rtol=0,atol=0)
+        cfg=self.cfg()
+        rows=[dict(id='a',elements=[text([]),text([11]),picture(),text([12])]),
+              dict(id='b',elements=[text([21,22]),picture(32,64),text([23])])]
+        batch,receipt=self.packer(rows,cfg).next()
+        self.assertFalse(receipt['documents'][0]['window_continuation'])
+        full_cfg=copy.deepcopy(cfg);full_cfg.preserve_documents=False
+        expected=build_plan(batch,full_cfg)
+        torch.testing.assert_close(batch.mainline.cq_mask,expected.cq_mask,rtol=0,atol=0)
+        torch.testing.assert_close(batch.mainline.cq_valid,expected.cq_valid,rtol=0,atol=0)
 
     def test_explicit_backbone_windows_keep_coverage_and_consumed_restart(self):
         rows=[dict(id='long',format='interleaved',elements=[text([11]*270),picture(),
@@ -233,8 +232,7 @@ class DocumentPackingTests(unittest.TestCase):
         try:
             for micro in range(2):
                 group.is_last_microbatch=bool(micro)
-                batch=self.pair(cfg)
-                if micro:batch.generation.plan_microbatches(40)
+                batch=self.pair(self.cfg(generation_microbatch_images=1) if micro else cfg)
                 (compose_losses(reference(batch), reference.cfg)['loss']*.5).backward()
                 losses=compose_losses(actual(batch, compute_image_loss=not True), actual.cfg)
                 backward_deferred_renderer(actual,batch,losses,.5,wrapped,image_factor=cfg.image_weight)

@@ -16,6 +16,12 @@ from tokenizers import Tokenizer
 from data.images import atomic_json
 
 
+class ScaffoldTokenizer:
+    def encode(self, value, add_special_tokens=False):
+        from types import SimpleNamespace
+        return SimpleNamespace(ids=[7] if value else [])
+
+
 def make_fake(output, tokenizer_root, rows=131072, shard_rows=2048, edge_cases=False):
     output=Path(output).resolve(); tokenizer_root=Path(tokenizer_root)
     if output.exists():raise FileExistsError(output)
@@ -48,12 +54,12 @@ def make_fake(output, tokenizer_root, rows=131072, shard_rows=2048, edge_cases=F
     counts={x:sum(t not in excluded for t in tokenizer.encode(x,add_special_tokens=False).ids) for x in texts}
     catalog=[];statistics=dict(samples=rows,text_tokens=0,image_occurrences=0)
     schema=pa.schema([('sample_id',pa.string()),('source_shard',pa.string()),
-        ('segments',pa.list_(pa.struct([('kind',pa.string()),('text',pa.string()),('image_index',pa.int32())]))),
+        ('segments',pa.list_(pa.struct([('kind',pa.string()),('text',pa.string()),('image_index',pa.int32()),('generation_target',pa.bool_())]))),
         ('images',pa.list_(pa.struct([('member',pa.string()),('offset',pa.int64()),('length',pa.int64()),
             ('sha256',pa.string()),('width',pa.int32()),('height',pa.int32()),('format',pa.string())]))),
         ('text_tokens',pa.int64()),('format',pa.string())])
     def text(value):return dict(kind='text',text=value,image_index=None)
-    def image(index):return dict(kind='image',text=None,image_index=index)
+    def image(index):return dict(kind='image',text=None,image_index=index,generation_target=True)
     for start in range(0,rows,shard_rows):
         records=[]
         for index in range(start,min(rows,start+shard_rows)):

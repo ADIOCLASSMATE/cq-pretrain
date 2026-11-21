@@ -87,7 +87,6 @@ class CQDecoder:
         s = batch.ids.shape[1]
         if (
             batch.ids.device.type != "cpu"
-            or cfg.method != "CQ_IT"
             or plan.query_positions.tolist() != [s - 1]
             or plan.query_image.any()
             or len(batch.segments.unique()) != 1

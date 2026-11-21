@@ -4,7 +4,7 @@ Low-priority jobs are preempted. Each platform restart negotiates a new launch
 generation, logs under its own attempt directory, and resumes every rank from
 the newest committed checkpoint, including optimizer, FP32 masters, renderer
 EMA, RNG and the consumed-data cursor. Model, training and runtime settings
-come from one experiment YAML; previous MOSS throughput is not a Wan benchmark.
+come from the experiment YAML and selected release.
 """
 import argparse
 import fcntl
@@ -77,8 +77,6 @@ def training_command(args, attempt):
         raise ValueError(f"global_batch {recipe['global_batch']} must divide DP={dp}")
     training = ['--config', str(args.config), '--output', str(attempt/'train'),
         '--data-root', str(args.data_root), '--data-mode', 'A',
-        '--i2t-image-loss-probability',str(args.i2t_image_loss_probability),
-        *(['--cfg-null-condition',args.cfg_null_condition] if args.cfg_null_condition is not None else []),
         *(['--steps', str(args.steps)] if args.steps else ['--until-data-end']),
         '--warmup', str(min(10,max(0,args.steps-1)) if args.steps else 10),
         '--checkpoint',
@@ -162,10 +160,6 @@ def main():
     parser.add_argument('--data-root', type=Path, required=True,
                         help='Published corpus directory or mixed-source YAML')
     parser.add_argument('--validation-suite', type=Path, default=ROOT/'validation_assets/suite.json')
-    parser.add_argument('--i2t-image-loss-probability',type=float,default=0.,
-                        help='I2T sampling for the MOSS objective; Wan reads release occurrence permissions')
-    parser.add_argument('--cfg-null-condition',choices=('empty','empty_t2i','i2t_prefix'),
-                        help='Override the null condition from the experiment configuration')
     parser.add_argument('--nodes', type=int, default=int(os.environ.get('PET_NNODES', '8')))
     parser.add_argument('--node-rank', type=int, default=int(os.environ.get('PET_NODE_RANK', '0')))
     parser.add_argument('--nproc-per-node', type=int, default=16)
@@ -179,8 +173,6 @@ def main():
     args = parser.parse_args()
     args.output = args.output.resolve()
     recipe,environment_overrides=experiment(args.config)
-    if not math.isfinite(args.i2t_image_loss_probability) or not 0<=args.i2t_image_loss_probability<=1:
-        parser.error('Require finite 0 <= i2t-image-loss-probability <= 1')
     if args.nodes < 1 or not 0 <= args.node_rank < args.nodes or args.nproc_per_node < 1:
         parser.error('Invalid fixed-size node topology')
     if args.save_every < 1 or args.keep_checkpoints < 1 or args.validate_every < 1:

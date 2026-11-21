@@ -21,10 +21,7 @@ ASSETS = Path(__file__).resolve().parents[1] / '.assets/Qwen3.5-2B-Base'
 
 def wan_cfg(**kw):
     cfg = tiny_config(**kw)
-    cfg.renderer = 'wan'
     cfg.latent_channels = 16
-    cfg.flow_draws = 1
-    cfg.vision_encoder = 'qwen35'
     cfg.vision_assets = str(ASSETS)
     cfg.text_assets = str(ASSETS)
     return cfg
@@ -118,7 +115,7 @@ class CQPredicateEquivalence(unittest.TestCase):
             null = torch.tensor([i%5==0 for i in range(len(positions))])
             batch = SimpleNamespace(ids=torch.zeros(1,size,dtype=torch.long),
                                     segments=torch.tensor([docs]),sigma=torch.tensor([sigmas]))
-            plan = SimpleNamespace(generation_positions=torch.empty(0,dtype=torch.long),prefix=0,
+            plan = SimpleNamespace(
                                    query_positions=positions,query_read_sigma=cuts,query_unconditional=null)
             kernel = rng.randrange(1,6)
             delta = build_delta_plan(batch,plan,SimpleNamespace(linear_conv_kernel=kernel))

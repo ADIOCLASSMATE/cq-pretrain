@@ -66,9 +66,8 @@ def bound_ref(ref, original, row):
     if not ref.get('exact_identity') or ref['exact_identity'] != original.get('exact_identity'):
         raise ValueError('Bound view image differs from its published logical slot')
     result = with_roots([ref], row)[0]
-    for key in ('preserve_full_frame','conditioning_mask'):
-        if key in original:
-            result.setdefault(key, original[key])
+    if 'conditioning_mask' in original:
+        result.setdefault('conditioning_mask', original['conditioning_mask'])
     result.update(bound_flags(original, ref))
     return result
 

@@ -10,7 +10,6 @@
 !/TUNING.md
 !/launch_job.py
 !/train_production.py
-!/tune64.py
 !/environment.core17.txt
 !/requirements-data.lock
 !/scripts/

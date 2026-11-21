@@ -28,12 +28,9 @@ class ImageReader:
     Payloads live only in the bounded caller queue and the filesystem page
     cache. There is no SQLite admission lock, downloaded copy, or HTTP fallback.
     """
-    def __init__(self, source_root, source_sizes, image_size=512,
-                 native_resolution=False, max_open=32, max_bytes=256 << 20):
+    def __init__(self, source_root, source_sizes, max_open=32, max_bytes=256 << 20):
         self.root = Path(source_root).resolve()
         self.sizes = source_sizes
-        self.image_size = image_size
-        self.native_resolution = native_resolution
         self.max_open, self.max_bytes = max_open, max_bytes
         self.fds = OrderedDict()
         self.lock = threading.Lock()
@@ -81,9 +78,6 @@ class ImageReader:
             image.seek(0)
             image.load()
             image = ImageOps.exif_transpose(image).convert('RGB')
-            if not self.native_resolution:
-                image = ImageOps.fit(image, (self.image_size, self.image_size),
-                                     Image.Resampling.LANCZOS, centering=(.5, .5))
             pixels = np.asarray(image, dtype=np.uint8).copy()
         with self.lock:
             self.counters['images'] += 1
