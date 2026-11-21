@@ -24,6 +24,10 @@ class MainlinePlan:
     query_unconditional: torch.Tensor | None = None  # [queries], no C reads; target positions stay intact
     cq_predicate: object = None  # CQPredicate: same mask, as vectors instead of [1,1,2S,S]
     query_read_sigma: torch.Tensor | None = None  # exclusive C cutoff; query_positions and RoPE stay at the target
+    # Bidirectional visual Q: one (row_start, row_stop, key_start, key_stop) per
+    # target. Rows index the [C ; Q] hidden sequence, keys are the contiguous C
+    # prefix that target may read. Those rows read [prefix ; their own block].
+    query_blocks: tuple = ()
 
     def gather_image_conditions(self, hidden, generation_image_indices):
         """Return one CQ row per generation target, in the renderer's sample order."""

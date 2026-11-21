@@ -112,6 +112,13 @@ Ascend 910B 图像 CQ 的 GDN 层前向加反向实测（含 warmup，12 次计�
 
 样本或单个目标的 `non_cfg` 可以显式指定空条件（True）或正常前缀（False），目标标记优先。未指定时，无历史的目标使用空条件，有历史的目标按 `visual_uncond_probability` 抽取空条件，默认 10%，InterSyn 同样适用。选择由样本、目标位置、seed 和 epoch 决定，同一目标的 RF 次采样共用这次选择。评估的负分支显式使用空条件，`guidance` 默认 1。
 
+两个消融轴只改变视觉 Q 读取的内容，不增加参数，默认值保持原行为和原数据游标：
+
+- `model.query_interaction`（`--query-interaction`）：`none` 时每个视觉 Q 只读 C；`bidirectional` 时同一目标的 Q 还互相可见。attention 层对「该目标可见的 C 前缀＋同目标全部 Q」做一次 softmax；GDN 层为每个目标另开一条序列，重放其前缀写入后让全部 Q 先写后读，与内容流中图像块的规则相同。C 和文本 Q 不读视觉 Q，不同目标的 Q 互不可见。
+- `model.null_condition`（`--null-condition`）：`masked` 时空条件的 Q 不读任何 C；`bos` 时只读文档起始标记，Q 的坐标改为相对该标记的固定位置，因此空条件与文档内容和长度无关。无起始标记的自然交错文档仍按 `masked` 处理。
+
+位置只通过 rotary 进入注意力分数，分数只对 value 加权。因此相互独立的空条件 Q，以及只能互相读取的空条件 Q，输出都是同一个向量的重复；只有 `bidirectional` 与 `bos` 同时启用时，空条件才随位置变化。验证见 `tests/test_query_interaction.py` 和 `scripts/validation/validate_query_blocks_cuda.py`。
+
 query 数量和空条件策略本身不改变参数形状；本次两层 adapter 改变了权重与优化器形状，旧训练结果不再兼容：训练 checkpoint 仅接受 schema 7，推理快照仅接受 v2；不提供旧三层 adapter 转换。新 checkpoint 的精确 `--resume` 同时校验配置、数据游标、源码和实际启用的 kernel 选项。dynamic query 的语义、梯度、交错前缀及恢复规则有 CPU 回归覆盖，原固定 64 query 的 NPU 吞吐数字不能直接当作新配置的测速结果。
 
 每 1000 个绝对更新默认保存独立推理快照（`--eval-snapshot-every`）；训练恢复 checkpoint 的频率、保留策略和完整性校验独立管理。`--eval-snapshot-dir` 指定持久评估权重目录，零间隔关闭快照。

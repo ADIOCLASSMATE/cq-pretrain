@@ -26,6 +26,9 @@ class DeltaPlan:
     hidden_length: int
     hidden_event: torch.Tensor
     padding_hidden: torch.Tensor
+    # Queries from this index of query_source on also write, inside a private
+    # sequence of their own target. len(query_source) when no query writes.
+    query_write_start: int = -1
 
     def to(self, device, non_blocking=False):
         return DeltaPlan(
@@ -72,7 +75,13 @@ def build_delta_plan(batch, plan, cfg):
         plan.query_unconditional.tolist() if plan.query_unconditional is not None else [False] * nq
     )
     read_sigmas = plan.query_read_sigma.tolist() if plan.query_read_sigma is not None else None
+    blocks = getattr(plan, "query_blocks", ())
+    in_block = set()
+    for row_start, row_stop, _, _ in blocks:
+        in_block.update(range(row_start - keys, row_stop - keys))
     for j, p in enumerate(plan.query_positions.tolist()):
+        if j in in_block:
+            continue  # served by its target's private sequence below
         segment = segments[p]
         sigma = sigmas[p] if read_sigmas is None else read_sigmas[j]
         if unconditional[j] or (segment < 0 and read_sigmas is not None):
@@ -89,6 +98,7 @@ def build_delta_plan(batch, plan, cfg):
     qhistory = []
     cb = [0]
     eb = [0]
+    content_index = {}
     for doc, items in docs.items():
         groups = {}
         for rank, index in sorted(items):
@@ -124,6 +134,7 @@ def build_delta_plan(batch, plan, cfg):
             for hidden_idx in group_items:
                 ci = len(order)
                 order.append(hidden_idx)
+                content_index[hidden_idx] = ci
                 members.append((ci, hidden_idx))
                 event_q.append(("c", ci))
                 event_write.append(ci)
@@ -140,9 +151,39 @@ def build_delta_plan(batch, plan, cfg):
                     out_hidden.append(hidden_idx)
         cb.append(len(order))
         eb.append(len(event_q))
+    # Bidirectional visual Q. The content stream must not see these writes, so
+    # each target gets a sequence of its own: replay the C prefix it may read
+    # (the same k/v/decay as in the document, hence the same state), let every
+    # Q of the target write, then read them all. This is the tied-group rule
+    # content image blocks already follow, applied to a private continuation.
+    write_start = len(qsource)
+    for row_start, row_stop, key_start, key_stop in blocks:
+        prefix = [content_index[i] for _, i in sorted((sigmas[i], i) for i in range(key_start, key_stop))]
+        for ci in prefix:
+            event_q.append(("c", ci))
+            event_write.append(ci)
+        prev = prefix[-(cfg.linear_conv_kernel - 1) :] if cfg.linear_conv_kernel > 1 else []
+        tail = [-1] * (cfg.linear_conv_kernel - 1 - len(prev)) + prev
+        members = []
+        for hidden_idx in range(row_start, row_stop):
+            qi = len(qsource)
+            qsource.append(hidden_idx)
+            qhistory.append(tail)
+            members.append((qi, hidden_idx))
+            event_q.append(("q", qi))
+            event_write.append(("q", qi - write_start))
+        for qi, hidden_idx in members:
+            event_q.append(("q", qi))
+            event_write.append(-1)
+            out_events.append(len(event_q) - 1)
+            out_hidden.append(hidden_idx)
+        eb.append(len(event_q))
     nc = len(order)
+    writers = len(qsource) - write_start
     long = lambda xs: torch.tensor(xs, dtype=torch.long)
     eq = [i if kind == "c" else nc + i for kind, i in event_q]
+    # Write slots: [content ; writing queries ; one zero row meaning "no write"].
+    event_write = [nc + i[1] if isinstance(i, tuple) else nc + writers if i < 0 else i for i in event_write]
     hidden_event = torch.zeros(keys + nq, dtype=torch.long)
     hidden_event[long(out_hidden)] = long(out_events)
     padding = torch.ones(keys + nq, dtype=torch.bool)
@@ -150,7 +191,7 @@ def build_delta_plan(batch, plan, cfg):
     return DeltaPlan(
         long(order),
         long(eq),
-        long([nc if i < 0 else i for i in event_write]),
+        long(event_write),
         long(out_events),
         long(out_hidden),
         long(qsource),
@@ -164,6 +205,7 @@ def build_delta_plan(batch, plan, cfg):
         keys + nq,
         hidden_event,
         padding.nonzero().flatten(),
+        write_start,
     )
 
 

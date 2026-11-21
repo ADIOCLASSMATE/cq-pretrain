@@ -195,6 +195,21 @@ class GatedDelta(nn.Module):
         for j in range(cfg.linear_conv_kernel - 1):
             query = query + history.index_select(0, plan.query_history[:, j]) * weight[:, j]
         query = F.silu(query).reshape(-1, hk, d)
+        # Bidirectional visual Q also write, each into a private continuation of
+        # its own prefix. Their key and value take the same causal convolution
+        # as their read vector: the last real C before the target, then Q itself.
+        writers = plan.query_source[plan.query_write_start :] if plan.query_write_start >= 0 else plan.query_source[:0]
+        if len(writers):
+            if cache is not None:
+                raise ValueError("Recurrent decoding has no bidirectional visual queries")
+            weight = self.conv1d.weight[size:, 0]
+            written = raw[:, size:].index_select(0, writers) * weight[:, -1]
+            history = torch.cat((updates[:, size:], updates.new_zeros(1, updates.shape[1] - size)), dim=0)
+            for j in range(cfg.linear_conv_kernel - 1):
+                written = written + history.index_select(0, plan.query_history[plan.query_write_start :, j]) * weight[:, j]
+            qk, qv = F.silu(written).split((size, h * d), -1)
+            k = torch.cat((k, qk.reshape(-1, hk, d).to(k.dtype)), dim=0)
+            v = torch.cat((v, qv.reshape(-1, h, d).to(v.dtype)), dim=0)
         if h != hk:
             q, k, query = (t.repeat_interleave(h // hk, dim=1) for t in (q, k, query))
         q = torch.cat((q, query), dim=0).index_select(0, plan.event_q)[None]
@@ -202,9 +217,10 @@ class GatedDelta(nn.Module):
         k = torch.cat((k, zeros), dim=0).index_select(0, plan.event_write)[None]
         v = torch.cat((v, zeros), dim=0).index_select(0, plan.event_write)[None]
         control_dtype = torch.float64 if x.dtype == torch.float64 else torch.float32
-        a = a.index_select(0, plan.content_order).to(control_dtype)
+        control_order = torch.cat((plan.content_order, writers)) if len(writers) else plan.content_order
+        a = a.index_select(0, control_order).to(control_dtype)
         g = -self.A_log.to(control_dtype).exp() * F.softplus(a + self.dt_bias.to(control_dtype))
-        beta = beta.index_select(0, plan.content_order).sigmoid().to(control_dtype)
+        beta = beta.index_select(0, control_order).sigmoid().to(control_dtype)
         control_zero = g.new_zeros(1, h)
         g = torch.cat((g, control_zero)).index_select(0, plan.event_write)[None]
         beta = torch.cat((beta, control_zero)).index_select(0, plan.event_write)[None]
@@ -260,15 +276,20 @@ class GatedAttention(nn.Module):
         n, b, _ = x.shape
         q, gate = self.q_proj(x).reshape(n, b, cfg.heads // P.tp_size(), 2 * cfg.head_dim).chunk(2, -1)
         q = self.q_norm(q, cfg.fused and not reference)
+        # Bidirectional visual Q are the only queries that are also keys. Their
+        # rows are the tail of the sequence, so one projection covers [C ; block Q].
+        blocks = plan.query_blocks
+        first = blocks[0][0] if blocks else n
+        source = torch.cat((x[:s], x[first:])) if blocks else x[:s]
         k, v = (
-            self.kv_proj(x[:s]).chunk(2, -1)
+            self.kv_proj(source).chunk(2, -1)
             if cfg.qwen_fused_projections
-            else (self.k_proj(x[:s]), self.v_proj(x[:s]))
+            else (self.k_proj(source), self.v_proj(source))
         )
         k = self.k_norm(
-            k.reshape(s, b, cfg.kv_heads // P.tp_size(), cfg.head_dim), cfg.fused and not reference
+            k.reshape(len(source), b, cfg.kv_heads // P.tp_size(), cfg.head_dim), cfg.fused and not reference
         )
-        v = v.reshape(s, b, cfg.kv_heads // P.tp_size(), cfg.head_dim)
+        v = v.reshape(len(source), b, cfg.kv_heads // P.tp_size(), cfg.head_dim)
         dim = int(cfg.head_dim * cfg.partial_rotary_factor)
 
         def rotate(t, cos, sin):
@@ -277,10 +298,15 @@ class GatedAttention(nn.Module):
             )
 
         q = rotate(q, *rope)
-        k = rotate(k, rope[0][:s], rope[1][:s])
+        if blocks:
+            k = rotate(k, torch.cat((rope[0][:s], rope[0][first:])), torch.cat((rope[1][:s], rope[1][first:])))
+        else:
+            k = rotate(k, rope[0][:s], rope[1][:s])
         if cache is not None:
             if torch.is_grad_enabled():
                 raise ValueError("CQ state caching is inference-only")
+            if blocks:
+                raise ValueError("Recurrent decoding has no bidirectional visual queries")
             # The last C slot is the uncommitted target placeholder.
             cache["k"] = k.new_empty(cache["capacity"], *k.shape[1:])
             cache["v"] = v.new_empty(cache["capacity"], *v.shape[1:])
@@ -297,6 +323,21 @@ class GatedAttention(nn.Module):
             cfg.fused and not reference,
             None if reference else plan.cq_predicate,
         )
+        if blocks:
+            # One softmax over [the C prefix this target may read ; every Q of
+            # the same target]. Both ranges are contiguous, so no mask is built.
+            pieces = [y[:first]]
+            for row_start, row_stop, key_start, key_stop in blocks:
+                own = slice(s + row_start - first, s + row_stop - first)
+                pieces.append(K.attention(
+                    q[row_start:row_stop],
+                    torch.cat((k[key_start:key_stop], k[own])),
+                    torch.cat((v[key_start:key_stop], v[own])),
+                    fused=cfg.fused and not reference,
+                ))
+            if blocks[-1][1] != n or any(a[1] != b[0] for a, b in zip(blocks, blocks[1:])):
+                raise ValueError("Bidirectional query blocks must tile the tail of the sequence")
+            y = torch.cat(pieces)
         return self.o_proj(y * gate.flatten(-2).sigmoid())
 
 

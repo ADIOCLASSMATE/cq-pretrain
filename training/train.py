@@ -38,6 +38,10 @@ def parse_args(argv=None):
                         help='Use fake_batch with the unchanged production model and CPU planners')
     parser.add_argument('--image-condition-queries', type=int)
     parser.add_argument('--visual-query-mode',choices=('native','fixed'))
+    parser.add_argument('--query-interaction',choices=('none','bidirectional'),
+                        help='Ablation: let the visual queries of one target read each other (model.query_interaction)')
+    parser.add_argument('--null-condition',choices=('masked','bos'),
+                        help='Ablation: what an unconditional visual query reads (model.null_condition)')
     parser.add_argument('--tp', type=int, default=1)
     parser.add_argument('--sequence-length', type=int, default=8192)
     parser.add_argument('--images', type=int, default=2)
@@ -192,6 +196,8 @@ def main():
     if args.wan_vae_assets is not None:cfg.wan_vae_assets=args.wan_vae_assets
     if args.image_condition_queries is not None: cfg.image_condition_queries=args.image_condition_queries
     if args.visual_query_mode is not None:cfg.visual_query_mode=args.visual_query_mode
+    if args.query_interaction is not None:cfg.query_interaction=args.query_interaction
+    if args.null_condition is not None:cfg.null_condition=args.null_condition
     if args.preserve_documents:cfg.preserve_documents=True
     if args.long_document_policy is not None:cfg.long_document_policy=args.long_document_policy
     if args.dit_microbatch_tokens is not None:cfg.generation_token_budget=args.dit_microbatch_tokens

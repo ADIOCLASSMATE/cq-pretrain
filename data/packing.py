@@ -159,6 +159,7 @@ class Packer:
         generation_image_indices=[]
         generation_unconditional=[]
         instruction_starts, instruction_dropped = [], []
+        null_positions = []
         instruction_dropout_eligible_images = 0
         vision_pixels,vision_grids=[],[]
         visual_features,visual_latents,visual_cache_keys=[],[],[]
@@ -268,6 +269,9 @@ class Packer:
                         raise ValueError('non_cfg must be a boolean when specified')
                     generation_unconditional.append(generate_image and unconditional)
                     instruction_starts.append(instruction_start if generate_image else -1)
+                    # The opener is the same token, position and state in every
+                    # templated document, so reading it alone carries no content.
+                    null_positions.append(start + 1 if templated and generate_image else -1)
                     eligible = generate_image and instruction_start > start and not (explicit_condition or unconditional)
                     instruction_dropout_eligible_images += int(eligible)
                     instruction_dropped.append(eligible and sample_objective(
@@ -329,6 +333,7 @@ class Packer:
         batch.generation_unconditional=torch.tensor(generation_unconditional,dtype=torch.bool)
         batch.generation_instruction_starts = torch.tensor(instruction_starts, dtype=torch.long)
         batch.generation_instruction_dropped = torch.tensor(instruction_dropped, dtype=torch.bool)
+        batch.generation_null_positions = torch.tensor(null_positions, dtype=torch.long)
         if generation_image_indices:
             from data.generation import WanGenerationInputs
             queries=[math.prod(vision_grids[i])//4 if cfg.visual_query_mode=='native' else cfg.image_condition_queries for i in generation_image_indices]

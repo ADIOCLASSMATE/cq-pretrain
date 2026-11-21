@@ -85,6 +85,10 @@ def build_plan(batch, cfg):
     read_sigma = torch.empty(len(unconditional), dtype=batch.sigma.dtype)
     read_sigma[:len(text)] = batch.sigma[0, text]
     c = batch.row_col.float()
+    bidirectional = getattr(cfg, "query_interaction", "none") == "bidirectional"
+    null_at_opener = getattr(cfg, "null_condition", "masked") == "bos"
+    blocks = []
+    block_rows = torch.zeros_like(unconditional)
     for i in targets:
         span = spans[i]
         grid = grids[i]
@@ -116,8 +120,32 @@ def build_plan(batch, cfg):
                 raise ValueError("An instruction cutoff cannot discard an intervening visual")
         read_sigma[rows] = batch.sigma[0, read_position]
         if batch.generation_unconditional is not None and batch.generation_unconditional[i]:
-            unconditional[rows] = True
-            read_sigma[rows] = 0
+            opener = -1
+            if null_at_opener and batch.generation_null_positions is not None:
+                opener = int(batch.generation_null_positions[i])
+            if opener >= 0:
+                # Read exactly the document opener. Its token, position and
+                # state are the same in every document, so nothing leaks; the
+                # Q coordinates are re-based so their offset to it is fixed too.
+                if not 0 < opener <= span[0] or batch.segments[0, opener - 1] != batch.segments[0, span[0]]:
+                    raise ValueError("The null read position must follow the opener of the target's document")
+                read_sigma[rows] = batch.sigma[0, opener]
+                coordinates = coordinates - coordinates[0, 0] + c[0, opener - 1, 0] + 1
+            else:
+                unconditional[rows] = True
+                read_sigma[rows] = 0
+        if bidirectional:
+            # C visible to this target is one contiguous prefix of its document:
+            # ranks never decrease along positions, and Q reads strictly below
+            # its cutoff. The same range drives both attention and GDN.
+            document = (batch.segments[0] == batch.segments[0, span[0]]).nonzero().flatten()
+            first, last = int(document[0]), int(document[-1]) + 1
+            visible = batch.sigma[0, first:last] < read_sigma[start]
+            count = 0 if unconditional[start] else int(visible.sum())
+            if count and not visible[:count].all():
+                raise ValueError("A bidirectional query block needs a contiguous visible prefix")
+            blocks.append((s + start, s + start + n, first, first + count))
+            block_rows[rows] = True
         positions.append(span[0].repeat(n))
         ropes.append(coordinates[:, :, None])
         outputs.append(conditions[i, :n])
@@ -126,7 +154,10 @@ def build_plan(batch, cfg):
     image = torch.cat(
         (torch.zeros(len(text), dtype=torch.bool), torch.ones(len(qpos) - len(text), dtype=torch.bool))
     )[None]
-    mask, valid = document_cq_mask(batch, qpos, unconditional, read_sigma)
+    # Block rows are served by their own [prefix ; block] attention and GDN
+    # sequence. In the shared C kernels they read nothing and cost nothing.
+    hidden_from_content = unconditional | block_rows
+    mask, valid = document_cq_mask(batch, qpos, hidden_from_content, read_sigma)
     plan = MainlinePlan(
         query_positions=qpos, query_image=image, query_rope=qrope,
         output_positions=torch.cat((text, *outputs)), condition_indices=conditions,
@@ -134,6 +165,7 @@ def build_plan(batch, cfg):
         output_size=offset,
         query_unconditional=unconditional,
         query_read_sigma=read_sigma,
+        query_blocks=tuple(blocks),
     )
-    attach_cq_predicate(batch, plan, valid, unconditional)
+    attach_cq_predicate(batch, plan, valid, hidden_from_content)
     return finalize_plan(batch, cfg, plan)

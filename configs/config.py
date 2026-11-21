@@ -26,6 +26,14 @@ class ModelConfig(RuntimeConfig):
     content_visibility: str = "visual_block"
     image_condition_queries: int = 64
     visual_query_mode: str = "native"
+    # Ablation axes. Both only change which keys/states a generation query
+    # reads; neither adds parameters, so checkpoints stay interchangeable.
+    #   query_interaction: "none" = every visual Q reads C alone (baseline);
+    #     "bidirectional" = the Qs of one target also read each other.
+    #   null_condition: "masked" = an unconditional Q reads no C;
+    #     "bos" = it reads exactly the document's opening token.
+    query_interaction: str = "none"
+    null_condition: str = "masked"
     wan_assets: str = "/inspire/sj-ssd3/project/high-dimensionaldata/public/models/Wan2.1-T2V-1.3B"
     wan_vae_assets: str = "/inspire/sj-ssd3/project/high-dimensionaldata/public/models/Wan2.1-VAE"
     wan_freq_dim: int = 256
@@ -64,6 +72,10 @@ class ModelConfig(RuntimeConfig):
     def validate_model(self, tp=1):
         if self.content_visibility not in ("causal", "visual_block"):
             raise ValueError("content_visibility must be causal or visual_block")
+        if self.query_interaction not in ("none", "bidirectional"):
+            raise ValueError("query_interaction must be none or bidirectional")
+        if self.null_condition not in ("masked", "bos"):
+            raise ValueError("null_condition must be masked or bos")
         if tp not in (1, 2, 4):
             raise ValueError("Supported TP sizes: 1, 2, 4")
         if self.linear_heads % tp or (self.linear_value_heads or self.linear_heads) % tp:
@@ -123,6 +135,10 @@ class DataConfig:
                       objective_policy="wan_occurrence_prefix_v1")
         if self.rf != 1:
             policy['rf'] = self.rf
+        # Defaults are omitted so cursors written before these axes existed resume.
+        for name, default in (('query_interaction', 'none'), ('null_condition', 'masked')):
+            if getattr(self, name, default) != default:
+                policy[name] = getattr(self, name)
         if self.visual_instruction_dropout_probability:
             policy['visual_instruction_dropout_probability'] = self.visual_instruction_dropout_probability
         return policy

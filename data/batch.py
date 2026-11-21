@@ -22,6 +22,7 @@ class Batch:
     generation_unconditional: torch.Tensor | None = None  # [visuals], explicit non-CFG; None = normal C visibility
     generation_instruction_starts: torch.Tensor | None = None  # [visuals], packed text boundary, document start = empty, -1 = unavailable
     generation_instruction_dropped: torch.Tensor | None = None  # [visuals], read before the instruction start
+    generation_null_positions: torch.Tensor | None = None  # [visuals], first position after the document opener, -1 = none
 
     @property
     def generation_image_count(self):

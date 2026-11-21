@@ -67,10 +67,21 @@ def prune_queries(batch,cfg,keep):
     keep=keep.nonzero().flatten() if keep.dtype==torch.bool else keep
     rows=torch.cat((torch.arange(s),s+keep))
     same_rows = len(keep) == len(plan.query_positions) and torch.equal(keep, torch.arange(len(keep)))
+    # Bidirectional blocks are kept or dropped whole; their rows move with the pruning.
+    moved = {s + int(old): s + new for new, old in enumerate(keep.tolist())}
+    blocks = []
+    for row_start, row_stop, key_start, key_stop in plan.query_blocks:
+        kept = [moved[row] for row in range(row_start, row_stop) if row in moved]
+        if not kept:
+            continue
+        if len(kept) != row_stop - row_start or kept != list(range(kept[0], kept[0] + len(kept))):
+            raise ValueError('A bidirectional query block must be pruned as a whole')
+        blocks.append((kept[0], kept[0] + len(kept), key_start, key_stop))
     plan=replace(plan,query_positions=plan.query_positions[keep],query_image=plan.query_image[:,keep],
         query_rope=plan.query_rope[:,keep],output_positions=plan.output_positions[keep],
         query_unconditional=(plan.query_unconditional[keep] if plan.query_unconditional is not None else None),
         query_read_sigma=(plan.query_read_sigma[keep] if plan.query_read_sigma is not None else None),
+        query_blocks=tuple(blocks),
         # Pruned readouts historically use the dense/tiled kernel. The full
         # predicate has different row indices and must not be reused here.
         cq_predicate=plan.cq_predicate if same_rows else None,
