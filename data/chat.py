@@ -112,7 +112,7 @@ def caption_spans(segments, direction, sample_id):
     picture = next(s for s in segments if s['kind'] == 'image')
     spans = [header(ROLE_USER, True)]
     if direction == 'T2I':
-        spans.append(scaffold(choose(T2I_INSTRUCTIONS, sample_id, 't2i')))
+        spans.append(dict(scaffold(choose(T2I_INSTRUCTIONS, sample_id, 't2i')), instruction_start=True))
         spans.append(corpus(body['text']))
         spans.append(closing())
         spans.append(header(ROLE_ASSISTANT, False))
@@ -142,10 +142,15 @@ def conversation_spans(segments):
                 spans.append(closing())
             spans.append(header(ROLE_ASSISTANT if role == 'assistant' else ROLE_USER, first))
             current, first = (role, turn), False
+            pending_instruction = role == 'user'
         if segment['kind'] == 'image':
             spans.append(dict(image(segment['image_index']),role=role))
         elif segment['text']:
-            spans.append(corpus(segment['text']))
+            span = corpus(segment['text'])
+            if pending_instruction and segment['text'].strip():
+                span['instruction_start'] = True
+                pending_instruction = False
+            spans.append(span)
     if current is not None:
         spans.append(closing())
     return spans
@@ -160,13 +165,18 @@ def causal_spans(segments):
         if current!=key:
             if current is not None:spans.append(closing())
             spans.append(header(role+'\n',current is None));current=key
+            pending_instruction = role == 'user'
         if segment['kind']=='image':
             span=dict(image(segment['image_index']),role=role,image_loss_allowed=segment['image_loss_allowed'])
             if 'upstream_image' in segment:
                 span['upstream_image']=segment['upstream_image']
             spans.append(span)
         elif segment['text']:
-            spans.append(text(segment['text'],segment['supervised'],False))
+            span = text(segment['text'], segment['supervised'], False)
+            if pending_instruction and segment['text'].strip():
+                span['instruction_start'] = True
+                pending_instruction = False
+            spans.append(span)
     if current is not None:spans.append(closing())
     return spans
 

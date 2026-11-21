@@ -87,11 +87,14 @@ def build_delta_plan(batch, plan, cfg):
     unconditional = (
         plan.query_unconditional.tolist() if plan.query_unconditional is not None else [False] * nq
     )
+    read_sigmas = plan.query_read_sigma.tolist() if plan.query_read_sigma is not None else None
     for j, p in enumerate(plan.query_positions.tolist()):
         segment = segments[p]
         if segment < 0:
             segment = 0
-        sigma = None if unconditional[j] else sigmas[p]
+        sigma = sigmas[p] if read_sigmas is None else read_sigmas[j]
+        if unconditional[j]:
+            sigma = None  # Empty prefix also for documents with a nonzero first rank.
         query_by_doc.setdefault(segment, {}).setdefault(sigma, []).append((j, keys + j))
     order = []
     event_q = []

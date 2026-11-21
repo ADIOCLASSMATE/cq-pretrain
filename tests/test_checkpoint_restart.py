@@ -33,11 +33,11 @@ def cpu_restore_worker(root, rank):
     model = torch.nn.Linear(3, 2)
     inner = torch.optim.AdamW(model.parameters(), lr=.01)
     optimizer = SimpleNamespace(optimizer=inner)
-    config = SimpleNamespace(to_dict=lambda:dict(width=3))
+    old_config = SimpleNamespace(to_dict=lambda:dict(width=3))
+    config = SimpleNamespace(to_dict=lambda:dict(width=3, visual_instruction_dropout_probability=0.))
     topology = dict(tp=1, dp=2, pp=1, cp=1, optimizer_instances=1)
     fake_parallel = SimpleNamespace(get_tensor_model_parallel_rank=lambda:0,
         get_data_parallel_group=lambda:dist.group.WORLD)
-    fake_npu = SimpleNamespace(get_rng_state=torch.get_rng_state, set_rng_state=torch.set_rng_state)
     data = dict(documents=dict(cursor=31+rank), serial=9)
     def update():
         inner.zero_grad()
@@ -48,9 +48,10 @@ def cpu_restore_worker(root, rank):
     update()
     with patch.object(checkpoint_io.P, 'state', return_value=fake_parallel), \
          patch.object(checkpoint_io.P, 'dp_rank', return_value=rank), \
-         patch.object(torch, 'npu', fake_npu, create=True):
+         patch.object(torch.cuda, 'get_rng_state', torch.get_rng_state), \
+         patch.object(torch.cuda, 'set_rng_state', torch.set_rng_state):
         path = Path(root)/'step_0000001'
-        checkpoint_io.save(path, model, optimizer, 1, config, topology, {'schedule':'same'}, data)
+        checkpoint_io.save(path, model, optimizer, 1, old_config, topology, {'schedule':'same'}, data)
         expected_loss = update()
         expected_model = copy.deepcopy(model.state_dict())
         expected_optimizer = copy.deepcopy(inner.state_dict())
@@ -68,6 +69,26 @@ def cpu_restore_worker(root, rank):
 
 
 class CheckpointRestartTests(unittest.TestCase):
+    def test_old_wan_contract_still_rejects_another_objective_or_source_tree(self):
+        from utils.checkpoint import check_resume_contract
+        old_state = dict(backbone_adapter_sha256='685214d7b070ca5404251ce3a60413b3c2f3b6809916e074b5aa9fa2a784fbde',
+                         data=dict(adapter_sha256='178f411321296755691fa8de032a4c4b9d9f42b7958ced995bc7804007fdb7ef'),
+                         seed=42)
+        new_state = dict(backbone_adapter_sha256='7ff2690b35a4319311dc03667258dd1033e482bbd20f74b735f49cf335076230',
+                         data=dict(adapter_sha256='89b8370775043b6a7e4eca126c16efdb8398977c5d3c24b7ece6335557f930d5'),
+                         seed=42)
+        config = dict(renderer='wan', visual_instruction_dropout_probability=0.)
+        manifest = dict(config=dict(renderer='wan'), training_state=old_state)
+        check_resume_contract(manifest, config, new_state)
+        with self.assertRaisesRegex(ValueError, 'configuration'):
+            check_resume_contract(manifest, dict(config, visual_instruction_dropout_probability=.1), new_state)
+        for other in (dict(new_state, seed=43), dict(new_state, backbone_adapter_sha256='different'),
+                      dict(new_state, data=dict(adapter_sha256='different'))):
+            with self.assertRaisesRegex(ValueError, 'checkpoint'):
+                check_resume_contract(manifest, config, other)
+        with self.assertRaisesRegex(ValueError, 'checkpoint'):
+            check_resume_contract(dict(manifest, config=config), config, new_state)
+
     def test_old_formats_are_rejected_before_loading_weights(self):
         import utils.checkpoint as checkpoint_io
         for schema in (3, 4, 5, 6, 'cq_eval_snapshot_v1'):

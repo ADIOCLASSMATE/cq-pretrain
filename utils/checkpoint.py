@@ -90,6 +90,34 @@ def save(path, model, optimizer, step, config, topology, training_state=None, da
     dist.barrier()
 
 
+def _legacy_config(saved, current):
+    """Before instruction dropout existed its probability was exactly zero."""
+    if 'visual_instruction_dropout_probability' in current and 'visual_instruction_dropout_probability' not in saved:
+        return dict(saved, visual_instruction_dropout_probability=0.)
+    return saved
+
+
+def check_resume_contract(manifest, current, training_state):
+    saved_config = _legacy_config(manifest['config'], current)
+    if saved_config != current:
+        raise ValueError('Resume model configuration differs from the checkpoint')
+    saved = manifest.get('training_state')
+    if saved == training_state:
+        return
+    added_dropout = 'visual_instruction_dropout_probability' in current.keys() - manifest['config'].keys()
+    if saved is not None and added_dropout:
+        # Only this exact source transition from l40s@7ac9164 is equivalent
+        # with dropout disabled. Keep recording the real hashes on new saves.
+        saved = dict(saved)
+        if saved.get('backbone_adapter_sha256') == '685214d7b070ca5404251ce3a60413b3c2f3b6809916e074b5aa9fa2a784fbde':
+            saved['backbone_adapter_sha256'] = '7ff2690b35a4319311dc03667258dd1033e482bbd20f74b735f49cf335076230'
+        data = saved.get('data')
+        if data and data.get('adapter_sha256') == '178f411321296755691fa8de032a4c4b9d9f42b7958ced995bc7804007fdb7ef':
+            saved['data'] = dict(data, adapter_sha256='89b8370775043b6a7e4eca126c16efdb8398977c5d3c24b7ece6335557f930d5')
+    if saved != training_state:
+        raise ValueError('Resume schedule, batch or data seed differs from the checkpoint')
+
+
 def load(path, model, optimizer, config, topology, training_state=None, data_state_out=None, ema=None):
     root = Path(path)
     manifest = json.loads((root / 'manifest.json').read_text())
@@ -99,10 +127,7 @@ def load(path, model, optimizer, config, topology, training_state=None, data_sta
         raise ValueError('Resume must preserve whether renderer EMA is enabled')
     if manifest['world'] != dist.get_world_size() or manifest['topology'] != topology:
         raise ValueError('Resume requires the saved TP/DP topology')
-    if manifest['config'] != config.to_dict():
-        raise ValueError('Resume model configuration differs from the checkpoint')
-    if manifest.get('training_state') != training_state:
-        raise ValueError('Resume schedule, batch or data seed differs from the checkpoint')
+    check_resume_contract(manifest, config.to_dict(), training_state)
     saved = torch.load(root / f'rank_{dist.get_rank():05d}.pt', map_location='cpu', weights_only=False)
     if ('ema' in saved)!=('ema' in manifest):
         raise ValueError('Renderer EMA shard and manifest disagree')
@@ -154,7 +179,7 @@ def initialization_model_config(config):
     execution={'checkpoint_backbone','checkpoint_dit','checkpoint_backbone_layers',
         'checkpoint_dit_layers','ce_chunk','keep_attention_activations','preserve_documents',
         'long_document_policy','generation_token_budget','generation_microbatch_images',
-        'i2t_image_loss_probability','visual_uncond_probability','cfg_null_condition',
+        'i2t_image_loss_probability','visual_uncond_probability','visual_instruction_dropout_probability','cfg_null_condition',
         # CQ query count selects how many read-only positions each image emits.
         # It allocates no learned tensor: queries reuse the shared image-mask
         # embedding and the backbone/DiT weights are identical at any Q. A new
@@ -175,11 +200,13 @@ def initialize_model(path, model, config):
     from utils.eval_snapshot import SCHEMA as SNAPSHOT_SCHEMA
     if manifest.get('schema') not in (SCHEMA, SNAPSHOT_SCHEMA):
         raise ValueError('Unsupported model initialization schema')
-    if manifest['config'].keys() != config.to_dict().keys():
+    config_values = config.to_dict()
+    saved_config = _legacy_config(manifest['config'], config_values)
+    if saved_config.keys() != config_values.keys():
         raise ValueError('Initialization configuration fields differ from checkpoint')
     source_tp=manifest['topology']['tp']
-    saved=initialization_model_config(manifest['config'])
-    current=initialization_model_config(config.to_dict())
+    saved=initialization_model_config(saved_config)
+    current=initialization_model_config(config_values)
     if saved!=current:
         changed=sorted(k for k in saved.keys()|current.keys() if saved.get(k)!=current.get(k))
         raise ValueError(f'Initialization semantic model config differs from checkpoint: {changed}')

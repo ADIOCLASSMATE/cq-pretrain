@@ -164,8 +164,8 @@ def main():
     parser.add_argument('--validation-suite', type=Path, default=ROOT/'validation_assets/suite.json')
     parser.add_argument('--i2t-image-loss-probability',type=float,default=0.,
                         help='Legacy MOSS sampling only; Wan always disables I2T image loss')
-    parser.add_argument('--cfg-null-condition',choices=('empty_t2i','i2t_prefix'),default='empty_t2i',
-                        help='Wan requires empty_t2i; i2t_prefix is for legacy MOSS checkpoints')
+    parser.add_argument('--cfg-null-condition',choices=('empty','empty_t2i','i2t_prefix'),default='empty_t2i',
+                        help='Use empty for Wan conditional dropout; legacy templates remain available')
     parser.add_argument('--nodes', type=int, default=int(os.environ.get('PET_NNODES', '8')))
     parser.add_argument('--node-rank', type=int, default=int(os.environ.get('PET_NODE_RANK', '0')))
     parser.add_argument('--nproc-per-node', type=int, default=16)

@@ -33,6 +33,16 @@ class MainlinePlan:
     rope_sin: torch.Tensor | None = None
     query_unconditional: torch.Tensor | None = None  # [queries], no C reads; target positions stay intact
     cq_predicate: object = None  # CQPredicate: same mask, as vectors instead of [1,1,2S,S]
+    query_read_sigma: torch.Tensor | None = None  # exclusive C cutoff; query_positions and RoPE stay at the target
+
+    def gather_image_conditions(self, hidden, generation_image_indices):
+        """Return one CQ row per generation target, in the renderer's sample order."""
+        indices = self.condition_indices
+        if generation_image_indices is not None:
+            indices = indices.index_select(0, generation_image_indices)
+        # Selected rows can still have padding columns for unequal query counts.
+        # The renderer consumes only the valid columns of each target.
+        return hidden[indices.clamp_min(0)]
 
     def _map_tensors(self, fn):
         return replace(

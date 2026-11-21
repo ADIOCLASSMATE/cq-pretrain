@@ -144,9 +144,19 @@ class DataConfig:
     generation_microbatch_images: int = 0
     i2t_image_loss_probability: float = 1.0
     visual_uncond_probability: float = 0.1
+    # Drawn only for eligible targets left conditional by the existing null policy.
+    visual_instruction_dropout_probability: float = 0.0
     cfg_null_condition: str = "empty"
     vision_min_pixels: int = 65536
     vision_max_pixels: int = 1048576
+
+    def wan_objective_policy(self):
+        policy = dict(visual_uncond_probability=self.visual_uncond_probability,
+                      objective_policy="wan_non_cfg_flag_v2")
+        if self.visual_instruction_dropout_probability:
+            policy.update(objective_policy="wan_instruction_cutoff_v3",
+                          visual_instruction_dropout_probability=self.visual_instruction_dropout_probability)
+        return policy
 
 
 @dataclass
@@ -169,6 +179,10 @@ class RunConfig(ModelConfig, DataConfig, LossConfig):
             raise ValueError("I2T image loss sampling requires the MOSS renderer")
         if not 0 <= self.visual_uncond_probability <= 1:
             raise ValueError("Unconditional probability must be between 0 and 1")
+        if not 0 <= self.visual_instruction_dropout_probability <= 1:
+            raise ValueError("Instruction dropout probability must be between 0 and 1")
+        if self.visual_instruction_dropout_probability and (self.renderer != "wan" or self.cfg_null_condition != "empty"):
+            raise ValueError("Instruction dropout requires Wan with an empty null condition")
         if self.cfg_null_condition not in ("empty", "empty_t2i", "i2t_prefix"):
             raise ValueError("CFG null condition must be empty, empty_t2i or i2t_prefix")
         if self.renderer == "wan" and self.cfg_null_condition == "i2t_prefix":

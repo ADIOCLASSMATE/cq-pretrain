@@ -664,7 +664,9 @@ def main():
                     sum(x[1].get('i2t_null_candidates',0) for x in micro_batches if x),
                     sum(x[1].get('i2t_null_images',0) for x in micro_batches if x),
                     sum(x[1]['condition_query_tokens'] for x in micro_batches if x),
-                    sum(x[1]['unconditional_images'] for x in micro_batches if x)],device=ACCEL,dtype=torch.int64)
+                    sum(x[1]['unconditional_images'] for x in micro_batches if x),
+                    sum(x[1]['instruction_dropped_images'] for x in micro_batches if x),
+                    sum(x[1]['instruction_dropout_eligible_images'] for x in micro_batches if x)],device=ACCEL,dtype=torch.int64)
                 dist.all_reduce(counts,group=P.state().get_data_parallel_group())
                 counts=counts.tolist()
                 if counts[4]==0:
@@ -802,6 +804,7 @@ def main():
                            active_microbatches=counts[4],data_wait_seconds=resource_values[0].item(),
                            supervised_text_tokens=counts[0],
                            condition_query_tokens=counts[15],unconditional_images=counts[16],
+                           instruction_dropped_images=counts[17],instruction_dropout_eligible_images=counts[18],
                            backbone_processed_slots=counts[9],padding_tokens=counts[10],dit_microbatches=counts[11],
                            data_prepare_seconds=resource_values[1].item(),data_device_wait_seconds=resource_values[2].item(),
                            cpu_peak_rss_gib=resource_values[3].item(),

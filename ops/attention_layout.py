@@ -66,7 +66,7 @@ def plan_attention(mask, chunk=1024, trim_key_start=False):
     )
 
 
-def document_cq_mask(batch, query_positions, query_unconditional=None):
+def document_cq_mask(batch, query_positions, query_unconditional=None, query_read_sigma=None):
     """Exact CQ masks; compare sigma only inside each independent document.
 
     The current NPU attention adapter still consumes a dense Boolean mask,
@@ -77,6 +77,7 @@ def document_cq_mask(batch, query_positions, query_unconditional=None):
     segments = batch.segments[0]
     sigma = batch.sigma[0]
     query_segments = segments[query_positions]
+    read_sigma = sigma[query_positions] if query_read_sigma is None else query_read_sigma
     mask = torch.ones(s + len(query_positions), s, dtype=torch.bool)
     valid = torch.zeros(s + len(query_positions), dtype=torch.bool)
     for segment in segments.unique().tolist():
@@ -90,7 +91,7 @@ def document_cq_mask(batch, query_positions, query_unconditional=None):
         mask[start:stop, start:stop] = sigmas[None, :] > sigmas[:, None]
         valid[start:stop] = True
         rows = (query_segments == segment).nonzero().flatten()
-        qsigmas = sigma[query_positions[rows]]
+        qsigmas = read_sigma[rows]
         mask[s + rows, start:stop] = sigmas[None, :] >= qsigmas[:, None]
         valid[s + rows] = qsigmas > sigmas.min()
     if query_unconditional is not None:
@@ -102,7 +103,7 @@ def document_cq_mask(batch, query_positions, query_unconditional=None):
     return mask[None, None], valid[None]
 
 
-def cq_mask_vectors(batch, query_positions, valid, query_unconditional=None):
+def cq_mask_vectors(batch, query_positions, valid, query_unconditional=None, query_read_sigma=None):
     """Per-row/key values reproducing `document_cq_mask` as a pointwise predicate.
 
     Rows are the concatenation [content(s) ; queries(nq)] and keys are the s
@@ -128,7 +129,7 @@ def cq_mask_vectors(batch, query_positions, valid, query_unconditional=None):
     return CQPredicate(
         key_sigma=sigma.to(torch.int32),
         key_segment=segments.to(torch.int32),
-        row_sigma=torch.cat((sigma, sigma[query_positions])).to(torch.int32),
+        row_sigma=torch.cat((sigma, sigma[query_positions] if query_read_sigma is None else query_read_sigma)).to(torch.int32),
         row_segment=torch.cat((segments, segments[query_positions])).to(torch.int32),
         row_is_query=torch.cat(
             (torch.zeros(s, dtype=torch.bool), torch.ones(nq, dtype=torch.bool))

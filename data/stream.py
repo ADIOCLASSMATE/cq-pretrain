@@ -67,8 +67,7 @@ class DocumentStream:
         if cfg is not None:
             self.signature['generation']={'renderer':cfg.renderer,'max_pixels':cfg.generation_max_pixels,'flow_draws':cfg.flow_draws,'channels':cfg.latent_channels,'token_budget':cfg.generation_token_budget}
             if cfg.renderer=='wan':
-                self.signature['generation'].update(visual_uncond_probability=cfg.visual_uncond_probability,
-                    objective_policy='wan_non_cfg_flag_v2')
+                self.signature['generation'].update(cfg.wan_objective_policy())
             if cfg.i2t_image_loss_probability != 1:
                 self.signature['generation']['i2t_image_loss_probability']=cfg.i2t_image_loss_probability
                 self.signature['generation']['i2t_sampling']='sample_seed_epoch_sha256_v1'
@@ -140,7 +139,9 @@ class DocumentStream:
                     if not len(ids):
                         continue
                     elements.append(dict(type='text', input_ids=np.asarray(ids, dtype=np.int32),
-                                         supervised=span['supervised']))
+                                         supervised=span['supervised'],
+                                         context_text=not span['synthetic'] and bool(span['text'].strip()),
+                                         instruction_start=span.get('instruction_start', False)))
                 elif span['kind'] == 'image':
                     if self.signature['view'] == 'A':
                         logical = row['images'][span['image_index']]

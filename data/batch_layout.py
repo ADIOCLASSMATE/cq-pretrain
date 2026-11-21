@@ -26,7 +26,7 @@ def safe_mask(allowed):
 
 def attach_cq_predicate(batch, plan, valid, unconditional=None):
     """Same mask, expressed as vectors so a kernel need not read a dense tensor."""
-    plan.cq_predicate = cq_mask_vectors(batch, plan.query_positions, valid, unconditional)
+    plan.cq_predicate = cq_mask_vectors(batch, plan.query_positions, valid, unconditional, plan.query_read_sigma)
     return plan
 
 
@@ -335,6 +335,8 @@ def build_visual_plan(batch, cfg):
     ropes = []
     outputs = []
     unconditional = torch.zeros(len(text) + offset - s, dtype=torch.bool)
+    read_sigma = torch.empty(len(unconditional), dtype=batch.sigma.dtype)
+    read_sigma[:len(text)] = batch.sigma[0, text]
     c = batch.row_col.float()
     if c.shape[0] == 2:
         temporal = c[0].clone()
@@ -357,9 +359,17 @@ def build_visual_plan(batch, cfg):
         interpolated = bases[:, lo] + (bases[:, hi] - bases[:, lo]) * (ti - lo)
         coordinates[0] = interpolated[0]
         coordinates[1:] += interpolated[1:]
+        start = len(text) + int(conditions[i, 0]) - s
+        rows = slice(start, start + n)
+        read_position = span[0]
+        if batch.generation_instruction_dropped is not None and batch.generation_instruction_dropped[i]:
+            read_position = batch.generation_instruction_starts[i]
+            if not 0 <= read_position < span[0] or batch.segments[0, read_position] != batch.segments[0, span[0]]:
+                raise ValueError("Instruction cutoff must precede the target in the same document")
+        read_sigma[rows] = batch.sigma[0, read_position]
         if batch.generation_unconditional is not None and batch.generation_unconditional[i]:
-            start = len(text) + int(conditions[i, 0]) - s
-            unconditional[start : start + n] = True
+            unconditional[rows] = True
+            read_sigma[rows] = 0
         positions.append(span[0].repeat(n))
         ropes.append(coordinates[:, :, None])
         outputs.append(conditions[i, :n])
@@ -368,7 +378,7 @@ def build_visual_plan(batch, cfg):
     image = torch.cat(
         (torch.zeros(len(text), dtype=torch.bool), torch.ones(len(qpos) - len(text), dtype=torch.bool))
     )[None]
-    mask, valid = document_cq_mask(batch, qpos, unconditional)
+    mask, valid = document_cq_mask(batch, qpos, unconditional, read_sigma)
     empty = torch.empty(0, dtype=torch.long)
     em = torch.empty(1, 1, 0, 0, dtype=torch.bool)
     plan = MainlinePlan(
@@ -390,6 +400,7 @@ def build_visual_plan(batch, cfg):
         em,
         output_size=offset,
         query_unconditional=unconditional,
+        query_read_sigma=read_sigma,
     )
     attach_cq_predicate(batch, plan, valid, unconditional)
     return finalize_plan(batch, cfg, plan)

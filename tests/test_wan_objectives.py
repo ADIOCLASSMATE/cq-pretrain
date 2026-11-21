@@ -46,6 +46,16 @@ class Documents(fixtures.Documents):
         return super().image(doc,element)
 
 
+def read_documents(rows, encode=lambda value: [11]):
+    stream = object.__new__(DocumentStream)
+    stream.catalog = SimpleNamespace(read_rows=lambda *args: rows)
+    stream.tokenizer = SimpleNamespace(encode_batch=lambda spans, **kw: [SimpleNamespace(ids=encode(s)) for s in spans])
+    stream.special_ids = set()
+    stream.counting_matches_corpus = False
+    stream.signature = {'view': 'A'}
+    return stream._load(0, 0, len(rows))['rows']
+
+
 def test_native_roles_survive_stream_and_input_images_never_become_targets():
     # Run the real online adapter with a trivial tokenizer and in-memory catalog.
     def segment(role,turn,kind):
@@ -55,11 +65,7 @@ def test_native_roles_survive_stream_and_input_images_never_become_targets():
           dict(sample_id='interleaved',format='interleaved',segments=[segment(None,None,'text'),segment(None,None,'image')])]
     for row in rows:row.update(images=[dict(path='test.png')],source_shard='',text_tokens=1)
     rows[0]['non_cfg']=True;rows[1]['non_cfg']=False;rows[2]['images'][0]['non_cfg']=True
-    stream=object.__new__(DocumentStream)
-    stream.catalog=SimpleNamespace(read_rows=lambda *args:rows)
-    stream.tokenizer=SimpleNamespace(encode_batch=lambda spans,**kw:[SimpleNamespace(ids=[11]) for _ in spans])
-    stream.special_ids=set();stream.counting_matches_corpus=False;stream.signature={'view':'A'}
-    documents=stream._load(0,0,3)['rows']
+    documents=read_documents(rows)
     assert [d['direction'] for d in documents]==['I2T','T2I',None]
     assert [[e['generation_target'] for e in d['elements'] if e['type']=='image']
             for d in documents]==[[False],[False,True],[True]]
@@ -89,13 +95,14 @@ def test_native_single_and_multi_turn_dialogues_are_all_retained(setup):
 
 @pytest.mark.parametrize('leading_text',[False,True])
 def test_interleaved_uses_real_prefix_without_random_cfg_dropout(setup,leading_text):
-    cfg,tokens=setup;cfg=replace(cfg,visual_uncond_probability=1.)
+    cfg,tokens=setup;cfg=replace(cfg,visual_uncond_probability=1.,visual_instruction_dropout_probability=1.)
     elements=([text(21,22)] if leading_text else [])+[picture(),text(11,12),picture(),text(13)]
     rows=[dict(id='natural',format='interleaved',templated=False,elements=elements)]
     batch,receipt=Packer(Documents(rows),cfg,64,tokens).next()
     assert batch.generation_image_indices.tolist()==[0,1]
     assert batch.generation_unconditional.tolist()==[not leading_text,False]
     assert receipt['unconditional_images']==int(not leading_text)
+    assert receipt['instruction_dropout_eligible_images']==receipt['instruction_dropped_images']==0
     torch.manual_seed(23);model=JointModel(cfg).eval()
     features=torch.randn(len(batch.vision.content_indices),cfg.width)
     indices=batch.mainline.condition_indices
@@ -258,3 +265,212 @@ def test_model_accepts_config_without_data_or_loss_policy(setup):
     losses['loss'].backward()
     assert model.renderer.text_embedding[0].weight.grad.abs().sum()>0
     assert model.renderer.text_embedding[2].weight.grad.abs().sum()>0
+
+
+@pytest.mark.parametrize('fmt', ['conversation', 'causal_sequence'])
+@pytest.mark.parametrize('visibility', ['visual_block', 'causal'])
+def test_history_queries_keep_prefix_and_cannot_read_instruction_or_target(setup, fmt, visibility):
+    cfg, tokens = setup
+    cfg = replace(cfg, content_visibility=visibility, visual_uncond_probability=0.,
+                  visual_instruction_dropout_probability=1.)
+    def words(role, turn, value):
+        return dict(kind='text', role=role, turn=turn, text=value, supervised=True)
+    def visual(role, turn, index):
+        return dict(kind='image', role=role, turn=turn, image_index=index, image_loss_allowed=role=='assistant')
+    row = dict(sample_id='edit', format=fmt, direction='T2I', images=[dict(path='source'), dict(path='target')],
+               source_shard='', segments=[words('user',0,'older'), words('assistant',1,'reply'),
+               visual('user',2,0), words('user',2,'change'), words('user',2,'colour'), visual('assistant',3,1)])
+    vocab = dict(older=[11], reply=[12], change=[21,22], colour=[23])
+    doc, = read_documents([row], lambda s: vocab.get(s, [51]))
+    for e in doc['elements']:
+        if e['type'] == 'image':
+            e['pixels'] = picture()['pixels']
+    docs = [dict(id='other', elements=[text(30)]), doc]
+    hist, receipt = Packer(Documents(docs), cfg, 64, tokens).next()
+    full, _ = Packer(Documents(docs), replace(cfg,visual_instruction_dropout_probability=0.), 64, tokens).next()
+    assert receipt['instruction_dropout_eligible_images'] == receipt['instruction_dropped_images'] == 1
+    assert receipt['unconditional_images'] == 0
+    assert hist.generation_image_indices.tolist() == [1]
+    assert hist.generation_instruction_dropped.tolist() == [False, True]
+    cut = int((hist.ids[0] == 21).nonzero().item())
+    assert hist.generation_instruction_starts.tolist() == [-1, cut]
+    plan = hist.mainline
+    assert plan.query_read_sigma[plan.query_image[0]].eq(cut).all()
+    assert torch.equal(plan.cq_predicate.dense(), plan.cq_mask)
+    assert torch.equal(hist.text_indices, full.text_indices)
+    for key in ('query_positions', 'query_rope', 'condition_indices', 'rope_cos', 'rope_sin'):
+        assert torch.equal(getattr(plan, key), getattr(full.mainline, key))
+
+    torch.manual_seed(312)
+    model = JointModel(cfg).eval()
+    features = torch.randn(len(hist.vision.content_indices), cfg.width, requires_grad=True)
+    source_rows = hist.vision.content_indices < cut
+    target = plan.condition_indices[1]
+    output = backbone(model, hist, vision_features=features)
+    output[target].square().sum().backward()
+    assert features.grad[source_rows].abs().sum() > 0
+    assert features.grad[~source_rows].count_nonzero() == 0
+    assert model.embedding.weight.grad[[21,22,23,30]].count_nonzero() == 0
+    with torch.no_grad():
+        changed = replace(hist, ids=hist.ids.clone())
+        changed.ids[0, cut:] = 32
+        changed.ids[hist.ids == 30] = 33  # Adjacent packed document.
+        noisy = features.clone()
+        noisy[~source_rows] += torch.randn_like(noisy[~source_rows])
+        assert torch.equal(backbone(model, changed, vision_features=noisy)[target], output[target])
+        full_output = backbone(model, full, vision_features=features)
+        assert not torch.allclose(backbone(model, replace(full, ids=changed.ids), vision_features=noisy)[target],
+                                  full_output[target])
+        assert torch.equal(full_output[hist.text_indices], output[hist.text_indices])
+        older = hist.ids.clone()
+        older[older == 11] = 33
+        assert not torch.allclose(backbone(model, replace(hist, ids=older), vision_features=features)[target], output[target])
+        noisy[source_rows] += torch.randn_like(noisy[source_rows])
+        assert not torch.allclose(backbone(model, hist, vision_features=noisy)[target], output[target])
+
+
+def test_instruction_dropout_eligibility_and_exact_replay(setup):
+    cfg, tokens = setup
+    cfg = replace(cfg, visual_uncond_probability=.25, visual_instruction_dropout_probability=.5)
+    prompt = dict(text(12), instruction_start=True, context_text=True)
+    history = dict(text(11), context_text=True)
+    source = picture(generation_target=False)
+    rows = [dict(id=str(i), direction='T2I', elements=[history, prompt, picture()]) for i in range(60)]
+    packer = Packer(Documents(rows), cfg, 24, tokens)
+    baseline = Packer(Documents(rows), replace(cfg,visual_instruction_dropout_probability=0.), 24, tokens)
+    selected = []
+    while (item := packer.next()) is not None:
+        batch, receipt = item
+        old, old_receipt = baseline.next()
+        assert torch.equal(batch.generation_unconditional, old.generation_unconditional)
+        ids = [doc['id'] for doc in receipt['documents']]
+        draws = [not null and sample_objective(f'{key}:2', .5, 42, 3, 'visual-instruction-drop-v1')
+                 for key, null in zip(ids, batch.generation_unconditional.tolist())]
+        selected.extend(draws)
+        assert batch.generation_instruction_dropped.tolist() == draws
+        assert receipt['instruction_dropout_eligible_images'] == len(ids) - receipt['unconditional_images']
+        assert receipt['instruction_dropped_images'] == sum(draws)
+        if receipt['serial'] == 1:
+            state = receipt['next_state']
+            assert old_receipt['next_state']['packing']['objective_policy'] == 'wan_non_cfg_flag_v2'
+            assert 'visual_instruction_dropout_probability' not in old_receipt['next_state']['packing']
+            replay = Packer(Documents(rows, state['documents']['index']), cfg, 24, tokens, state)
+            with pytest.raises(ValueError, match='packing policy'):
+                Packer(Documents(rows), cfg, 24, tokens, old_receipt['next_state'])
+        else:
+            restored, replayed = replay.next()
+            assert replayed == receipt and torch.equal(restored.mainline.query_read_sigma, batch.mainline.query_read_sigma)
+    assert 0 < sum(selected) < len(selected)
+
+    cfg = replace(cfg, visual_uncond_probability=0., visual_instruction_dropout_probability=1.)
+    cases = [
+        [text(50), prompt, picture()],                        # Only a wrapper before the instruction.
+        [history, prompt, source, text(13), picture()],        # Image inside the proposed suffix.
+        [history, prompt, picture(image_loss_allowed=False)], # Permission denied.
+        [history, prompt, picture(non_cfg=False)],            # Explicit full condition.
+        [history, prompt, picture(non_cfg=True)],             # Explicit null condition.
+        [source, history, picture()],                         # No user instruction boundary.
+    ]
+    for elements in cases:
+        _, receipt = Packer(Documents([dict(id='excluded', elements=elements)]), cfg, 48, tokens).next()
+        assert receipt['instruction_dropped_images'] == receipt['instruction_dropout_eligible_images'] == 0
+
+
+@pytest.mark.parametrize('visibility', ['visual_block', 'causal'])
+def test_pruned_edit_conditions_match_training_readouts(setup, visibility):
+    from evaluations.sampling import make_history_batch, prune_queries
+
+    cfg, tokens = setup
+    cfg = replace(cfg, content_visibility=visibility)
+    processor = NativeImageProcessor(cfg, 128)
+    source = np.random.default_rng(83).integers(0, 256, (64,96,3), dtype=np.uint8)
+    tokenizer = SimpleNamespace(encode=lambda value, **kw: SimpleNamespace(ids=[51]))
+    full_doc = make_batch(cfg, tokens, [21,22], processor(np.zeros_like(source)), 'T2I', prune=False,
+                          tokenizer=tokenizer, context=processor(source))
+    full = prune_queries(replace(full_doc), cfg, full_doc.mainline.query_image[0])
+    hist = make_history_batch(full, cfg)
+    torch.manual_seed(53)
+    model = JointModel(cfg).eval()
+    with torch.no_grad():
+        for sampled in (full, hist):
+            train = replace(full_doc, generation_instruction_dropped=sampled.generation_instruction_dropped)
+            train.mainline = build_plan(train, cfg)
+            expected = model(train, compute_image_loss=False)['image_conditions']
+            # A pruned EDIT pack has exactly the target's visual Qs in output order.
+            actual = backbone(model, sampled)[sampled.mainline.output_positions][None]
+            torch.testing.assert_close(actual, expected, atol=2e-6, rtol=1e-5)
+
+
+@pytest.mark.parametrize('query_mode', ['native', 'fixed'])
+def test_sampling_scales_share_positive_geometry_and_skip_redundant_forwards(setup, tmp_path, monkeypatch, query_mode):
+    from PIL import Image
+    from data.generation import patch_latent
+    from evaluations import sampling
+
+    cfg, tokens = setup
+    cfg = replace(cfg, visual_query_mode=query_mode, image_condition_queries=64)
+    processor = NativeImageProcessor(cfg, 128)
+    image_path = tmp_path / 'input.png'
+    Image.fromarray(picture()['pixels']).save(image_path)
+    tokenizer = SimpleNamespace(encode=lambda value, **kw: SimpleNamespace(ids=[19,20] if value else []))
+    monkeypatch.setattr(sampling, 'accel_type', lambda: 'cpu')
+    monkeypatch.setattr(sampling, 'P', SimpleNamespace(state=lambda: SimpleNamespace(get_tensor_model_parallel_rank=lambda:1)))
+    batches, expected_rows, projected, predicted, decoded = {}, [], [], [], []
+    def read_condition(model, batch, vision_features):
+        name = ('null' if batch.mainline.query_unconditional.all() else
+                'hist' if batch.generation_instruction_dropped.any() else 'full')
+        assert name not in batches
+        batches[name] = batch, vision_features
+        plan = batch.mainline
+        expected_rows.append(plan.output_positions[plan.query_image[0]])
+        hidden = torch.full((plan.output_size, cfg.width), {'full':7., 'hist':3., 'null':-2.}[name])
+        hidden[:, 1] = torch.arange(plan.output_size)
+        return hidden
+    monkeypatch.setattr(sampling, 'backbone', read_condition)
+    def project(raw, layout):
+        # Channel 1 identifies every backbone readout. Inspect the exact rows
+        # that Wan will project, including their order, for full/hist/null.
+        actual_rows = raw.reshape(-1, cfg.width).index_select(0, layout.condition_indices)[:, 1]
+        assert torch.equal(actual_rows, expected_rows[-1]), (actual_rows, expected_rows[-1])
+        projected.append(raw)
+        return raw.flatten()[0]
+    def predict(xt, raw, times, layout, condition, cached_kv):
+        assert cached_kv is condition and raw.flatten()[0] == condition
+        predicted.append(condition.item())
+        return torch.full_like(xt, condition.item())
+    renderer = SimpleNamespace(project_conditions=project, cache_condition_kv=lambda c:c, predict=predict)
+    model = SimpleNamespace(cfg=cfg, renderer=renderer, embedding=torch.nn.Embedding(1, cfg.width),
+                            patch_embed=lambda vision:torch.ones(len(vision.content_indices), cfg.width))
+    def decode(latents):
+        decoded.append(patch_latent(latents[0]))
+        return [torch.zeros(3,1,32,32)]
+    def run(task, scales, branches, velocity, prompt='edit'):
+        batches.clear(); expected_rows.clear(); projected.clear(); predicted.clear()
+        case = dict(task=task, id='sample', image=str(image_path), prompt=prompt, seed=39,
+                    height=64, width=96, steps=2, shift=1., **scales)
+        sampling.generate(model, case, tokenizer, tokens, processor, SimpleNamespace(decode=decode), tmp_path)
+        assert set(batches) == set(branches)
+        assert len(projected) == len(branches) and len(predicted) == case['steps'] * len(branches)
+        actual = decoded[-1]
+        expected = torch.randn(actual.shape, generator=torch.Generator().manual_seed(case['seed']))
+        for _ in range(2):
+            expected = expected - .5 * velocity
+        assert torch.equal(actual, expected)
+        return actual
+
+    # The single-scale expression and both equal-scale fast paths stay exact.
+    single = run('EDIT', dict(guidance=2.), ['full','null'], 16.)
+    assert torch.equal(run('EDIT', dict(s_ctx=2., s_ins=2.), ['full','null'], 16.), single)
+    run('EDIT', dict(s_ctx=1., s_ins=1.), ['full'], 7.)
+    # The omitted scale inherits guidance: -2 + .5*(3+2) + 2*(7-3).
+    run('EDIT', dict(guidance=2., s_ctx=.5), ['full','null','hist'], 8.5)
+    full, features = batches['full']
+    hist, hist_features = batches['hist']
+    assert hist_features is features and torch.equal(full.ids, hist.ids)
+    assert torch.equal(full.mainline.query_rope, hist.mainline.query_rope)
+    assert torch.equal(full.mainline.query_positions, hist.mainline.query_positions)
+    cut = hist.generation_instruction_starts[-1].item()
+    assert hist.mainline.query_read_sigma.eq(cut).all()
+    assert hist.mainline.cq_mask[0,0,hist.ids.numel():,cut:].all()
+    run('T2I', dict(s_ctx=.5, s_ins=2.), ['full','null'], 16.)
+    run('EDIT', dict(s_ctx=.5, s_ins=2.), ['full','null'], 2.5, prompt='')

@@ -72,8 +72,7 @@ class Packer:
             self.packing_contract['i2t_image_loss_probability']=cfg.i2t_image_loss_probability
             self.packing_contract['i2t_sampling']='sample_seed_epoch_sha256_v1'
         if cfg.renderer=='wan':
-            self.packing_contract.update(visual_uncond_probability=cfg.visual_uncond_probability,
-                objective_policy='wan_non_cfg_flag_v2')
+            self.packing_contract.update(cfg.wan_objective_policy())
         self.stats=dict(batches=0,pack_seconds=0.,plan_seconds=0.,pin_seconds=0.,atomic_captions=0,
                         atomic_documents=0,long_document_windows=0)
         if cfg.vision_encoder == 'qwen35':
@@ -150,6 +149,8 @@ class Packer:
         text_indices, image_indices, pixels, records = [], [], [], []
         generation_image_indices=[]
         generation_unconditional=[]
+        instruction_starts, instruction_dropped = [], []
+        instruction_dropout_eligible_images = 0
         i2t_null_candidates=i2t_null_images=0
         vision_pixels,vision_grids=[],[]
         visual_features,visual_latents,visual_cache_keys=[],[],[]
@@ -256,12 +257,19 @@ class Packer:
                     continued or (self.document_size is not None and self.document_size[1]>s)) else None
                 if current_record['window_reason']:self.stats['long_document_windows']+=1
             records.append(current_record)
+            # Boundaries and meaningful history are local to this document/window.
+            # BOS, role headers and closings alone do not make a new CFG category.
+            instruction_start = -1
+            has_history = False
             while self.element < len(doc['elements']) and position < s:
                 e = doc['elements'][self.element]
                 if e['type'] == 'text':
                     available = len(e['input_ids']) - self.offset
                     take = min(available, s - position)
                     if take:
+                        if e.get('instruction_start'):
+                            instruction_start = position if has_history and self.offset == 0 else -1
+                        has_history |= e.get('context_text', False)
                         current_record['body_spans'].append((position,take))
                         ids[position:position+take] = e['input_ids'][self.offset:self.offset+take]
                         segment[position:position+take] = seg
@@ -284,6 +292,7 @@ class Packer:
                         generate_image=sampled_image and image_permissions[self.element] and e.get('generation_target',True)
                         unconditional=e.get('non_cfg')
                         if unconditional is None:unconditional=doc.get('non_cfg')
+                        explicit_condition = unconditional is not None
                         if unconditional is None:
                             # Training policy only fills unspecified flags. The
                             # model consumes the flag, never the source format.
@@ -292,6 +301,15 @@ class Packer:
                                 sample_objective(f'{doc["id"]}:{self.element}',cfg.visual_uncond_probability,
                                                  seed,epoch,'visual-uncond-v1'))
                         generation_unconditional.append(generate_image and unconditional)
+                        instruction_starts.append(instruction_start if generate_image else -1)
+                        eligible = generate_image and instruction_start >= 0 and not (explicit_condition or unconditional)
+                        instruction_dropout_eligible_images += int(eligible)
+                        instruction_dropped.append(eligible and sample_objective(
+                            f'{doc["id"]}:{self.element}', cfg.visual_instruction_dropout_probability,
+                            seed, epoch, 'visual-instruction-drop-v1'))
+                        # A later target cannot drop across this image, even when
+                        # both images and multiple text spans belong to one turn.
+                        has_history, instruction_start = True, -1
                         stop=position+size;indices=position+sequence['visual']
                         ids[position:stop]=sequence['ids'];segment[position:stop]=seg
                         sigma[position:stop]=sequence['sigma']+position
@@ -391,6 +409,8 @@ class Packer:
             batch.generation_image_indices=torch.tensor(generation_image_indices,dtype=torch.long)
         if cfg.renderer=='wan':
             batch.generation_unconditional=torch.tensor(generation_unconditional,dtype=torch.bool)
+            batch.generation_instruction_starts = torch.tensor(instruction_starts, dtype=torch.long)
+            batch.generation_instruction_dropped = torch.tensor(instruction_dropped, dtype=torch.bool)
         if generation_image_indices and cfg.renderer=='moss':
             from data.generation import GenerationInputs
             batch.generation=GenerationInputs.prepare([pixels[i] for i in generation_image_indices],cfg.image_condition_queries,cfg.dit_width//cfg.dit_heads,
@@ -438,6 +458,8 @@ class Packer:
                        condition_query_tokens=(int(batch.mainline.query_image.sum()) if cfg.method=='CQ_IT'
                                                else n_images*cfg.image_condition_queries),
                        unconditional_images=sum(generation_unconditional),
+                       instruction_dropped_images=sum(instruction_dropped),
+                       instruction_dropout_eligible_images=instruction_dropout_eligible_images,
                        i2t_null_candidates=i2t_null_candidates,i2t_null_images=i2t_null_images,
                        generation_tokens=generation_tokens,
                        dit_microbatches=(max(1,len(batch.generation.microbatches)) if batch.generation else 0),

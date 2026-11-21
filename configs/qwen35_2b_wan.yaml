@@ -13,6 +13,7 @@ data:
   generation_token_budget: 65536
   i2t_image_loss_probability: 0.0
   visual_uncond_probability: 0.1
+  visual_instruction_dropout_probability: 0.0
   cfg_null_condition: empty
 
 loss:

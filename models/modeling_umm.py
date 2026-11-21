@@ -66,10 +66,7 @@ class JointModel(nn.Module):
         image_loss = None
         image_condition = None
         if batch.generation_image_count:
-            indices = batch.mainline.condition_indices
-            if batch.generation_image_indices is not None:
-                indices = indices.index_select(0, batch.generation_image_indices)
-            image_condition = hidden[indices.clamp_min(0)]
+            image_condition = batch.mainline.gather_image_conditions(hidden, batch.generation_image_indices)
             if compute_image_loss:
                 image_loss = self.renderer(image_condition, batch)
         text_hidden = hidden[batch.text_indices]

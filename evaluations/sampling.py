@@ -21,7 +21,7 @@ from PIL import Image
 import distributed.megatron as P
 from distributed.accel import accel_type, device_module
 from models.cq_backbone import backbone
-from data.batch_layout import finalize_plan
+from data.batch_layout import build_plan, content_view, finalize_plan
 from data.packing import Packer, token_contract
 import data.chat as chat
 
@@ -78,11 +78,16 @@ def prune_queries(batch,cfg,keep):
     plan=batch.mainline;s=batch.ids.shape[1]
     keep=keep.nonzero().flatten() if keep.dtype==torch.bool else keep
     rows=torch.cat((torch.arange(s),s+keep))
+    same_rows = len(keep) == len(plan.query_positions) and torch.equal(keep, torch.arange(len(keep)))
     plan=replace(plan,query_positions=plan.query_positions[keep],query_image=plan.query_image[:,keep],
         query_rope=plan.query_rope[:,keep],output_positions=plan.output_positions[keep],
         query_unconditional=(plan.query_unconditional[keep] if plan.query_unconditional is not None else None),
+        query_read_sigma=(plan.query_read_sigma[keep] if plan.query_read_sigma is not None else None),
+        # Pruned readouts historically use the dense/tiled kernel. The full
+        # predicate has different row indices and must not be reused here.
+        cq_predicate=plan.cq_predicate if same_rows else None,
         cq_mask=plan.cq_mask[:,:,rows].contiguous(),cq_valid=plan.cq_valid[:,rows],cq_plan=None)
-    batch.mainline=finalize_plan(batch,cfg,plan)
+    batch.mainline=finalize_plan(content_view(batch,cfg),cfg,plan)
     return batch
 
 
@@ -114,8 +119,9 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     across steps.
     """
     body=np.asarray(text_ids,dtype=np.int32)
-    def element(ids,supervised=False):
-        return dict(type='text',input_ids=ids,supervised=supervised)
+    def element(ids,supervised=False,instruction_start=False):
+        return dict(type='text',input_ids=ids,supervised=supervised,
+                    context_text=supervised,instruction_start=instruction_start)
     picture=dict(type='image',generation_target=task in ('T2I','T2V'),non_cfg=non_cfg)
     if sequence is not None:picture['video_sequence']=sequence
     if context is not None:
@@ -125,7 +131,7 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
         head,middle,tail=encode_spans(tokenizer,[chat.ROLE_USER,chat.TURN_END+chat.IM_START+chat.ROLE_USER,
             chat.TURN_END+chat.IM_START+chat.ROLE_ASSISTANT])
         source=dict(type='image',generation_target=False,image_loss_allowed=False)
-        elements=[element(head),source,element(middle),element(body,True),element(tail),picture]
+        elements=[element(head),source,element(middle),element(body,True,instruction_start=True),element(tail),picture]
     elif processed is None:
         elements=[element(body,True)]
     elif tokenizer is None:
@@ -153,7 +159,7 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
                   processed[2][1]*processed[2][2]//4 if processed is not None else 0)
     scaffold=sum(len(e['input_ids']) for e in elements if e['type']=='text')
     length=max(scaffold+image_tokens+4,cfg.vision_min_pixels//1024+4)
-    packer=Packer(docs,replace(cfg,visual_cache='',visual_uncond_probability=0.),
+    packer=Packer(docs,replace(cfg,visual_cache='',visual_uncond_probability=0.,visual_instruction_dropout_probability=0.),
                   length,tokens,padding_multiple=0)
     batch,receipt=packer.next()
     if not receipt['documents'][0]['completed']:raise ValueError('Validation example exceeds its pack')
@@ -161,7 +167,6 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     # Remove the unused physical tail before constructing the inference plan.
     batch.ids=batch.ids[:,:used];batch.segments=batch.segments[:,:used];batch.sigma=batch.sigma[:,:used]
     batch.image_queries=batch.image_queries[:,:used];batch.row_col=batch.row_col[:,:used]
-    from data.batch_layout import build_plan
     batch.mainline=build_plan(batch,cfg)
     if not prune:return batch
     if context is not None and len(batch.generation_image_indices)!=1:
@@ -184,6 +189,16 @@ def make_null_batch(cfg,tokens,processed,tokenizer,sequence=None):
     raise ValueError(f'Unknown CFG null condition: {mode}')
 
 
+def make_history_batch(full, cfg):
+    """Move the visual CQ reads in the positive pack; share tokens, pixels and positions."""
+    dropped = full.generation_instruction_starts.ge(0)
+    if not dropped[full.generation_image_indices].all():
+        raise ValueError('History guidance needs an instruction with a nonempty retained prefix')
+    batch = replace(full, generation_instruction_dropped=dropped)
+    batch.mainline = build_plan(batch, cfg)
+    return prune_queries(batch, cfg, batch.mainline.query_image[0])
+
+
 @torch.no_grad()
 def score_reference(model,case,tokenizer,tokens,processor,vae):
     """Fixed teacher-forced caption NLL and one fixed-noise conditional flow loss."""
@@ -202,7 +217,8 @@ def score_reference(model,case,tokenizer,tokens,processor,vae):
     if cfg.renderer=='wan':return dict(reference_text_nll=float(nll),reference_text_tokens=len(targets))
     batch=make_batch(cfg,tokens,ids,processed,'T2I',tokenizer=tokenizer).to(accel_type())
     empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device=accel_type(),dtype=model.embedding.weight.dtype)
-    condition=backbone(model,batch,vision_features=empty)[batch.mainline.condition_indices]
+    hidden=backbone(model,batch,vision_features=empty)
+    condition=batch.mainline.gather_image_conditions(hidden,batch.generation_image_indices)
     pixels=torch.from_numpy(processed[0].transpose(2,0,1).copy())[None].to(accel_type()).float().div(127.5).sub(1)
     mean,std=vae.encode(pixels)
     rng=torch.Generator(device='cpu').manual_seed(case.get('seed',1234))
@@ -278,6 +294,7 @@ def caption(model,case,tokenizer,tokens,processor):
 
 @torch.no_grad()
 def generate(model,case,tokenizer,tokens,processor,vae,output):
+    """Wan cases can set s_ctx and s_ins independently; each defaults to guidance."""
     cfg=model.cfg;context=None
     if case['task']=='EDIT':
         path=Path(case['image'])
@@ -292,29 +309,46 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
         raise ValueError('Validation shape violates the training pixel/alignment cap')
     processed,sequence=(video_input(cfg,case) if case['task']=='T2V' else
                         (processor(np.zeros((height,width,3),np.uint8)),None))
-    def conditions(prompt=None):
-        batch=(make_null_batch(cfg,tokens,processed,tokenizer,sequence=sequence) if prompt is None else
-            make_batch(cfg,tokens,tokenizer.encode(prompt,add_special_tokens=False).ids,
-                       processed,task,tokenizer=tokenizer,sequence=sequence,context=context)).to(accel_type())
-        # Clean target pixels are strictly invisible to image CQ. Zero features
-        # eliminate a useless ViT forward, tested against the full CQ plan.
-        empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device=accel_type(),dtype=model.embedding.weight.dtype)
-        # An editing input is real context: encode it. The blank target rides
-        # along through the ViT and stays invisible to its own queries.
-        hidden=backbone(model,batch,vision_features=None if context is not None and prompt is not None else empty)
-        return hidden[batch.mainline.condition_indices],batch.generation
-    positive,layout=conditions(case['prompt'])
-    projected=model.renderer.project_conditions(positive,layout)
     guidance=case.get('guidance',1. if cfg.renderer=='wan' else 3.)
-    negative_projected=None
-    if guidance!=1.:
-        negative,other=conditions()
-        negative_projected=model.renderer.project_conditions(negative,other)
-    positive_kv=negative_kv={}
-    if cfg.renderer=='wan':
-        positive_kv=dict(cached_kv=model.renderer.cache_condition_kv(projected))
-        if negative_projected is not None:
-            negative_kv=dict(cached_kv=model.renderer.cache_condition_kv(negative_projected))
+    s_ctx, s_ins = case.get('s_ctx', guidance), case.get('s_ins', guidance)
+    split = s_ctx != s_ins
+    if split and (cfg.renderer != 'wan' or cfg.cfg_null_condition != 'empty'):
+        raise ValueError('Independent guidance scales require Wan with an empty null condition')
+    full = make_batch(cfg, tokens, tokenizer.encode(case['prompt'], add_special_tokens=False).ids,
+                      processed, task, tokenizer=tokenizer, sequence=sequence, context=context)
+    # With no history v_hist = v_null; with no instruction v_hist = v_full.
+    scale = s_ins
+    history_batch = None
+    if split and context is not None:
+        if case['prompt'].strip() and full.generation_instruction_starts.ge(0).any():
+            history_batch = make_history_batch(full, cfg)
+        else:
+            scale = s_ctx
+
+    def condition(batch, features=None):
+        if features is None:
+            features = model.embedding.weight.new_zeros((len(batch.vision.content_indices), cfg.width))
+        hidden = backbone(model, batch, vision_features=features)
+        raw = batch.mainline.gather_image_conditions(hidden, batch.generation_image_indices)
+        projected = model.renderer.project_conditions(raw, batch.generation)
+        kv = dict(cached_kv=model.renderer.cache_condition_kv(projected)) if cfg.renderer == 'wan' else {}
+        return raw, projected, kv
+
+    full = full.to(accel_type())
+    layout = full.generation
+    # Both positive branches see the very same source features, computed once.
+    features = model.patch_embed(full.vision) if context is not None else None
+    positive = condition(full, features)
+    negative = None
+    if history_batch is not None or scale != 1.:
+        negative = condition(make_null_batch(cfg,tokens,processed,tokenizer,sequence=sequence).to(accel_type()))
+    history = condition(history_batch.to(accel_type()), features) if history_batch is not None else None
+    del full, history_batch, features
+
+    def predict(branch, latent, time):
+        raw, projected, kv = branch
+        return model.renderer.predict(latent, raw, time, layout, projected, **kv).float()
+
     generator=torch.Generator(device='cpu').manual_seed(case['seed'])
     latent=torch.randn(sum(layout.lengths),cfg.latent_channels*(4 if cfg.renderer=='wan' else 1),generator=generator).to(accel_type())
     sigmas=moss_sigmas(case.get('steps',30),case.get('shift',5.))
@@ -325,10 +359,15 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     phase=(sigmas[:-1]*1000).double()[:,None]*10000**(-torch.arange(half,dtype=torch.float64)/half)
     time_features=torch.cat((phase.cos(),phase.sin()),-1).to(device=accel_type(),dtype=torch.float32 if cfg.renderer=='wan' else torch.bfloat16)
     for i,(start,end) in enumerate(zip(sigmas[:-1],sigmas[1:])):
-        velocity=model.renderer.predict(latent,positive,time_features[i:i+1],layout,projected,**positive_kv).float()
-        if negative_projected is not None:
-            uncond=model.renderer.predict(latent,positive,time_features[i:i+1],layout,negative_projected,**negative_kv).float()
-            velocity=uncond+guidance*(velocity-uncond)
+        time = time_features[i:i+1]
+        velocity = predict(positive, latent, time)
+        if negative is not None:
+            uncond = predict(negative, latent, time)
+            if history is None:
+                velocity = uncond + scale * (velocity - uncond)
+            else:
+                hist = predict(history, latent, time)
+                velocity = uncond + s_ctx * (hist - uncond) + s_ins * (velocity - hist)
         latent=latent+(float(end)-float(start))*velocity
     if not torch.isfinite(latent).all().item():raise FloatingPointError('Nonfinite generated latent')
     if cfg.renderer=='wan':
@@ -341,6 +380,7 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
             save_visual(frames,output/name,case.get('fps',16))
         return dict(image=name,prompt=case['prompt'],height=height,width=width,num_frames=len(frames),
             seed=case['seed'],steps=len(sigmas)-1,guidance=guidance,latent_std=latent.std().item(),
+            **(dict(s_ctx=s_ctx, s_ins=s_ins) if 's_ctx' in case or 's_ins' in case else {}),
             **({'input':case['image']} if context is not None else {}))
     h,w=layout.grids[0]
     z=latent.T.reshape(1,cfg.latent_channels,h,w).float()
