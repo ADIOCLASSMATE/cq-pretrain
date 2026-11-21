@@ -532,6 +532,17 @@ an instance with the eight `/inspire/dataset` mounts.
   to a multiple of `PRETRAIN_FLEX_BUCKET` (8192); padded keys are invisible and
   padded rows keep only the key-0 sentinel. Gate against the dense reference
   passes, padded vs unpadded differ by 2e-5, 23 ms fwd+bwd at 16381x8192.
+- **FLA norm kernels are row-bucketed.** Upstream `l2norm` takes its row count
+  as a compile-time constant and `rms_norm_gated` re-autotunes per
+  `ceil(rows / 2048)`. Real packs change event and token counts every pack, so
+  the first 64-card run rebuilt ~50 kernel variants per pack and rank: 256-290 s
+  per step and ~19k new entries in the shared Triton cache within 20 minutes.
+  `ops/cuda_gated_delta.py` now applies the same upstream `l2norm` to q/k padded
+  to `PRETRAIN_GDN_L2_ROW_BUCKET` (65536 rows) ahead of the kernel, and
+  `ops/cuda_fused.gated_rms_norm` pads to `PRETRAIN_GATED_NORM_ROW_BUCKET`
+  (32768). Zero rows give zero output and zero gradient. 2 cards, GA 2 on the
+  real corpus: 10-14 s/step (was 24-30 s). The causal convolution still
+  compiles once per `ceil(content / 1024)`, at most 8 variants per process.
 - **Bound the DiT chunk.** Packs carry up to 18 generation targets of ~1024
   latent tokens. `--dit-microbatch-tokens 12288` holds the renderer peak flat
   at no measurable cost in step time.

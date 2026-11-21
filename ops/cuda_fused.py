@@ -11,6 +11,7 @@ import functools
 import os
 
 _ENABLED = os.environ.get("PRETRAIN_CUDA_FUSED_NORM", "1") == "1"
+_GATED_ROW_BUCKET = int(os.environ.get("PRETRAIN_GATED_NORM_ROW_BUCKET", "32768"))
 
 
 def enabled(x, fused=True):
@@ -52,15 +53,27 @@ def gated_rms_norm(x, gate, weight, eps):
     from fla.modules.fused_norm_gate import rms_norm_gated
 
     shape = x.shape
+    flat, flat_gate = x.reshape(-1, shape[-1]), gate.reshape(-1, shape[-1])
+    rows = flat.shape[0]
+    # The kernel is autotuned and compiled per ceil(rows / 2048); pack lengths
+    # vary, so pad to a row bucket (zero rows give zero output and receive a
+    # zero gradient). Short decode calls all share ceil = 1 and are left alone.
+    if _GATED_ROW_BUCKET > 0 and rows > 2048:
+        extent = -(-rows // _GATED_ROW_BUCKET) * _GATED_ROW_BUCKET
+        if extent != rows:
+            from torch.nn import functional as F
+
+            flat = F.pad(flat, (0, 0, 0, extent - rows))
+            flat_gate = F.pad(flat_gate, (0, 0, 0, extent - rows))
     out = rms_norm_gated(
-        x.reshape(-1, shape[-1]),
-        gate.reshape(-1, shape[-1]),
+        flat,
+        flat_gate,
         weight,
         None,
         activation="swish",
         eps=eps,
     )
-    return out.reshape(shape)
+    return out[:rows].reshape(shape)
 
 
 _OPS_ENABLED = os.environ.get("PRETRAIN_CUDA_FUSED_OPS", "0") == "1"
