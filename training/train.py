@@ -50,6 +50,7 @@ def parse_args(argv=None):
     parser.add_argument('--grad-accum', type=int, default=1)
     parser.add_argument('--steps', type=int, default=12)
     parser.add_argument('--total-steps', type=int, help='Stop at this absolute update count, including resume')
+    parser.add_argument('--data-epochs', type=int, default=1, help='Complete this many independently shuffled finite epochs')
     parser.add_argument('--until-data-end',action='store_true',help='Traverse the remaining finite DCVLM epoch instead of a slot-based step budget')
     parser.add_argument('--warmup', type=int, default=3)
     parser.add_argument('--lr', type=float, default=1e-5)
@@ -180,6 +181,8 @@ def main():
     args = parse_args()
     if args.save_every < 0 or args.keep_checkpoints < 1:
         raise ValueError('Require save-every >= 0 and keep-checkpoints >= 1')
+    if args.data_epochs < 1 or (args.data_epochs > 1 and not args.until_data_end):
+        raise ValueError('Multiple data epochs require --until-data-end and a positive epoch count')
     if args.until_data_end:
         if not args.data_root:raise ValueError('--until-data-end requires a finite --data-root')
         args.total_steps=None
@@ -405,6 +408,8 @@ def main():
             tokenizer_counting_matches_corpus=online_tokenizer==catalog.meta['tokenizer'],
             latent_encoder=args.latent_encoder if args.data_mode=='A' else None, max_images_per_pack=args.max_images_per_pack,
             pack_padding_multiple=args.pack_padding_multiple)
+        if args.data_epochs > 1:
+            training_state['data']['epochs'] = args.data_epochs
         adapter_files=sorted((ROOT/'data').glob('*.py'))
         training_state['data']['adapter_sha256']=hashlib.sha256(b''.join(p.read_bytes() for p in adapter_files)).hexdigest()
     start_step = checkpoint_io.load(args.resume, model, optimizer, cfg, topology, training_state,
@@ -430,20 +435,27 @@ def main():
         from distributed.communication import OrderedGradientBuckets, OrderedParameterGathers, finish_parameter_gathers
         # Spawned CPU workers must not autoload the NPU backend on import.
         os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD']='0'
-        docs = DocumentStream(args.data_root, args.data_mode, P.dp_rank(), dp, args.seed,
-            workers=args.data_workers, prefetch=args.data_prefetch,
-            source_root=args.source_root, block_rows=args.shuffle_block_rows, tokenize_rows=args.tokenize_rows,
-            image_threads=args.image_workers, image_prefetch=args.image_prefetch,
-            state=resumed_data.get('documents') if resumed_data else None,
-            allow_development=args.allow_development_data,cfg=cfg,sequence_length=args.sequence_length)
-        packer = Packer(docs, cfg, args.sequence_length, data_tokens, resumed_data or None,
-                        pin_device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
-                        max_images=args.max_images_per_pack,padding_multiple=args.pack_padding_multiple)
-        host_loader = ConsumedLoader(packer, args.data_prefetch, resumed_data or None)
         with torch.random.fork_rng(devices=[DEV.current_device()],device_type=ACCEL):
             preparer = DevicePreparer(cfg, device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
                 vae_dtype=getattr(torch,args.vae_dtype), encoder=args.latent_encoder if args.data_mode=='A' else None)
-        loader = DeviceLoader(host_loader, preparer, args.device_prefetch)
+
+        def open_epoch(epoch, cursor=None):
+            docs = DocumentStream(args.data_root, args.data_mode, P.dp_rank(), dp, args.seed, epoch=epoch,
+                workers=args.data_workers, prefetch=args.data_prefetch,
+                source_root=args.source_root, block_rows=args.shuffle_block_rows, tokenize_rows=args.tokenize_rows,
+                image_threads=args.image_workers, image_prefetch=args.image_prefetch,
+                state=cursor['documents'] if cursor else None,
+                allow_development=args.allow_development_data,cfg=cfg,sequence_length=args.sequence_length)
+            packer = Packer(docs, cfg, args.sequence_length, data_tokens, cursor or None,
+                            pin_device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
+                            max_images=args.max_images_per_pack,padding_multiple=args.pack_padding_multiple)
+            host = ConsumedLoader(packer, args.data_prefetch, cursor or None)
+            return docs, packer, DeviceLoader(host, preparer, args.device_prefetch)
+
+        data_epoch = resumed_data['documents']['signature']['epoch'] if resumed_data else 0
+        if not 0 <= data_epoch < args.data_epochs:
+            raise ValueError('Invalid saved data epoch')
+        docs, packer, loader = open_epoch(data_epoch, resumed_data)
         ordered_buckets = OrderedGradientBuckets(wrapped)
         ordered_gathers = OrderedParameterGathers(wrapped)
         from data.runtime import empty_batch
@@ -613,27 +625,47 @@ def main():
             consumed_receipts=[]; data_wait_seconds=0.; data_prepare_seconds=0.
             if loader:
                 wait_begin=time.perf_counter()
-                micro_batches=loader.next_group(args.grad_accum)
+                while True:
+                    micro_batches=loader.next_group(args.grad_accum)
+                    counts=torch.tensor([sum(x[0].text_indices.numel() for x in micro_batches if x),
+                        sum(len(x[0].image_indices) for x in micro_batches if x),
+                        sum(x[1]['body_tokens'] for x in micro_batches if x),
+                        sum(x[1]['occupied'] for x in micro_batches if x),
+                        sum(x is not None for x in micro_batches),
+                        sum(x[1].get('generation_tokens',0) for x in micro_batches if x),
+                        sum(d['completed'] for x in micro_batches if x for d in x[1]['documents']),
+                        sum(d['completed'] and d.get('direction')=='T2I' for x in micro_batches if x for d in x[1]['documents']),
+                        sum(d['completed'] and d.get('direction')=='I2T' for x in micro_batches if x for d in x[1]['documents']),
+                        sum(x[0].ids.shape[1]+len(x[0].mainline.query_positions) for x in micro_batches if x),
+                        sum(x[0].ids.shape[1]-x[1]['occupied'] for x in micro_batches if x),
+                        sum(x[1].get('dit_microbatches',int(bool(x[0].generation_image_count))) for x in micro_batches if x),
+                        sum(x[0].generation_image_count for x in micro_batches if x),
+                        sum(x[1]['condition_query_tokens'] for x in micro_batches if x),
+                        sum(x[1]['unconditional_images'] for x in micro_batches if x),
+                        sum(x[1]['instruction_dropped_images'] for x in micro_batches if x),
+                        sum(x[1]['instruction_dropout_eligible_images'] for x in micro_batches if x)],device=ACCEL,dtype=torch.int64)
+                    dist.all_reduce(counts,group=P.state().get_data_parallel_group())
+                    counts=counts.tolist()
+                    if counts[4]:
+                        break
+                    if args.data_epochs > 1:
+                        from utils.checkpoint_catalog import durable_json
+                        cursor = loader.state_dict()
+                        if (cursor['documents']['position'] != {'block': docs.total, 'row': 0}
+                                or cursor['element'] or cursor['offset']):
+                            raise RuntimeError('Epoch ended before the last complete document was acknowledged')
+                        durable_json(output/f'epoch_{data_epoch:02d}_rank_{rank:05d}.json',
+                                     dict(epoch=data_epoch, step=completed_step, rank=rank, packs=cursor['serial'],
+                                          documents=cursor['documents']))
+                    if data_epoch + 1 == args.data_epochs:
+                        break
+                    if completed_step > last_saved_step and (args.save_every or args.save_final):
+                        save_checkpoint(completed_step)
+                        last_saved_step = completed_step
+                    loader.close()
+                    data_epoch += 1
+                    docs, packer, loader = open_epoch(data_epoch)
                 data_wait_seconds=time.perf_counter()-wait_begin
-                counts=torch.tensor([sum(x[0].text_indices.numel() for x in micro_batches if x),
-                    sum(len(x[0].image_indices) for x in micro_batches if x),
-                    sum(x[1]['body_tokens'] for x in micro_batches if x),
-                    sum(x[1]['occupied'] for x in micro_batches if x),
-                    sum(x is not None for x in micro_batches),
-                    sum(x[1].get('generation_tokens',0) for x in micro_batches if x),
-                    sum(d['completed'] for x in micro_batches if x for d in x[1]['documents']),
-                    sum(d['completed'] and d.get('direction')=='T2I' for x in micro_batches if x for d in x[1]['documents']),
-                    sum(d['completed'] and d.get('direction')=='I2T' for x in micro_batches if x for d in x[1]['documents']),
-                    sum(x[0].ids.shape[1]+len(x[0].mainline.query_positions) for x in micro_batches if x),
-                    sum(x[0].ids.shape[1]-x[1]['occupied'] for x in micro_batches if x),
-                    sum(x[1].get('dit_microbatches',int(bool(x[0].generation_image_count))) for x in micro_batches if x),
-                    sum(x[0].generation_image_count for x in micro_batches if x),
-                    sum(x[1]['condition_query_tokens'] for x in micro_batches if x),
-                    sum(x[1]['unconditional_images'] for x in micro_batches if x),
-                    sum(x[1]['instruction_dropped_images'] for x in micro_batches if x),
-                    sum(x[1]['instruction_dropout_eligible_images'] for x in micro_batches if x)],device=ACCEL,dtype=torch.int64)
-                dist.all_reduce(counts,group=P.state().get_data_parallel_group())
-                counts=counts.tolist()
                 if counts[4]==0:
                     args.steps=local_step
                     break
@@ -738,6 +770,8 @@ def main():
                 grad_norm=float(grad_norm), optimizer_updated=bool(updated),
                 global_tokens_per_step=global_batch*args.sequence_length,
                 warmup=local_step < args.warmup)
+            if loader and args.data_epochs > 1:
+                rank_step['data_epoch'] = data_epoch
             with (output/f'steps_rank_{rank:05d}.jsonl').open('a') as f:
                 f.write(json.dumps(rank_step)+'\n')
             if args.log_all_ranks:
@@ -777,6 +811,8 @@ def main():
                     optimizer_events[0].elapsed_time(optimizer_events[1])], device=ACCEL)
                 dist.all_reduce(phases, op=dist.ReduceOp.MAX)
                 row.update(zip(('forward_ms','backward_ms','optimizer_ms'), phases.tolist()))
+            if loader and args.data_epochs > 1:
+                row['data_epoch'] = data_epoch
             if rank == 0:
                 with (output / 'steps.jsonl').open('a') as f:
                     f.write(json.dumps(row)+'\n')
