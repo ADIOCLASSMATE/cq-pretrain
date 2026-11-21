@@ -78,7 +78,7 @@ def training_command(args, attempt):
     training = ['--config', str(args.config), '--output', str(attempt/'train'),
         '--data-root', str(args.data_root), '--data-mode', 'A',
         '--i2t-image-loss-probability',str(args.i2t_image_loss_probability),
-        '--cfg-null-condition',args.cfg_null_condition,
+        *(['--cfg-null-condition',args.cfg_null_condition] if args.cfg_null_condition is not None else []),
         *(['--steps', str(args.steps)] if args.steps else ['--until-data-end']),
         '--warmup', str(min(10,max(0,args.steps-1)) if args.steps else 10),
         '--checkpoint',
@@ -87,7 +87,7 @@ def training_command(args, attempt):
         '--save-first', '--save-final',
         '--validation-suite', str(args.validation_suite),
         '--validate-first', '--validate-final', '--validate-every', str(args.validate_every)]
-    return [str(ROOT/'.venv-core17/bin/python'), str(ROOT/'launch_job.py'),
+    return [sys.executable, str(ROOT/'launch_job.py'),
             '--nodes', str(args.nodes), '--node-rank', str(args.node_rank),
             '--nproc-per-node', str(args.nproc_per_node),
             '--rendezvous', str(attempt/'rendezvous'), '--', *training]
@@ -164,8 +164,8 @@ def main():
     parser.add_argument('--validation-suite', type=Path, default=ROOT/'validation_assets/suite.json')
     parser.add_argument('--i2t-image-loss-probability',type=float,default=0.,
                         help='Legacy MOSS sampling only; Wan always disables I2T image loss')
-    parser.add_argument('--cfg-null-condition',choices=('empty','empty_t2i','i2t_prefix'),default='empty_t2i',
-                        help='Use empty for Wan conditional dropout; legacy templates remain available')
+    parser.add_argument('--cfg-null-condition',choices=('empty','empty_t2i','i2t_prefix'),
+                        help='Override the null condition from the experiment configuration')
     parser.add_argument('--nodes', type=int, default=int(os.environ.get('PET_NNODES', '8')))
     parser.add_argument('--node-rank', type=int, default=int(os.environ.get('PET_NODE_RANK', '0')))
     parser.add_argument('--nproc-per-node', type=int, default=16)

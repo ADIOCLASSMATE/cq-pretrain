@@ -8,7 +8,9 @@ MOSS schedule/latent decode adapted from OpenMOSS-Team/MOSS-Image-Base
 from dataclasses import replace
 import hashlib
 import html
+import io
 import json
+import math
 from pathlib import Path
 import time
 
@@ -109,8 +111,48 @@ def encode_spans(tokenizer,pieces):
     return [np.asarray(tokenizer.encode(piece,add_special_tokens=False).ids,dtype=np.int32)
             for piece in pieces]
 
+def context_image(path, checksum, processor):
+    source = Path(path)
+    if checksum:
+        payload = source.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != checksum:
+            raise ValueError('Validation image changed')
+        source = io.BytesIO(payload)
+    with Image.open(source) as image:
+        return processor(np.asarray(image.convert('RGB')))
 
-def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,instruction=None,sequence=None,non_cfg=False,context=None):
+
+def encode_history(case, tokenizer, processor):
+    """Earlier turns use native role/turn/kind segments and indices into case.images."""
+    segments = []
+    for segment in case.get('history', ()):
+        if segment.get('role') not in ('system','user','assistant','tool') or 'turn' not in segment:
+            raise ValueError('History segments need an explicit role and turn')
+        if segment.get('kind') not in ('text','image'):
+            raise ValueError('History segments must contain text or an image')
+        segments.append(dict(segment, supervised=True, image_loss_allowed=False))
+    elements, decoded = [], {}
+    for span in chat.causal_spans(segments):
+        if span['kind'] == 'image':
+            index = span['image_index']
+            images = case.get('images', ())
+            if type(index) is not int or not 0 <= index < len(images):
+                raise ValueError('History image_index is outside case.images')
+            if index not in decoded:
+                item = images[index]
+                decoded[index] = context_image(item['path'], item.get('sha256'), processor)
+            elements.append(dict(type='image', generation_target=False, image_loss_allowed=False, prepared=decoded[index]))
+        else:
+            ids, = encode_spans(tokenizer, [span['text']])
+            if len(ids):
+                elements.append(dict(type='text', input_ids=ids, supervised=span['supervised'],
+                                     context_text=not span['synthetic'] and bool(span['text'].strip()),
+                                     instruction_start=span.get('instruction_start', False),
+                                     instruction_text=span.get('instruction_text', False)))
+    return elements
+
+
+def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,instruction=None,sequence=None,non_cfg=False,context=None,history=()):
     """Build one validation pack under the Qwen3.5 chat template.
 
     Training wraps every caption in user/assistant messages, so evaluation must
@@ -124,14 +166,18 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
                     context_text=supervised,instruction_start=instruction_start)
     picture=dict(type='image',generation_target=task in ('T2I','T2V'),non_cfg=non_cfg)
     if sequence is not None:picture['video_sequence']=sequence
-    if context is not None:
-        # The released editing layout: the input image is its own user turn,
-        # the instruction the next one, and the assistant answers with the image.
-        if tokenizer is None or task!='T2I':raise ValueError('Editing needs the chat template and an image target')
-        head,middle,tail=encode_spans(tokenizer,[chat.ROLE_USER,chat.TURN_END+chat.IM_START+chat.ROLE_USER,
-            chat.TURN_END+chat.IM_START+chat.ROLE_ASSISTANT])
-        source=dict(type='image',generation_target=False,image_loss_allowed=False)
-        elements=[element(head),source,element(middle),element(body,True,instruction_start=True),element(tail),picture]
+    user_header = (chat.IM_START if history else '') + chat.ROLE_USER
+    if context is not None or history:
+        if tokenizer is None or task not in ('T2I','T2V') or processed is None:
+            raise ValueError('Contextual generation requires a templated generation target')
+        head,end,user,assistant=encode_spans(tokenizer,[user_header,chat.TURN_END,
+            chat.IM_START+chat.ROLE_USER,chat.IM_START+chat.ROLE_ASSISTANT])
+        closing=dict(element(end),supervised=True)
+        elements=[element(head)]
+        if context is not None:
+            source=dict(type='image',generation_target=False,image_loss_allowed=False,prepared=context)
+            elements.extend([source,closing,element(user)])
+        elements.extend([element(body,True,instruction_start=True),closing,element(assistant),picture,closing])
     elif processed is None:
         elements=[element(body,True)]
     elif tokenizer is None:
@@ -148,17 +194,19 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
             (instruction or chat.I2T_INSTRUCTIONS[0])+chat.TURN_END+
             chat.IM_START+chat.ROLE_ASSISTANT])
         elements=[element(head),picture,element(tail),element(body,True)]
-    elements=[e for e in elements if e['type']!='text' or len(e['input_ids'])]
-    if context is not None:
-        processed={elements.index(source):context,elements.index(picture):processed}
+    elements=[e for e in (*history, *elements) if e['type']!='text' or len(e['input_ids'])]
+    if context is not None or history:
+        processed={i:processed if e is picture else e['prepared'] for i,e in enumerate(elements) if e['type']=='image'}
     docs=OneDocument(elements,processed)
     docs.doc['direction']=task
     # Fits the fixed validation examples and does not consume training data.
-    image_tokens=(len(sequence['ids'])-2 if sequence is not None else
-                  sum(p[2][1]*p[2][2]//4+4 for p in processed.values()) if context is not None else
-                  processed[2][1]*processed[2][2]//4 if processed is not None else 0)
+    image_tokens=0
+    for i,e in enumerate(elements):
+        if e['type']=='image':
+            visual=processed[i] if isinstance(processed,dict) else processed
+            image_tokens+=len(e['video_sequence']['ids']) if 'video_sequence' in e else math.prod(visual[2])//4+2
     scaffold=sum(len(e['input_ids']) for e in elements if e['type']=='text')
-    length=max(scaffold+image_tokens+4,cfg.vision_min_pixels//1024+4)
+    length=max(scaffold+image_tokens+2,cfg.vision_min_pixels//1024+4)
     packer=Packer(docs,replace(cfg,visual_cache='',visual_uncond_probability=0.,visual_instruction_dropout_probability=0.),
                   length,tokens,padding_multiple=0)
     batch,receipt=packer.next()
@@ -169,8 +217,8 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     batch.image_queries=batch.image_queries[:,:used];batch.row_col=batch.row_col[:,:used]
     batch.mainline=build_plan(batch,cfg)
     if not prune:return batch
-    if context is not None and len(batch.generation_image_indices)!=1:
-        raise ValueError('An editing case must have exactly one generation target')
+    if (context is not None or history) and batch.generation_image_count!=1:
+        raise ValueError('A contextual generation case must have exactly one generation target')
     if task in ('T2I','T2V'):keep=batch.mainline.query_image[0]
     else:keep=batch.mainline.query_positions==used-1
     return prune_queries(batch,cfg,keep)
@@ -191,8 +239,11 @@ def make_null_batch(cfg,tokens,processed,tokenizer,sequence=None):
 
 def make_history_batch(full, cfg):
     """Move the visual CQ reads in the positive pack; share tokens, pixels and positions."""
+    if full.generation_instruction_starts is None or not full.generation_image_count:
+        raise ValueError('History guidance needs a generation target and a known instruction boundary')
     dropped = full.generation_instruction_starts.ge(0)
-    if not dropped[full.generation_image_indices].all():
+    selected = full.generation_image_indices
+    if not (dropped if selected is None else dropped[selected]).all():
         raise ValueError('History guidance needs an instruction with a nonempty retained prefix')
     batch = replace(full, generation_instruction_dropped=dropped)
     batch.mainline = build_plan(batch, cfg)
@@ -297,10 +348,7 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     """Wan cases can set s_ctx and s_ins independently; each defaults to guidance."""
     cfg=model.cfg;context=None
     if case['task']=='EDIT':
-        path=Path(case['image'])
-        if case.get('image_sha256') and hashlib.sha256(path.read_bytes()).hexdigest()!=case['image_sha256']:
-            raise ValueError('Validation image changed')
-        with Image.open(path) as image:context=processor(np.asarray(image.convert('RGB')))
+        context=context_image(case['image'],case.get('image_sha256'),processor)
         # Training targets share the input's processed size in this release.
         height,width=context[0].shape[:2]
     else:height,width=case['height'],case['width']
@@ -311,16 +359,22 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
                         (processor(np.zeros((height,width,3),np.uint8)),None))
     guidance=case.get('guidance',1. if cfg.renderer=='wan' else 3.)
     s_ctx, s_ins = case.get('s_ctx', guidance), case.get('s_ins', guidance)
+    limit = torch.finfo(torch.float32).max  # guidance is applied to FP32 velocities
+    if not all(type(s) in (int, float) and -limit <= s <= limit for s in (s_ctx, s_ins)):
+        raise ValueError('Guidance scales must be finite FP32 numbers')
     split = s_ctx != s_ins
     if split and (cfg.renderer != 'wan' or cfg.cfg_null_condition != 'empty'):
         raise ValueError('Independent guidance scales require Wan with an empty null condition')
-    full = make_batch(cfg, tokens, tokenizer.encode(case['prompt'], add_special_tokens=False).ids,
-                      processed, task, tokenizer=tokenizer, sequence=sequence, context=context)
+    prefix = encode_history(case, tokenizer, processor)
+    prompt_ids = tokenizer.encode(case['prompt'], add_special_tokens=False).ids
+    full = make_batch(cfg, tokens, prompt_ids, processed, task, tokenizer=tokenizer,
+                      sequence=sequence, context=context, history=prefix)
     # With no history v_hist = v_null; with no instruction v_hist = v_full.
     scale = s_ins
     history_batch = None
-    if split and context is not None:
-        if case['prompt'].strip() and full.generation_instruction_starts.ge(0).any():
+    has_history = context is not None or any(e['type']=='image' or e.get('context_text') for e in prefix)
+    if split and has_history:
+        if case['prompt'].strip() and len(prompt_ids):
             history_batch = make_history_batch(full, cfg)
         else:
             scale = s_ctx
@@ -337,7 +391,7 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     full = full.to(accel_type())
     layout = full.generation
     # Both positive branches see the very same source features, computed once.
-    features = model.patch_embed(full.vision) if context is not None else None
+    features = model.patch_embed(full.vision) if len(full.image_indices) > full.generation_image_count else None
     positive = condition(full, features)
     negative = None
     if history_batch is not None or scale != 1.:

@@ -363,9 +363,15 @@ def build_visual_plan(batch, cfg):
         rows = slice(start, start + n)
         read_position = span[0]
         if batch.generation_instruction_dropped is not None and batch.generation_instruction_dropped[i]:
+            if batch.generation_instruction_starts is None or (
+                batch.generation_unconditional is not None and batch.generation_unconditional[i]
+            ):
+                raise ValueError("History queries need a conditional target and an instruction boundary")
             read_position = batch.generation_instruction_starts[i]
             if not 0 <= read_position < span[0] or batch.segments[0, read_position] != batch.segments[0, span[0]]:
                 raise ValueError("Instruction cutoff must precede the target in the same document")
+            if batch.image_queries[0, read_position:span[0]].any():
+                raise ValueError("An instruction cutoff cannot discard an intervening visual")
         read_sigma[rows] = batch.sigma[0, read_position]
         if batch.generation_unconditional is not None and batch.generation_unconditional[i]:
             unconditional[rows] = True

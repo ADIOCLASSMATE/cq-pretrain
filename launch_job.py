@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import socket
-import sys
 
 from utils.network import rendezvous_interface
 from utils.file_sync import atomic_json, wait_files
@@ -53,9 +52,7 @@ def main():
         raise ValueError('All nodes must use the same sources and local world size')
     env = dict(os.environ, NNODES=str(args.nodes), NODE_RANK=str(args.node_rank),
         NPROC_PER_NODE=str(args.nproc_per_node), MASTER_ADDR=peers[0]['ip'], MASTER_PORT=port,
-        GLOO_SOCKET_IFNAME=interface, NCCL_SOCKET_IFNAME=interface,
-        PRETRAIN_PYTHON=sys.executable, OMP_NUM_THREADS=os.environ.get('OMP_NUM_THREADS', '4'),
-        TORCH_EXTENSIONS_DIR=str(ROOT/'.deps/extensions-core17'))
+        GLOO_SOCKET_IFNAME=interface, NCCL_SOCKET_IFNAME=interface)
     for key in ('RANK', 'WORLD_SIZE', 'LOCAL_RANK', 'LOCAL_WORLD_SIZE', 'GROUP_RANK',
                 'GROUP_WORLD_SIZE', 'ROLE_RANK', 'ROLE_WORLD_SIZE'):
         env.pop(key, None)

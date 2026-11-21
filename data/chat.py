@@ -146,9 +146,11 @@ def conversation_spans(segments):
         if segment['kind'] == 'image':
             spans.append(dict(image(segment['image_index']),role=role))
         elif segment['text']:
-            span = corpus(segment['text'])
+            span = dict(corpus(segment['text']), instruction_text=segment.get('role') == 'user')
             if pending_instruction and segment['text'].strip():
-                span['instruction_start'] = True
+                # A fallback role is sufficient to reproduce the template, but
+                # only an explicitly attributed turn identifies an instruction.
+                span['instruction_start'] = span['instruction_text']
                 pending_instruction = False
             spans.append(span)
     if current is not None:
@@ -172,7 +174,7 @@ def causal_spans(segments):
                 span['upstream_image']=segment['upstream_image']
             spans.append(span)
         elif segment['text']:
-            span = text(segment['text'], segment['supervised'], False)
+            span = dict(text(segment['text'], segment['supervised'], False), instruction_text=role == 'user')
             if pending_instruction and segment['text'].strip():
                 span['instruction_start'] = True
                 pending_instruction = False

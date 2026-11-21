@@ -401,6 +401,45 @@ def test_pruned_edit_conditions_match_training_readouts(setup, visibility):
             torch.testing.assert_close(actual, expected, atol=2e-6, rtol=1e-5)
 
 
+def test_ambiguous_suffix_and_incomplete_document_cannot_be_history(setup):
+    cfg, tokens = setup
+    cfg = replace(cfg, visual_uncond_probability=0., visual_instruction_dropout_probability=1.)
+    for role, extra in [(None, []), ('user', [dict(kind='text', text='tool result', role='tool', turn=2)])]:
+        segments = [dict(kind='text', text='earlier', role='assistant', turn=0),
+                    dict(kind='text', text='instruction', role=role, turn=1), *extra,
+                    dict(kind='image', image_index=0, role='assistant', turn=3)]
+        row = dict(sample_id='ambiguous', format='conversation', images=[dict(path='target')], segments=segments)
+        doc, = read_documents([row])
+        for e in doc['elements']:
+            if e['type']=='image':
+                e['pixels'] = picture()['pixels']
+        batch, receipt = Packer(Documents([doc]), cfg, 48, tokens).next()
+        assert batch.generation_image_count == 1 and receipt['instruction_dropout_eligible_images'] == 0
+    doc = dict(id='windowed', format='conversation', elements=[
+        dict(text(*([11]*30)), context_text=True), dict(text(12), context_text=True, instruction_start=True), picture()])
+    packer = Packer(Documents([doc]), replace(cfg,preserve_documents=False), 24, tokens)
+    packer.next()
+    batch, receipt = packer.next()
+    assert batch.generation_image_count == 1 and receipt['instruction_dropout_eligible_images'] == 0
+
+
+def test_malformed_history_flags_cannot_hide_a_source_image(setup):
+    from evaluations.sampling import make_history_batch
+    cfg, tokens = setup
+    cfg = replace(cfg, visual_uncond_probability=0., visual_instruction_dropout_probability=1.)
+    doc = dict(id='edit',elements=[dict(text(11),context_text=True), picture(generation_target=False),
+               dict(text(12),context_text=True,instruction_start=True),picture()])
+    batch, _ = Packer(Documents([doc]), cfg, 64, tokens).next()
+    early = batch.generation_instruction_starts.clone()
+    early[-1] = 1
+    with pytest.raises(ValueError, match='intervening visual'):
+        build_plan(replace(batch,generation_instruction_starts=early), cfg)
+    with pytest.raises(ValueError, match='conditional target'):
+        make_history_batch(replace(batch,generation_unconditional=torch.tensor([False,True])),cfg)
+    with pytest.raises(ValueError, match='generation target'):
+        make_history_batch(replace(batch,generation_image_indices=torch.empty(0,dtype=torch.long)),cfg)
+
+
 @pytest.mark.parametrize('query_mode', ['native', 'fixed'])
 def test_sampling_scales_share_positive_geometry_and_skip_redundant_forwards(setup, tmp_path, monkeypatch, query_mode):
     from PIL import Image
@@ -444,10 +483,10 @@ def test_sampling_scales_share_positive_geometry_and_skip_redundant_forwards(set
     def decode(latents):
         decoded.append(patch_latent(latents[0]))
         return [torch.zeros(3,1,32,32)]
-    def run(task, scales, branches, velocity, prompt='edit'):
+    def run(task, scales, branches, velocity, prompt='edit', **fields):
         batches.clear(); expected_rows.clear(); projected.clear(); predicted.clear()
         case = dict(task=task, id='sample', image=str(image_path), prompt=prompt, seed=39,
-                    height=64, width=96, steps=2, shift=1., **scales)
+                    height=64, width=96, steps=2, shift=1., **scales, **fields)
         sampling.generate(model, case, tokenizer, tokens, processor, SimpleNamespace(decode=decode), tmp_path)
         assert set(batches) == set(branches)
         assert len(projected) == len(branches) and len(predicted) == case['steps'] * len(branches)
@@ -474,3 +513,17 @@ def test_sampling_scales_share_positive_geometry_and_skip_redundant_forwards(set
     assert hist.mainline.cq_mask[0,0,hist.ids.numel():,cut:].all()
     run('T2I', dict(s_ctx=.5, s_ins=2.), ['full','null'], 16.)
     run('EDIT', dict(s_ctx=.5, s_ins=2.), ['full','null'], 2.5, prompt='')
+    past = [dict(role='user',turn=0,kind='text',text='older request'),
+            dict(role='assistant',turn=1,kind='image',image_index=0),
+            dict(role='user',turn=2,kind='text',text='another request'),
+            dict(role='assistant',turn=3,kind='image',image_index=0)]
+    run('T2I', dict(s_ctx=.5,s_ins=2.), ['full','null','hist'], 8.5, history=past, images=[dict(path=str(image_path))])
+    full, features = batches['full']
+    hist, hist_features = batches['hist']
+    assert full.generation_image_indices.tolist() == [2] and features is hist_features and features.eq(1).all()
+    cut = int(hist.generation_instruction_starts[-1])
+    assert (hist.image_indices[:2] < cut).all() and hist.mainline.query_read_sigma.eq(cut).all()
+    run('T2I', dict(s_ctx=.5,s_ins=2.), ['full','null','hist'], 8.5, history=past[:1])
+    for invalid in (float('nan'), float('inf'), 10**400, True):
+        with pytest.raises(ValueError, match='finite'):
+            run('T2I', dict(s_ctx=invalid), [], 0.)

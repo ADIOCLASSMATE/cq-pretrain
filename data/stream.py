@@ -141,6 +141,7 @@ class DocumentStream:
                     elements.append(dict(type='text', input_ids=np.asarray(ids, dtype=np.int32),
                                          supervised=span['supervised'],
                                          context_text=not span['synthetic'] and bool(span['text'].strip()),
+                                         instruction_text=span.get('instruction_text', False),
                                          instruction_start=span.get('instruction_start', False)))
                 elif span['kind'] == 'image':
                     if self.signature['view'] == 'A':

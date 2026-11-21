@@ -195,8 +195,10 @@ def test_native_video_serialization_and_mixed_source_resume(tmp_path):
     from data.video import prepare_qwen_inputs
     from data.stream import DocumentStream
     from data.packing import Packer, token_contract
-    assets=Path(__file__).resolve().parents[1]/'assets/Qwen3.5-0.8B'
-    if not (assets/'tokenizer.json').exists():pytest.skip('Local native tokenizer fixture required')
+    root=Path(__file__).resolve().parents[1]
+    assets=next((p for p in (root/'.assets/Qwen3.5-2B-Base',root/'assets/Qwen3.5-0.8B')
+                 if (p/'tokenizer.json').is_file() and (p/'manifest.json').is_file()),None)
+    if assets is None:pytest.skip('Local pinned native processor fixture required')
     processor=native_processor(assets)
     rgb=torch.zeros(5,3,64,96,dtype=torch.uint8)
     clip=dict(timestamps=[0.,.12,.2,.31,.43],fps=10)

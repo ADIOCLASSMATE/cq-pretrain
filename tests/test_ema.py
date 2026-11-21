@@ -73,7 +73,6 @@ class EMATests(unittest.TestCase):
         changed=copy.deepcopy(state);changed['layout'][0]['start']+=1
         with self.assertRaisesRegex(ValueError,'differs'):ema.load_state_dict(changed)
         parallel=SimpleNamespace(get_tensor_model_parallel_rank=lambda:0,get_data_parallel_group=lambda:None)
-        npu=SimpleNamespace(get_rng_state=torch.get_rng_state,set_rng_state=torch.set_rng_state)
         cfg=SimpleNamespace(to_dict=lambda:{'tiny_ema':True});topology={'tp':1,'dp':1}
         with tempfile.TemporaryDirectory() as temporary, \
              patch.object(checkpoint_io.P,'state',return_value=parallel), \
@@ -82,7 +81,8 @@ class EMATests(unittest.TestCase):
              patch.object(checkpoint_io.dist,'get_world_size',return_value=1), \
              patch.object(checkpoint_io.dist,'get_global_rank',return_value=0), \
              patch.object(checkpoint_io.dist,'barrier'),patch.object(checkpoint_io.dist,'broadcast'), \
-             patch.object(torch,'npu',npu,create=True):
+             patch.object(torch.cuda,'get_rng_state',torch.get_rng_state), \
+             patch.object(torch.cuda,'set_rng_state',torch.set_rng_state):
             path=Path(temporary)/'step_0000001'
             checkpoint_io.save(path,model,opt,1,cfg,topology,{'ema':.9999},ema=ema)
             with torch.no_grad():

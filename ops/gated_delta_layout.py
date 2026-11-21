@@ -5,6 +5,7 @@ is fully written before any of its content readouts. CQ queries read before
 the matching sigma group and never alter either recurrent or convolution state.
 """
 
+from bisect import bisect_left
 from dataclasses import dataclass, fields
 import torch
 
@@ -90,12 +91,12 @@ def build_delta_plan(batch, plan, cfg):
     read_sigmas = plan.query_read_sigma.tolist() if plan.query_read_sigma is not None else None
     for j, p in enumerate(plan.query_positions.tolist()):
         segment = segments[p]
-        if segment < 0:
-            segment = 0
         sigma = sigmas[p] if read_sigmas is None else read_sigmas[j]
-        if unconditional[j]:
+        if unconditional[j] or (segment < 0 and read_sigmas is not None):
             sigma = None  # Empty prefix also for documents with a nonzero first rank.
-        query_by_doc.setdefault(segment, {}).setdefault(sigma, []).append((j, keys + j))
+        elif read_sigmas is not None and not 0 <= sigma <= sigmas[p]:
+            raise ValueError("A query cutoff cannot read past its physical position")
+        query_by_doc.setdefault(max(0, segment), {}).setdefault(sigma, []).append((j, keys + j))
     order = []
     event_q = []
     event_write = []
@@ -114,6 +115,16 @@ def build_delta_plan(batch, plan, cfg):
             for item in sorted(items, key=lambda x: (x[2], x[0])):
                 groups.setdefault(item[2], []).append(item)
             queries = query_by_doc.get(doc, {}) if branch_id == 0 else {}
+            # A numerical cutoff can lie between writes (including zero in a
+            # later packed document). Read just before the first rank >= cutoff.
+            missing = [r for r in queries if r is not None and r not in groups] if read_sigmas is not None else []
+            if missing:
+                ranks = list(groups)
+                for cutoff in missing:
+                    before = bisect_left(ranks, cutoff)
+                    if before == len(ranks):
+                        raise ValueError("Query cutoff exceeds the document's last content rank")
+                    queries.setdefault(ranks[before], []).extend(queries.pop(cutoff))
             if None in queries:
                 # Explicit non-CFG Q reads before any C write, with empty conv
                 # history and zero recurrent state, regardless of target position.

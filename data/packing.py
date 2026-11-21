@@ -268,7 +268,11 @@ class Packer:
                     take = min(available, s - position)
                     if take:
                         if e.get('instruction_start'):
-                            instruction_start = position if has_history and self.offset == 0 else -1
+                            instruction_start = position if has_history and not continued and self.offset == 0 else -1
+                        elif e.get('context_text') and not e.get('instruction_text'):
+                            # A cutoff cannot keep an intervening assistant/tool
+                            # response while dropping only the user instruction.
+                            instruction_start = -1
                         has_history |= e.get('context_text', False)
                         current_record['body_spans'].append((position,take))
                         ids[position:position+take] = e['input_ids'][self.offset:self.offset+take]

@@ -1,6 +1,8 @@
 """Sparse image objectives preserve DP weighting and understanding gradients."""
 from pathlib import Path
 from types import SimpleNamespace
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +13,19 @@ from training.train import data_loss_scales, parse_args
 
 
 class I2TLossScalingTests(unittest.TestCase):
+    def test_production_rendezvous_preserves_cuda_runtime_selection(self):
+        import launch_job
+        for overrides in ({}, {'PRETRAIN_PYTHON':'/job/python','TORCH_EXTENSIONS_DIR':'/job/extensions'}):
+            with self.subTest(overrides=overrides), tempfile.TemporaryDirectory() as root, \
+                 patch.dict(os.environ, overrides, clear=True), \
+                 patch('sys.argv', ['launch_job','--rendezvous',root,'--nodes','1','--','--steps','10']), \
+                 patch('launch_job.rendezvous_interface',return_value=('lo',{'lo':'127.0.0.1'})), \
+                 patch('utils.experiment.source_hashes',return_value={}), patch('os.chdir'), patch('os.execvpe') as execute:
+                launch_job.main()
+            _, command, env = execute.call_args.args
+            self.assertEqual(Path(command[1]).name,'launch.sh')
+            self.assertEqual({k:env[k] for k in ('PRETRAIN_PYTHON','TORCH_EXTENSIONS_DIR') if k in env},overrides)
+
     def test_unequal_dp_packs_match_global_selected_image_gradient(self):
         # Four packs on two replicas, including two understanding-only packs.
         # All 116 input images still reach the backbone, but just three images
@@ -88,6 +103,11 @@ class I2TLossScalingTests(unittest.TestCase):
             command=training_command(args,Path('attempt'))
             self.assertEqual(command[command.index('--i2t-image-loss-probability')+1],str(probability))
             self.assertEqual(command[command.index('--cfg-null-condition')+1],null)
+        import sys
+        args.cfg_null_condition=None
+        command=training_command(args,Path('attempt'))
+        self.assertNotIn('--cfg-null-condition',command)
+        self.assertEqual(command[0],sys.executable)
 
 
 if __name__=='__main__':unittest.main()
