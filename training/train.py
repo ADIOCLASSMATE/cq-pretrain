@@ -64,6 +64,9 @@ def parse_args(argv=None):
     parser.add_argument('--init-checkpoint',type=Path,help='New-stage model-only initialization; fresh optimizer and data cursor')
     parser.add_argument('--validation-suite',type=Path,help='Fixed local T2I/I2T qualitative suite')
     parser.add_argument('--validate-every',type=int,default=0)
+    parser.add_argument('--validate-every-hours',type=float,default=0.,
+                        help='Also validate once this much wall time has passed since the last validation; '
+                             'the clock is stored beside the reports and survives restarts')
     parser.add_argument('--validate-first',action='store_true')
     parser.add_argument('--validate-final',action='store_true')
     parser.add_argument('--output')
@@ -567,8 +570,24 @@ def main():
             with (output/'eval_snapshots.jsonl').open('a') as handle:handle.write(json.dumps(event)+'\n')
             print(json.dumps(dict(eval_snapshot=event)),flush=True)
     validation_events=[]
+    validation_clock=output/'validation_clock.json'
+    last_validation=[time.time()]
+    if rank==0 and validation_clock.exists():
+        last_validation[0]=json.loads(validation_clock.read_text())['time']
+    def validation_due(step):
+        due=bool(args.validate_every and step%args.validate_every==0)
+        if args.validate_every_hours:
+            # Rank zero owns the wall clock; every rank must take the same branch.
+            flag=[rank==0 and time.time()-last_validation[0]>=args.validate_every_hours*3600]
+            dist.broadcast_object_list(flag,src=0)
+            due=due or flag[0]
+        return due
     def validate(step):
         if not args.validation_suite:return
+        # A preempted job restarts at a step it may already have reported.
+        done=[rank==0 and (output/'validation'/f'step_{step:07d}'/'results.json').exists()]
+        dist.broadcast_object_list(done,src=0)
+        if done[0]:return
         from evaluations.sampling import run_suite
         validation_begin=time.perf_counter()
         wrapped.start_param_sync(force_sync=True)
@@ -593,6 +612,8 @@ def main():
             result=json.loads(result_path.read_text());result['end_to_end_seconds']=event['seconds']
             atomic_json(result_path,result)
             with (output/'validation.jsonl').open('a') as handle:handle.write(json.dumps(event)+'\n')
+            last_validation[0]=time.time()
+            atomic_json(validation_clock,dict(time=last_validation[0],step=step))
             print(json.dumps(dict(validation=event)),flush=True)
     # A restart checkpoint can commit just before its evaluation export is
     # interrupted. Revisit that boundary before consuming the next batch.
@@ -808,7 +829,7 @@ def main():
                 save_eval_snapshot(completed_step)
             if profile_this_rank:
                 profiler.step()
-            if args.validate_every and completed_step%args.validate_every==0:validate(completed_step)
+            if validation_due(completed_step):validate(completed_step)
         if args.validate_final and (not validation_events or validation_events[-1]['step']!=completed_step):validate(completed_step)
         if args.save_final and completed_step > last_saved_step:
             save_checkpoint(completed_step)

@@ -198,6 +198,10 @@ class RunConfig(ModelConfig, DataConfig, LossConfig):
             resolved = {}
             for section in ("model", "data", "loss", "runtime"):
                 for name, setting in value.get(section, {}).items():
+                    # Releases bundle the Ascend reader config; its NPU-only
+                    # kernel selector has no CUDA counterpart.
+                    if name == "gdn_backend":
+                        continue
                     if name in resolved:
                         raise ValueError(f"Duplicate configuration field: {name}")
                     resolved[name] = setting

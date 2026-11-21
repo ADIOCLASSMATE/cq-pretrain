@@ -517,3 +517,31 @@ Events outnumber content roughly 2:1 because every CQ query is its own
 read-only event. That ratio is the architecture. Reducing this block means
 changing what the packed varlen kernel consumes, not how these tensors are
 built.
+
+## Real corpus on L40S (measured 2026-11-20, stage1-512-v1 release)
+
+The release reader (`data/`, `corpus_pipeline/`) is merged from the release's
+own `reader/` tree; `python -m data.verify_mounted_release <current>` passes on
+an instance with the eight `/inspire/dataset` mounts.
+
+- **FlexAttention extents are bucketed.** Real packs change length and query
+  count every step. The compiled kernel is shape-specialized; after eight
+  recompiles Dynamo silently runs FlexAttention's eager dense fallback, which
+  materializes `[heads, rows, keys]` scores and OOMs the card (step 3 of the
+  first real run, 90-220 s steps before that). `ops/flex_cq.py` pads rows/keys
+  to a multiple of `PRETRAIN_FLEX_BUCKET` (8192); padded keys are invisible and
+  padded rows keep only the key-0 sentinel. Gate against the dense reference
+  passes, padded vs unpadded differ by 2e-5, 23 ms fwd+bwd at 16381x8192.
+- **Bound the DiT chunk.** Packs carry up to 18 generation targets of ~1024
+  latent tokens. `--dit-microbatch-tokens 12288` holds the renderer peak flat
+  at no measurable cost in step time.
+- **Per-pack cost is ~5x the synthetic one-image pack**: ~20 images through the
+  ViT and ~9 targets through the DiT per pack. 2 cards, GA 2: 24-30 s/step.
+- **MCore CPU optimizer offload cannot resume** (`KeyError` in
+  `hybrid_optimizer._update_fp32_params_by_new_state`). It is only needed to fit
+  TP1 on two cards; never use it for a run that must restart. Without offload a
+  real-data checkpoint/auto-resume reproduces step 3 to 2e-4 and continues.
+- Validation: `scripts/validation/make_domain_suite.py <root>` writes a 72-case
+  512-area suite (48 T2I prompts over ten domains, 8 without guidance, 8 COCO
+  I2T, 8 single-turn edits in the released causal layout).
+  `--validate-every-hours H` validates on wall time and survives restarts.

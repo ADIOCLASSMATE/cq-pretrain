@@ -109,7 +109,8 @@ class Packer:
             item['cache_keys']=identities
             if cached[0] is not None:item['cached_features']=cached[0]['features']
             if cached[1] is not None:item['cached_latent']=cached[1]['latent']
-        if self.cfg.preserve_documents:self.prepared_images[key]=self.pending_image[1]
+        if self.cfg.preserve_documents or doc.get('format') in ('conditional_generation','causal_sequence'):
+            self.prepared_images[key]=self.pending_image[1]
         return self.pending_image[1]
 
     def document_extent(self,doc):
@@ -125,6 +126,9 @@ class Packer:
         for index,e in enumerate(doc['elements']):
             if size>self.length:break
             if e['type']=='image':
+                if self.processor is None:
+                    size+=self.cfg.image_tokens+2
+                    continue
                 _,_,grid=self.prepare_image(doc,index)
                 item=doc['elements'][index]
                 size+=len(item['video_sequence']['ids']) if 'video_sequence' in item else math.prod(grid)//4+2
@@ -151,11 +155,14 @@ class Packer:
         visual_features,visual_latents,visual_cache_keys=[],[],[]
         position, seg, body_count = 0, 0, 0
         generation_tokens=0
+        atomic_generation_in_batch=False
         current_record = None
         while position < s:
             doc = self.documents.peek()
             if doc is None:
                 break
+            conditional=doc.get('format') in ('conditional_generation','causal_sequence')
+            preserve=cfg.preserve_documents or conditional
             signature=getattr(self.documents,'signature',{})
             seed,epoch=signature.get('seed',0),signature.get('epoch',0)
             # Only image-first caption pairs have the fixed trained null
@@ -171,16 +178,21 @@ class Packer:
                 for index,element in enumerate(doc['elements']) if element['type']=='image'}
             continued=bool(self.element or self.offset)
             if not self.prepared_images:self.documents.prefetch_images(doc, self.element)
-            if cfg.preserve_documents and self.element==0 and self.offset==0:
+            if preserve and self.element==0 and self.offset==0:
                 needed=self.document_extent(doc)
                 if needed>s:
-                    if cfg.long_document_policy=='error' or (doc.get('format')=='caption' and doc.get('direction')=='T2I'):
+                    if conditional or cfg.long_document_policy=='error' or (doc.get('format')=='caption' and doc.get('direction')=='T2I'):
                         raise ValueError(f'Document {doc["id"]} exceeds {s} tokens; preserving its full context needs a longer sequence')
                     # Explicit long-document windows start at an empty pack.
                     if position:break
                 elif position and s-position<needed:
                     break
                 else:self.stats['atomic_documents']+=1
+                if conditional and self.max_images:
+                    count=sum(e['type']=='image' for e in doc['elements'])
+                    if count>self.max_images:
+                        raise ValueError('Conditional generation requires all input and target images in one pack')
+                    if position and len(pixels)+count>self.max_images:break
             # Empty text elements are legal in real interleaved documents.
             # Look through them before reserving a BOS: the next actual element
             # may be an image that cannot fit in the remaining pack space.
@@ -215,7 +227,7 @@ class Packer:
             if first and first['type']=='image' and self.processor is not None:
                 generate_image=sampled_image and image_permissions[self.element]
                 first_target,_,grid=self.prepare_image(doc)
-                if generate_image and not cfg.preserve_documents and cfg.renderer=='moss' and generation_image_indices and cfg.generation_token_budget:
+                if generate_image and not preserve and cfg.renderer=='moss' and generation_image_indices and cfg.generation_token_budget:
                     first_tokens=first_target.shape[0]*first_target.shape[1]//256+cfg.image_condition_queries
                     if generation_tokens+first_tokens>cfg.generation_token_budget:break
                 needed=(len(first['video_sequence']['ids'])+1 if 'video_sequence' in first else math.prod(grid)//4+3)
@@ -228,6 +240,7 @@ class Packer:
             # Natural interleaved documents are plain text, not conversations,
             # so they open directly at their first element with no <|im_start|>.
             start = position
+            atomic_generation_in_batch|=conditional
             templated = doc.get('templated', True)
             rope_cursor = 0
             if templated:
@@ -236,6 +249,7 @@ class Packer:
             current_record = dict(id=doc['id'], element=self.element, offset=self.offset,
                                   body_tokens=0, body_spans=[], images=0, completed=False,
                                   format=doc.get('format'),direction=doc.get('direction'))
+            current_record.update({k:doc[k] for k in ('training_view','typed_conditions') if k in doc})
             if cfg.preserve_documents:
                 current_record['window_continuation']=continued
                 current_record['window_reason']='backbone_length' if (
@@ -302,7 +316,7 @@ class Packer:
                         height,width=grid[1]//2,grid[2]//2
                         if cfg.renderer=='moss':
                             nt=(target.shape[0]*target.shape[1]//256+cfg.image_condition_queries) if generate_image else 0
-                            if not cfg.preserve_documents and generation_image_indices and cfg.generation_token_budget and generation_tokens+nt>cfg.generation_token_budget:break
+                            if not preserve and generation_image_indices and cfg.generation_token_budget and generation_tokens+nt>cfg.generation_token_budget:break
 
                     else:
                         height=width=math.isqrt(cfg.image_tokens)
@@ -380,8 +394,8 @@ class Packer:
         if generation_image_indices and cfg.renderer=='moss':
             from data.generation import GenerationInputs
             batch.generation=GenerationInputs.prepare([pixels[i] for i in generation_image_indices],cfg.image_condition_queries,cfg.dit_width//cfg.dit_heads,
-                token_budget=cfg.generation_token_budget if cfg.preserve_documents else 0,
-                max_images=cfg.generation_microbatch_images if cfg.preserve_documents else 0)
+                token_budget=cfg.generation_token_budget if cfg.preserve_documents or atomic_generation_in_batch else 0,
+                max_images=cfg.generation_microbatch_images if cfg.preserve_documents or atomic_generation_in_batch else 0)
         if generation_image_indices and cfg.renderer=='wan':
             from data.generation import WanGenerationInputs
             queries=[math.prod(vision_grids[i])//4 if cfg.visual_query_mode=='native' else cfg.image_condition_queries for i in generation_image_indices]

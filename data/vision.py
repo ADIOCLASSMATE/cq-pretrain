@@ -191,7 +191,7 @@ class NativeImageProcessor:
         left, top = (width - w) // 2, (height - h) // 2
         return ImageOps.expand(image, (left, top, width - w - left, height - h - top), fill=self.pad_color)
 
-    def __call__(self, native_rgb):
+    def __call__(self, native_rgb, preserve_full_frame=False):
         import numpy as np
         from PIL import Image, ImageOps
 
@@ -205,6 +205,8 @@ class NativeImageProcessor:
             from data.generation import target_image
 
             target = target_image(original, self.generation_max_pixels)
+        elif preserve_full_frame:
+            target=original.resize((self.target_size,self.target_size),Image.Resampling.LANCZOS)
         else:
             target = ImageOps.fit(
                 original, (self.target_size, self.target_size), Image.Resampling.LANCZOS, centering=(0.5, 0.5)

@@ -14,6 +14,8 @@ from data.images import ImageReader
 from data.tokenizer import tokenizer_root, tokenizer_metadata
 from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed
 import data.chat as chat
+import data.captions as captions
+import data.task_groups as task_groups
 
 
 class DocumentStream:
@@ -36,9 +38,15 @@ class DocumentStream:
         os.environ.setdefault('RAYON_NUM_THREADS', '1')
         from tokenizers import Tokenizer
         self.catalog = open_catalog(root, source_root, block_rows, cache_bytes)
+        geometry = self.catalog.meta.get('training_geometry')
+        if geometry and view == 'A' and cfg is not None and native_images:
+            if (cfg.vision_max_pixels != geometry['vision_max_pixels']
+                    or cfg.generation_max_pixels != geometry['generation_max_pixels']
+                    or sequence_length < geometry['sequence_length']):
+                raise ValueError('Training geometry differs from the published length selection')
         membership = self.catalog.check(allow_development)
         self.tokenizer_info=tokenizer_metadata(cfg,self.catalog.meta['tokenizer'])
-        self.tokenizer = Tokenizer.from_file(str(tokenizer_root(root,cfg) / 'tokenizer.json'))
+        self.tokenizer = Tokenizer.from_file(str(tokenizer_root(self.catalog.path,cfg) / 'tokenizer.json'))
         self.special_ids = set(self.tokenizer_info['counting']['exclude_special_token_ids'])
         self.counting_matches_corpus=self.tokenizer_info==self.catalog.meta['tokenizer']
         self.signature = dict(snapshot=self.catalog.meta['identity'], membership=membership['identity'],
@@ -47,6 +55,14 @@ class DocumentStream:
                               image_size=image_size, tokenization='qwen35_chat_template_v1',
                               tokenizer=self.tokenizer_info,
                               image_loss_permissions=LOSS_PERMISSION_CONTRACT)
+        if self.catalog.meta.get('caption_sampling'):
+            if self.catalog.meta['caption_sampling'] != captions.CONTRACT:
+                raise ValueError('Unsupported caption sampling contract')
+            self.signature['caption_sampling'] = captions.CONTRACT
+        if self.catalog.meta.get('task_sampling'):
+            if self.catalog.meta['task_sampling'] != task_groups.CONTRACT:
+                raise ValueError('Unsupported task-family sampling contract')
+            self.signature['task_sampling'] = task_groups.CONTRACT
         self.position = dict(block=0, row=0)
         if cfg is not None:
             self.signature['generation']={'renderer':cfg.renderer,'max_pixels':cfg.generation_max_pixels,'flow_draws':cfg.flow_draws,'channels':cfg.latent_channels,'token_budget':cfg.generation_token_budget}
@@ -93,6 +109,14 @@ class DocumentStream:
     def _load(self, shard, start, count):
         begin = time.perf_counter()
         rows = self.catalog.read_rows(shard, start, count)
+        if any(row.get('format') == 'task_group' for row in rows):
+            if self.signature.get('task_sampling') != task_groups.CONTRACT:
+                raise ValueError('Task families require their declared sampling contract')
+            rows=[task_groups.select(row,self.signature['seed'],self.signature['epoch']) for row in rows]
+        if any(row.get('caption_candidates_json') is not None or 'caption_members' in row for row in rows):
+            if self.signature.get('caption_sampling') != captions.CONTRACT:
+                raise ValueError('Caption groups require a declared sampling contract')
+            rows = [captions.select(row, self.signature['seed'], self.signature['epoch']) for row in rows]
         read_seconds = time.perf_counter() - begin
         built = [chat.build(row) for row in rows]
         spans = [span['text'] for layout, _, _ in built for span in layout if span['kind'] == 'text']
@@ -119,25 +143,29 @@ class DocumentStream:
                                          supervised=span['supervised']))
                 elif span['kind'] == 'image':
                     if self.signature['view'] == 'A':
-                        info = row['images'][span['image_index']]
-                        locator = (dict(info) if info.get('path') or info.get('frames_path') else
+                        logical = row['images'][span['image_index']]
+                        info = span.get('upstream_image', logical)
+                        locator = (dict(info) if info.get('path') or info.get('frames_path') or info.get('kind')=='rle_mask' else
                                    dict(shard=row['source_shard'], offset=info['offset'],
                                         length=info['length'], sha256=info['sha256']))
                         reference = repr(sorted(locator.items()))
                         elements.append(dict(type='image', image_ref=reference, locator=locator,
-                            image_loss_allowed=image_permissions[span['image_index']],
+                            image_loss_allowed=image_loss_allowed(row,logical,info,span),
                             non_cfg=info.get('non_cfg'),
                             generation_target=(row.get('direction',direction) not in ('I2T','V2T') and
                                                span.get('role','assistant')=='assistant')))
                 else:
                     raise ValueError(f'Unknown span kind: {span["kind"]}')
-            if self.counting_matches_corpus and counted != row['text_tokens']:
+            published_count = row.get('text_tokens')
+            if self.counting_matches_corpus and published_count is not None and counted != published_count:
                 raise RuntimeError(f'Online tokenizer differs from corpus accounting: {row["sample_id"]}')
-            corpus_count += row['text_tokens']
+            corpus_count += published_count if published_count is not None else counted
             documents.append(dict(id=row['sample_id'], elements=elements, text_tokens=counted,
                                   format=row['format'],direction=row.get('direction',direction),templated=templated,
                                   non_cfg=row.get('non_cfg'),
-                                  corpus_text_tokens=row['text_tokens'],image_loss_allowed=allowed))
+                                  corpus_text_tokens=published_count if published_count is not None else counted,
+                                  image_loss_allowed=allowed,
+                                  **{k:row[k] for k in ('training_view','typed_conditions','selected_upstream') if k in row}))
         stats = dict(documents=len(documents), text_spans=len(spans), tokenizer_tokens=token_count,
                      corpus_text_tokens=corpus_count, tokenize_seconds=tokenize_seconds,
                      parquet_seconds=read_seconds)
@@ -189,7 +217,35 @@ class DocumentStream:
             return (rgb.permute(0,2,3,1).numpy(),patches,grid), dict(
                 clip=dict(clip,qwen_timestamps=times),source_sha256=clip['source_sha256'],
                 video_sequence=video_sequence(processor,grid,times))
-        if locator.get('path'):
+        if locator.get('kind')=='rle_mask':
+            import hashlib,json
+            from pycocotools import mask
+            from PIL import Image,ImageOps
+            rle=locator['rle']
+            payload=json.dumps(rle,sort_keys=True,separators=(',',':')).encode()
+            if hashlib.sha256(payload).hexdigest()!=locator['sha256']:raise ValueError('RLE annotation changed')
+            raster=mask.decode(dict(size=rle['size'],counts=rle['counts'].encode()))
+            picture=Image.fromarray(raster*255).convert('RGB')
+            if not self.image_reader.native_resolution:
+                picture=picture.resize((self.image_reader.image_size,)*2,Image.Resampling.NEAREST)
+            pixels=np.asarray(picture,dtype=np.uint8).copy()
+            with self.image_reader.lock:self.image_reader.counters['images']+=1
+        elif locator.get('dataset_id'):
+            from corpus_pipeline.production.portable_refs import read_ref_bytes
+            from corpus_pipeline.dedup.dcvlm_loss_policy_reader import decode_image_bytes
+            from PIL import Image, ImageOps
+            body = read_ref_bytes(locator, roots=os.environ.get('CORPUS_DATASET_ROOTS') or locator.get('_dataset_roots'))
+            picture = ImageOps.exif_transpose(decode_image_bytes(body, policy=locator.get('_decode_policy')))
+            if not self.image_reader.native_resolution:
+                picture = (picture.resize((self.image_reader.image_size,)*2,Image.Resampling.LANCZOS)
+                           if locator.get('preserve_full_frame') else
+                           ImageOps.fit(picture,(self.image_reader.image_size,)*2,Image.Resampling.LANCZOS))
+            pixels = np.asarray(picture, dtype=np.uint8).copy()
+            with self.image_reader.lock:
+                self.image_reader.counters['images'] += 1
+                self.image_reader.counters['local_bytes'] += len(body)
+                self.image_reader.counters['reads'] += 1
+        elif locator.get('path'):
             import hashlib
             import io
             from pathlib import Path
@@ -207,7 +263,7 @@ class DocumentStream:
             if not hasattr(self.image_local, 'processor'):
                 from data.vision import NativeImageProcessor
                 self.image_local.processor = NativeImageProcessor(self.cfg, self.sequence_length)
-            return self.image_local.processor(pixels)
+            return self.image_local.processor(pixels,preserve_full_frame=locator.get('preserve_full_frame',False))
         return pixels
 
     def prefetch_images(self, doc, element):

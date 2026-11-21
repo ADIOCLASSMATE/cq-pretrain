@@ -22,6 +22,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 _ENABLED = os.environ.get("PRETRAIN_FLEX_ATTENTION", "0") == "1"
+# Real packs differ in length and query count on every step. The compiled
+# kernel is shape-specialized, and once Dynamo's recompile limit is hit it
+# silently runs FlexAttention's eager dense fallback, which materializes
+# [heads, rows, keys] scores and exhausts the card. Rows and keys are therefore
+# padded up to a multiple of this bucket: padded keys are invisible, padded
+# rows keep only the key-0 sentinel block and are sliced off, so the
+# block-sparse kernel skips nearly all of the padding and a run compiles two
+# or three extents in total.
+_BUCKET = int(os.environ.get("PRETRAIN_FLEX_BUCKET", "8192"))
+
+
+def padded_extent(rows, keys):
+    if _BUCKET <= 0:
+        return rows, keys
+    return -(-rows // _BUCKET) * _BUCKET, -(-keys // _BUCKET) * _BUCKET
 
 
 @functools.lru_cache(maxsize=1)
@@ -91,13 +106,21 @@ def block_mask(predicate, rows, keys, device):
 
     if predicate.block_mask is not None:
         return predicate.block_mask
-    key_sigma = predicate.key_sigma
-    key_segment = predicate.key_segment
-    row_sigma = predicate.row_sigma
-    row_segment = predicate.row_segment
-    row_is_query = predicate.row_is_query
-    row_unconditional = predicate.row_unconditional
-    row_invalid = predicate.row_invalid
+    from torch.nn.functional import pad
+
+    extra_keys = keys - len(predicate.key_sigma)
+    extra_rows = rows - len(predicate.row_sigma)
+    if extra_keys < 0 or extra_rows < 0:
+        raise ValueError("BlockMask extent is smaller than the CQ predicate")
+    # Segment -2 matches no row (rows need segment >= 0); padded rows are
+    # invalid, so they see exactly the key-0 sentinel like any all-masked row.
+    key_sigma = pad(predicate.key_sigma, (0, extra_keys))
+    key_segment = pad(predicate.key_segment, (0, extra_keys), value=-2)
+    row_sigma = pad(predicate.row_sigma, (0, extra_rows))
+    row_segment = pad(predicate.row_segment, (0, extra_rows), value=-1)
+    row_is_query = pad(predicate.row_is_query, (0, extra_rows), value=False)
+    row_unconditional = pad(predicate.row_unconditional, (0, extra_rows), value=False)
+    row_invalid = pad(predicate.row_invalid, (0, extra_rows), value=True)
 
     def mask_mod(b, h, q_idx, kv_idx):
         same = (row_segment[q_idx] == key_segment[kv_idx]) & (row_segment[q_idx] >= 0)
@@ -124,15 +147,21 @@ def attention(q, k, v, predicate, valid_rows, scale=None):
     if options is None:
         raise ValueError("No recorded FlexAttention tile for this GPU and head size")
     rows, keys = q.shape[0], k.shape[0]
+    padded_rows, padded_keys = padded_extent(rows, keys)
+    if padded_rows != rows:
+        q = torch.nn.functional.pad(q, (0, 0, 0, 0, 0, 0, 0, padded_rows - rows))
+    if padded_keys != keys:
+        k = torch.nn.functional.pad(k, (0, 0, 0, 0, 0, 0, 0, padded_keys - keys))
+        v = torch.nn.functional.pad(v, (0, 0, 0, 0, 0, 0, 0, padded_keys - keys))
     query, key, value = (t.permute(1, 2, 0, 3) for t in (q, k, v))
     result = _compiled()(
         query.contiguous(), key.contiguous(), value.contiguous(),
-        block_mask=block_mask(predicate, rows, keys, q.device),
+        block_mask=block_mask(predicate, padded_rows, padded_keys, q.device),
         enable_gqa=q.shape[2] != k.shape[2],
         scale=q.shape[-1] ** -0.5 if scale is None else scale,
         kernel_options=options,
     )
-    result = result.permute(2, 0, 1, 3).flatten(-2).contiguous()
+    result = result.permute(2, 0, 1, 3)[:rows].flatten(-2).contiguous()
     if valid_rows is not None:
         result = result * valid_rows.transpose(0, 1).unsqueeze(-1).to(result.dtype)
     return result

@@ -459,13 +459,18 @@ def decode_image(ref, roots, *, view=None, max_pixels=200_000_000):
     Original TAR bytes and native references remain unchanged. No output file
     is created. The first-frame override is explicit release evidence.
     """
-    from PIL import Image
-    require(type(max_pixels) is int and 0 < max_pixels <= 200_000_000, 'Invalid decode pixel bound')
     release = _release(view)
     logical = _resolver(release).logical_ref(ref)
     blob = read_image(ref, roots, view=release['root'])
-    require(len(blob) <= 256 << 20, 'Image exceeds the encoded byte bound')
     policy = _image_policies(release).get(logical['sha256'])
+    return decode_image_bytes(blob, policy=policy, max_pixels=max_pixels)
+
+
+def decode_image_bytes(blob, *, policy=None, max_pixels=200_000_000):
+    """Apply a SHA-bound release's original/first-frame decoder contract."""
+    from PIL import Image
+    require(type(max_pixels) is int and 0 < max_pixels <= 200_000_000, 'Invalid decode pixel bound')
+    require(len(blob) <= 256 << 20, 'Image exceeds the encoded byte bound')
     with _DECODE_LOCK:
         old_bound = Image.MAX_IMAGE_PIXELS
         try:

@@ -6,6 +6,7 @@ identity is a process-local verification cache, never a persisted content ID.
 """
 from collections import OrderedDict
 from collections.abc import Mapping
+from functools import lru_cache
 import hashlib
 import json
 import os
@@ -17,9 +18,11 @@ import threading
 
 MAX_IMAGE_BYTES = 256 << 20
 _HEX = re.compile(r'[0-9a-f]{64}\Z')
-_DATASET = re.compile(r'(?:[^/@\s]+/[^/@\s]+@[0-9a-f]{40}|inspire/[^/@\s]+@[0-9a-f]{64})\Z')
+# Restored local releases use a dated namespace; their archive SHA and size
+# remain mandatory and are verified exactly like upstream pinned revisions.
+_DATASET = re.compile(r'(?:[^/@\s]+/[^/@\s]+@[0-9a-f]{40}|inspire/[^/@\s]+@[0-9a-f]{64}|local/[^/@\s]+@[0-9]{8})\Z')
 _BINDING_FIELDS = ('kind', 'path', 'member', 'offset', 'offset_data', 'length',
-                   'size', 'sha256', 'dataset_id', 'archive_sha256', 'archive_size')
+                   'size', 'sha256', 'dataset_id', 'archive_sha256', 'archive_size', 'parts')
 _CACHE_LOCK = threading.Lock()
 _ROOT_CACHE = OrderedDict()
 _ARCHIVE_CACHE = OrderedDict()
@@ -86,12 +89,54 @@ def _roots(roots):
             raise ValueError('dataset root mapping changed while reading')
     if not isinstance(value, dict):
         raise ValueError('dataset roots must be a JSON object')
+    for location in value.values():
+        if isinstance(location, dict) and 'layout_index' in location:
+            index = _relative(location['layout_index'], 'release layout index')
+            location['layout_index'] = str(path.parent / index)
     with _CACHE_LOCK:
         _ROOT_CACHE[str(path)] = (before, value)
         _ROOT_CACHE.move_to_end(str(path))
         while len(_ROOT_CACHE) > 16:
             _ROOT_CACHE.popitem(last=False)
     return value
+
+
+def _asset_path(location, relative):
+    if isinstance(location, dict):
+        relative = _relative(location['archive_paths'][str(relative)], 'mounted archive path')
+        location = location['root']
+    if not isinstance(location, (str, os.PathLike)) or not Path(location).is_absolute():
+        raise ValueError('dataset root missing or not absolute')
+    root = Path(location).resolve(strict=True)
+    path = (root / relative).resolve(strict=True)
+    if not root.is_dir() or not path.is_relative_to(root):
+        raise ValueError('portable asset path escapes dataset root')
+    return path
+
+
+@lru_cache(maxsize=16)
+def _layout_db(index, pid):
+    import sqlite3
+    return sqlite3.connect(Path(index).as_uri() + '?mode=ro&immutable=1', uri=True, check_same_thread=False)
+
+
+def _layout_source(ref, location):
+    offset, length = _range(ref)
+    if (ref.get('kind', 'tar') != 'tar' or ref.get('member') != ref['sha256']
+            or not _DATASET.fullmatch(ref['dataset_id'])):
+        raise ValueError('invalid layout TAR image binding')
+    row = _layout_db(location['layout_index'], os.getpid()).execute(
+        'select a.source,a.path,a.source_size,e.rg,e.row_in_group,e.file '
+        'from archives a join entries e on e.id=a.id where a.name=? and a.size=? and a.sha=? and e.offset=?',
+        (ref['path'], ref['archive_size'], ref['archive_sha256'], offset)).fetchone()
+    if row is None or offset + length > ref['archive_size']:
+        raise ValueError('layout TAR image absent from verified source index')
+    source, archive, size, group, ordinal, loose = row
+    path = _asset_path(location['mounts'][source], _relative(loose or archive, 'mounted layout source'))
+    info = path.stat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size != (length if loose else size):
+        raise ValueError('mounted layout source size/type mismatch')
+    return path, group, ordinal
 
 
 def resolve_ref(ref, roots=None, *, allowed_datasets=None):
@@ -129,14 +174,9 @@ def resolve_ref(ref, roots=None, *, allowed_datasets=None):
             or offset + length > archive_size):
         raise ValueError('invalid portable archive identity or image range')
     location = _roots(roots).get(dataset)
-    if not isinstance(location, (str, os.PathLike)) or not Path(location).is_absolute():
-        raise ValueError('dataset root missing or not absolute: ' + dataset)
-    root = Path(location).resolve(strict=True)
-    if not root.is_dir():
-        raise ValueError('dataset root is not a directory')
-    path = (root / relative).resolve(strict=True)
-    if not path.is_relative_to(root):
-        raise ValueError('portable TAR path escapes dataset root')
+    if isinstance(location, dict) and 'layout_index' in location:
+        return _layout_source(value, location)[0]
+    path = _asset_path(location, relative)
     observed = path.stat()
     expected_size=length if kind=='file' else archive_size
     if not stat.S_ISREG(observed.st_mode) or observed.st_size != expected_size:
@@ -179,6 +219,23 @@ def _verify_archive(fd, path, value):
 def read_ref_bytes(ref, roots=None):
     """Read original bytes with archive and member integrity, without mutation."""
     value = logical_ref(ref)
+    if value.get('dataset_id') is not None:
+        roots = _roots(roots)
+        location = roots.get(value['dataset_id'])
+        if isinstance(location, dict) and 'layout_index' in location:
+            path, group, ordinal = _layout_source(value, location)
+            if group is None:
+                blob = path.read_bytes()
+            else:
+                import pyarrow.parquet as pq
+                with pq.ParquetFile(path) as source:
+                    image = source.read_row_group(group, columns=['image'], use_threads=False)[0][ordinal].as_py()
+                blob = image if isinstance(image, bytes) else image['bytes']
+            if len(blob) != value['length'] or hashlib.sha256(blob).hexdigest() != value['sha256']:
+                raise ValueError('mounted layout image SHA256/length mismatch')
+            return blob
+    if value.get('kind') == 'original_ranges':
+        return _read_original_ranges(value, roots)
     path = resolve_ref(value, roots)
     offset, length = _range(value)
     portable = value.get('dataset_id') is not None
@@ -203,3 +260,40 @@ def read_ref_bytes(ref, roots=None):
     if len(blob) != length or hashlib.sha256(blob).hexdigest() != value['sha256']:
         raise ValueError('original image SHA256/length mismatch')
     return blob
+
+
+def _read_original_ranges(value, roots):
+    """An original TAR member may cross physical split files; verify its bytes.
+
+    These references pin the image itself, not an entire multi-terabyte TAR.
+    Every read checks the complete original image SHA and every extent's bounds.
+    """
+    dataset = value.get('dataset_id')
+    if not isinstance(dataset, str) or not _DATASET.fullmatch(dataset):
+        raise ValueError('Invalid original-range dataset identity')
+    _relative(value.get('member'), 'original image member')
+    _, length = _range(dict(value, offset=0))
+    location = _roots(roots).get(dataset)
+    parts = value.get('parts')
+    if not isinstance(parts, list) or not parts or sum(p['length'] for p in parts) != length:
+        raise ValueError('Original image extents do not cover its declared length')
+    chunks = []
+    for part in parts:
+        relative = _relative(part['path'], 'original archive part')
+        path = _asset_path(location, relative)
+        offset, count, size = part['offset'], part['length'], part['file_size']
+        if (any(type(n) is not int for n in (offset,count,size)) or
+                offset < 0 or count <= 0 or offset + count > size):
+            raise ValueError('Invalid original archive extent')
+        with path.open('rb', buffering=0) as f:
+            before = _stamp(os.fstat(f.fileno()))
+            if before[2] != size or not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise ValueError('Original archive part size/type changed')
+            body = os.pread(f.fileno(), count, offset)
+            if len(body) != count or _stamp(os.fstat(f.fileno())) != before:
+                raise ValueError('Original archive part changed during read')
+            chunks.append(body)
+    body = b''.join(chunks)
+    if hashlib.sha256(body).hexdigest() != value['sha256']:
+        raise ValueError('Original image SHA256 mismatch')
+    return body

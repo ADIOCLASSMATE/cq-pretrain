@@ -92,7 +92,9 @@ class OneDocument:
         self.doc=dict(id='validation',elements=elements);self.processed=processed
     def peek(self):return self.doc
     def advance(self):self.doc=None
-    def image(self,doc,element):return self.processed
+    def image(self,doc,element):
+        # Editing cases carry one prepared image per image element.
+        return self.processed[element] if isinstance(self.processed,dict) else self.processed
     def prefetch_images(self,*args):pass
     def state_dict(self):return {}
 
@@ -103,7 +105,7 @@ def encode_spans(tokenizer,pieces):
             for piece in pieces]
 
 
-def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,instruction=None,sequence=None,non_cfg=False):
+def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,instruction=None,sequence=None,non_cfg=False,context=None):
     """Build one validation pack under the Qwen3.5 chat template.
 
     Training wraps every caption in user/assistant messages, so evaluation must
@@ -116,7 +118,15 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
         return dict(type='text',input_ids=ids,supervised=supervised)
     picture=dict(type='image',generation_target=task in ('T2I','T2V'),non_cfg=non_cfg)
     if sequence is not None:picture['video_sequence']=sequence
-    if processed is None:
+    if context is not None:
+        # The released editing layout: the input image is its own user turn,
+        # the instruction the next one, and the assistant answers with the image.
+        if tokenizer is None or task!='T2I':raise ValueError('Editing needs the chat template and an image target')
+        head,middle,tail=encode_spans(tokenizer,[chat.ROLE_USER,chat.TURN_END+chat.IM_START+chat.ROLE_USER,
+            chat.TURN_END+chat.IM_START+chat.ROLE_ASSISTANT])
+        source=dict(type='image',generation_target=False,image_loss_allowed=False)
+        elements=[element(head),source,element(middle),element(body,True),element(tail),picture]
+    elif processed is None:
         elements=[element(body,True)]
     elif tokenizer is None:
         # Legacy untemplated layout, retained only for direct unit tests.
@@ -133,10 +143,13 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
             chat.IM_START+chat.ROLE_ASSISTANT])
         elements=[element(head),picture,element(tail),element(body,True)]
     elements=[e for e in elements if e['type']!='text' or len(e['input_ids'])]
+    if context is not None:
+        processed={elements.index(source):context,elements.index(picture):processed}
     docs=OneDocument(elements,processed)
     docs.doc['direction']=task
     # Fits the fixed validation examples and does not consume training data.
     image_tokens=(len(sequence['ids'])-2 if sequence is not None else
+                  sum(p[2][1]*p[2][2]//4+4 for p in processed.values()) if context is not None else
                   processed[2][1]*processed[2][2]//4 if processed is not None else 0)
     scaffold=sum(len(e['input_ids']) for e in elements if e['type']=='text')
     length=max(scaffold+image_tokens+4,cfg.vision_min_pixels//1024+4)
@@ -151,6 +164,8 @@ def make_batch(cfg,tokens,text_ids,processed,task,prune=True,tokenizer=None,inst
     from data.batch_layout import build_plan
     batch.mainline=build_plan(batch,cfg)
     if not prune:return batch
+    if context is not None and len(batch.generation_image_indices)!=1:
+        raise ValueError('An editing case must have exactly one generation target')
     if task in ('T2I','T2V'):keep=batch.mainline.query_image[0]
     else:keep=batch.mainline.query_positions==used-1
     return prune_queries(batch,cfg,keep)
@@ -263,7 +278,16 @@ def caption(model,case,tokenizer,tokens,processor):
 
 @torch.no_grad()
 def generate(model,case,tokenizer,tokens,processor,vae,output):
-    cfg=model.cfg;height,width=case['height'],case['width']
+    cfg=model.cfg;context=None
+    if case['task']=='EDIT':
+        path=Path(case['image'])
+        if case.get('image_sha256') and hashlib.sha256(path.read_bytes()).hexdigest()!=case['image_sha256']:
+            raise ValueError('Validation image changed')
+        with Image.open(path) as image:context=processor(np.asarray(image.convert('RGB')))
+        # Training targets share the input's processed size in this release.
+        height,width=context[0].shape[:2]
+    else:height,width=case['height'],case['width']
+    task='T2I' if context is not None else case['task']
     if min(height,width)<16 or height%16 or width%16 or height*width>cfg.generation_max_pixels:
         raise ValueError('Validation shape violates the training pixel/alignment cap')
     processed,sequence=(video_input(cfg,case) if case['task']=='T2V' else
@@ -271,11 +295,13 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     def conditions(prompt=None):
         batch=(make_null_batch(cfg,tokens,processed,tokenizer,sequence=sequence) if prompt is None else
             make_batch(cfg,tokens,tokenizer.encode(prompt,add_special_tokens=False).ids,
-                       processed,case['task'],tokenizer=tokenizer,sequence=sequence)).to(accel_type())
+                       processed,task,tokenizer=tokenizer,sequence=sequence,context=context)).to(accel_type())
         # Clean target pixels are strictly invisible to image CQ. Zero features
         # eliminate a useless ViT forward, tested against the full CQ plan.
         empty=torch.zeros(len(batch.vision.content_indices),cfg.width,device=accel_type(),dtype=model.embedding.weight.dtype)
-        hidden=backbone(model,batch,vision_features=empty)
+        # An editing input is real context: encode it. The blank target rides
+        # along through the ViT and stays invisible to its own queries.
+        hidden=backbone(model,batch,vision_features=None if context is not None and prompt is not None else empty)
         return hidden[batch.mainline.condition_indices],batch.generation
     positive,layout=conditions(case['prompt'])
     projected=model.renderer.project_conditions(positive,layout)
@@ -314,7 +340,8 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
         if P.state().get_tensor_model_parallel_rank()==0:
             save_visual(frames,output/name,case.get('fps',16))
         return dict(image=name,prompt=case['prompt'],height=height,width=width,num_frames=len(frames),
-            seed=case['seed'],steps=len(sigmas)-1,guidance=guidance,latent_std=latent.std().item())
+            seed=case['seed'],steps=len(sigmas)-1,guidance=guidance,latent_std=latent.std().item(),
+            **({'input':case['image']} if context is not None else {}))
     h,w=layout.grids[0]
     z=latent.T.reshape(1,cfg.latent_channels,h,w).float()
     bn=vae.bn;eps=vae.config.batch_norm_eps
@@ -343,6 +370,11 @@ def report_html(output,rows,weight_sources=None):
     for row in rows:
         parts.append('<section><h2>'+html.escape(row['id'])+'</h2>')
         source=row['image']
+        if row.get('input'):
+            import shutil
+            name=row['id']+'_input'+Path(row['input']).suffix
+            if Path(row['input']).resolve()!=(output/name).resolve():shutil.copyfile(row['input'],output/name)
+            parts.append('<img src="'+html.escape(name,quote=True)+'" style="max-height:200px"><p>input</p>')
         if row['task'] in ('I2T','V2T'):
             import shutil
             name=row['id']+Path(source).suffix
@@ -378,7 +410,7 @@ def run_suite(model,suite_path,output,preparer,weight_sources=None):
                 if index%P.dp_size()!=P.dp_rank():continue
                 device_module().reset_peak_memory_stats();started=time.perf_counter()
                 result=(generate(model,case,tokenizer,tokens,processor,preparer.vae if model.cfg.renderer=='wan' else preparer.vae.vae,output)
-                    if case['task'] in ('T2I','T2V') else caption(model,case,tokenizer,tokens,processor))
+                    if case['task'] in ('T2I','T2V','EDIT') else caption(model,case,tokenizer,tokens,processor))
                 if case['task']=='V2T' and Path(result['image']).suffix=='.npy':
                     path=output/f"{case['id']}.mp4"
                     if P.state().get_tensor_model_parallel_rank()==0:

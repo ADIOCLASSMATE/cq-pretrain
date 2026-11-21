@@ -151,6 +151,26 @@ def conversation_spans(segments):
     return spans
 
 
+def causal_spans(segments):
+    """Editing/control data explicitly declares text and image occurrence loss."""
+    spans=[];current=None
+    for segment in segments:
+        role=segment['role'];key=(role,segment['turn'])
+        if role not in ('system','user','assistant','tool'):raise ValueError('Invalid causal role')
+        if current!=key:
+            if current is not None:spans.append(closing())
+            spans.append(header(role+'\n',current is None));current=key
+        if segment['kind']=='image':
+            span=dict(image(segment['image_index']),role=role,image_loss_allowed=segment['image_loss_allowed'])
+            if 'upstream_image' in segment:
+                span['upstream_image']=segment['upstream_image']
+            spans.append(span)
+        elif segment['text']:
+            spans.append(text(segment['text'],segment['supervised'],False))
+    if current is not None:spans.append(closing())
+    return spans
+
+
 def natural_spans(segments):
     """Interleaved documents stay natural documents; no chat wrapper."""
     return [image(s['image_index']) if s['kind'] == 'image' else corpus(s['text'])
@@ -170,12 +190,14 @@ def build(row):
     """
     segments = row['segments']
     fmt = row.get('format')
+    if fmt == 'causal_sequence':
+        return causal_spans(segments),row['direction'],True
     if fmt == 'caption':
         direction = raw_direction(segments)
         if direction is not None:
             return caption_spans(segments, direction, row['sample_id']), direction, True
         return natural_spans(segments), None, False
-    if fmt in ('conversation', 'text_conversation'):
+    if fmt in ('conversation', 'text_conversation', 'conditional_generation'):
         roles = [s.get('role') or 'user' for s in segments if s['kind'] == 'image']
         direction = ('T2I' if 'assistant' in roles else 'I2T') if roles else None
         return conversation_spans(segments), direction, True

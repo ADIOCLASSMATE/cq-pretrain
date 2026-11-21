@@ -104,6 +104,9 @@ class Catalog:
         return self.local.cache
 
     def read_rows(self, shard, start, count):
+        return self.read_table(shard, start, count).to_pylist()
+
+    def read_table(self, shard, start, count):
         """Reuse projected row groups across adjacent small tokenizer batches."""
         cache = self._cache()
         if shard not in cache['files']:
@@ -116,7 +119,7 @@ class Catalog:
             for i in range(parquet.num_row_groups):
                 total += parquet.metadata.row_group(i).num_rows
                 ends.append(total)
-            if total != item['rows']:
+            if total != item.get('native_rows', item['rows']):
                 raise RuntimeError('Catalog/Parquet row count mismatch')
             cache['files'][shard] = (parquet, ends)
         cache['files'].move_to_end(shard)
@@ -144,7 +147,7 @@ class Catalog:
             take = min(stop, ends[group]) - start
             pieces.append(table.slice(start - begin, take))
             start += take
-        return pa.concat_tables(pieces).to_pylist()
+        return pa.concat_tables(pieces)
 
     def close(self):
         for cache in self.caches:

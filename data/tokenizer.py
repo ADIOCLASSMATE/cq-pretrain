@@ -7,14 +7,18 @@ def tokenizer_root(root,cfg):
     if cfg is not None and cfg.text_assets:
         from utils.assets import asset_path
         return asset_path(cfg.text_assets)
-    return Path(root)/'tokenizer'
+    root=Path(root)
+    if (root/'manifest.json').is_file():
+        manifest=json.loads((root/'manifest.json').read_text())
+        if manifest.get('schema') == 'corpus.baseline_union.v1':
+            root=(root/manifest['training_catalog']['path']).parent
+    return root/'tokenizer'
 
 
 def tokenizer_metadata(cfg,published):
     if cfg is None or not cfg.text_assets:
         return published
-    from utils.assets import asset_manifest, asset_path
-    from scripts.prepare_qwen35 import sha256
+    from utils.assets import asset_manifest, asset_path, sha256
     root=asset_path(cfg.text_assets);manifest=asset_manifest(root)
     files={name:manifest['files'][name] for name in ('tokenizer.json','tokenizer_config.json')}
     for name,digest in files.items():

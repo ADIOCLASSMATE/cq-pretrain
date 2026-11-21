@@ -8,6 +8,8 @@ model:
 
 data:
   preserve_documents: true
+  vision_max_pixels: 262144
+  generation_max_pixels: 262144
   generation_token_budget: 65536
   i2t_image_loss_probability: 0.0
   visual_uncond_probability: 0.1

@@ -94,13 +94,19 @@ class MixedCatalog:
         self.source_root=Path('/'); self.source_sizes={}
         for source in sources:
             root=(self.path.parent/source['path']).resolve()
-            catalog=(Catalog(root, source.get('source_root'), block_rows, cache_bytes) if root.is_dir()
+            catalog=(open_catalog(root, source.get('source_root'), block_rows, cache_bytes) if root.is_dir()
                      else JsonlCatalog(root,block_rows,{k:v for k,v in source.items() if k not in ('path','source_root')}))
             self.catalogs.append(catalog); total+=catalog.meta['units']; self.ends.append(total)
             self.source_sizes.update({str(catalog.source_root/k).lstrip('/'):v for k,v in catalog.source_sizes.items()})
         self.meta=dict(identity=digest([c.meta['identity'] for c in self.catalogs]),units=total,
             documents=sum(c.meta['documents'] for c in self.catalogs),tokenizer={},
             development=any(c.meta['development'] for c in self.catalogs))
+        if any(c.meta.get('caption_sampling') for c in self.catalogs):
+            from data.captions import CONTRACT
+            self.meta['caption_sampling'] = CONTRACT
+        if any(c.meta.get('task_sampling') for c in self.catalogs):
+            from data.task_groups import CONTRACT
+            self.meta['task_sampling'] = CONTRACT
 
     def check(self, allow_development=False):
         for c in self.catalogs:c.check(allow_development)
@@ -124,8 +130,41 @@ class MixedCatalog:
 
 
 def open_catalog(root, source_root=None, block_rows=2048, cache_bytes=128<<20):
-    path=Path(root)
-    if path.is_dir():return Catalog(path,source_root,block_rows,cache_bytes)
+    path=Path(root).resolve()
+    if path.is_dir():
+        manifest=json.loads((path/'manifest.json').read_text())
+        if manifest.get('schema_version') == 'corpus.combined_training.v1':
+            from corpus_pipeline.postprocess.reconcile import file_sha, validate_artifacts
+            completion=json.loads((path/'COMPLETE.json').read_text())
+            if not completion.get('complete') or completion['manifest_sha256'] != file_sha(path/'manifest.json'):
+                raise ValueError('Combined training publication changed')
+            validate_artifacts(path, {'artifacts':manifest['children']})
+            sources=[dict(s,source_root=source_root) if source_root is not None else s for s in manifest['sources']]
+            catalog = MixedCatalog(path/'manifest.json',sources,block_rows,cache_bytes)
+            if 'training_geometry' in manifest:
+                catalog.meta['training_geometry'] = manifest['training_geometry']
+            return catalog
+        if manifest.get('schema') == 'corpus.baseline_union.v1':
+            from corpus_pipeline.unified.baseline_union import verify_reference_release
+            from corpus_pipeline.postprocess.reconcile import validate_artifacts
+            manifest=verify_reference_release(path,verify_payloads=False)
+            validate_artifacts(path, {'artifacts': [manifest['training_catalog']]})
+            path=path/manifest['training_catalog']['path']
+            path=path.parent
+            manifest=json.loads((path/'manifest.json').read_text())
+        if manifest.get('schema_version') == 'corpus.training_selection.v1':
+            from data.selection_catalog import SelectionCatalog
+            return SelectionCatalog(path,source_root,block_rows,cache_bytes)
+        if manifest.get('schema_version') in ('corpus.caption_groups.v1','corpus.caption_groups.v2'):
+            from data.grouped_catalog import GroupedCaptionCatalog
+            return GroupedCaptionCatalog(path,source_root,block_rows,cache_bytes)
+        if manifest.get('schema_version') in ('corpus.openuni_image_captions.v1','corpus.openuni_image_captions.v2'):
+            from data.grouped_catalog import ImageCaptionCatalog
+            return ImageCaptionCatalog(path,source_root,block_rows,cache_bytes)
+        if manifest.get('schema_version') in ('corpus.task_groups.v1','corpus.task_groups.v2','corpus.task_groups.v3'):
+            from data.grouped_catalog import TaskGroupCatalog
+            return TaskGroupCatalog(path,source_root,block_rows,cache_bytes)
+        return Catalog(path,source_root,block_rows,cache_bytes)
     if path.suffix=='.jsonl':return JsonlCatalog(path,block_rows,{})
     import yaml
     sources=yaml.safe_load(path.read_text())['sources']

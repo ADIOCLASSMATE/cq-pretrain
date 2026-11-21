@@ -43,6 +43,9 @@ def delta_step(layer, x, cache):
     g = -layer.A_log.to(dtype).exp() * F.softplus(a[:1].to(dtype) + layer.dt_bias.to(dtype))
     beta = b[:1].sigmoid()
     state = cache["state"]
+    # The prefill recurrence hands back its state in its own working precision
+    # (FP32 from the fused kernel); decode in that precision, cast on the way out.
+    q, k, v = (t.to(state.dtype) for t in (q, k, v))
     q = q * torch.rsqrt(q.square().sum(-1, keepdim=True) + 1e-6) * d**-0.5
     k = k * torch.rsqrt(k.square().sum(-1, keepdim=True) + 1e-6)
     state.mul_(g.exp()[..., None, None])
