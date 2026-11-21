@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn import functional as F
-from PIL import Image
+from PIL import Image, ImageOps
 
 import distributed.megatron as P
 from distributed.accel import accel_type, device_module
@@ -113,13 +113,13 @@ def encode_spans(tokenizer,pieces):
 
 def context_image(path, checksum, processor):
     source = Path(path)
-    if checksum:
+    if checksum is not None:
         payload = source.read_bytes()
         if hashlib.sha256(payload).hexdigest() != checksum:
             raise ValueError('Validation image changed')
         source = io.BytesIO(payload)
     with Image.open(source) as image:
-        return processor(np.asarray(image.convert('RGB')))
+        return processor(np.asarray(ImageOps.exif_transpose(image).convert('RGB')))
 
 
 def encode_history(case, tokenizer, processor):
@@ -255,7 +255,7 @@ def score_reference(model,case,tokenizer,tokens,processor,vae):
     """Fixed teacher-forced caption NLL and one fixed-noise conditional flow loss."""
     if not case.get('references'):return {}
     cfg=model.cfg
-    with Image.open(case['image']) as image:processed=processor(np.asarray(image.convert('RGB')))
+    processed=context_image(case['image'],case.get('image_sha256'),processor)
     ids=tokenizer.encode(case['references'][0],add_special_tokens=False).ids
     batch=make_batch(cfg,tokens,ids,processed,'I2T',prune=False,tokenizer=tokenizer).to(accel_type())
     hidden=backbone(model,batch)
@@ -307,8 +307,8 @@ def caption(model,case,tokenizer,tokens,processor):
         source=video.get('frames_path') or video.get('path') or case.get('video_path','')
     else:
         path=Path(case['image'])
-        if hashlib.sha256(path.read_bytes()).hexdigest()!=case['image_sha256']:raise ValueError('Validation image changed')
-        with Image.open(path) as image:processed=processor(np.asarray(image.convert('RGB')))
+        if not case.get('image_sha256'):raise ValueError('Validation caption image requires its SHA-256')
+        processed=context_image(path,case['image_sha256'],processor)
         sequence=None;source=case['image']
     emitted=[]
     # A suite prompt is a user instruction, not the start of the answer. Feeding
@@ -360,7 +360,7 @@ def generate(model,case,tokenizer,tokens,processor,vae,output):
     guidance=case.get('guidance',1. if cfg.renderer=='wan' else 3.)
     s_ctx, s_ins = case.get('s_ctx', guidance), case.get('s_ins', guidance)
     limit = torch.finfo(torch.float32).max  # guidance is applied to FP32 velocities
-    if not all(type(s) in (int, float) and -limit <= s <= limit for s in (s_ctx, s_ins)):
+    if not all(type(s) in (int, float) and -limit <= s <= limit for s in (guidance, s_ctx, s_ins)):
         raise ValueError('Guidance scales must be finite FP32 numbers')
     split = s_ctx != s_ins
     if split and (cfg.renderer != 'wan' or cfg.cfg_null_condition != 'empty'):

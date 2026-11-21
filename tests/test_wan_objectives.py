@@ -440,6 +440,35 @@ def test_malformed_history_flags_cannot_hide_a_source_image(setup):
         make_history_batch(replace(batch,generation_image_indices=torch.empty(0,dtype=torch.long)),cfg)
 
 
+def test_validation_source_and_history_images_match_native_exif_orientation(tmp_path):
+    import hashlib
+    from PIL import Image
+    from evaluations.sampling import context_image, encode_history
+
+    image=Image.fromarray(np.random.default_rng(301).integers(0,256,(48,80,3),dtype=np.uint8))
+    exif=Image.Exif()
+    exif[274]=6  # display the stored image rotated 90 degrees clockwise
+    path=tmp_path/'rotated.jpg'
+    image.save(path,exif=exif)
+    item=dict(path=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    stream=object.__new__(DocumentStream)
+    stream.images_preprocessed=False
+    expected=stream._read_image(dict(item))
+    assert expected.shape==(80,48,3)
+    with Image.open(path) as stored:
+        np.testing.assert_array_equal(expected,np.asarray(stored.transpose(Image.Transpose.ROTATE_270)))
+    for checksum in (None,item['sha256']):
+        np.testing.assert_array_equal(context_image(path,checksum,np.copy),expected)
+    tokenizer=SimpleNamespace(encode=lambda *a,**kw:SimpleNamespace(ids=[11]))
+    history=encode_history(dict(history=[dict(kind='image',role='user',turn=0,image_index=0)],images=[item]),
+                           tokenizer,np.copy)
+    np.testing.assert_array_equal(next(e['prepared'] for e in history if e['type']=='image'),expected)
+    with pytest.raises(ValueError,match='changed'):
+        context_image(path,'0'*64,np.copy)
+    with pytest.raises(ValueError,match='changed'):
+        context_image(path,'',np.copy)
+
+
 @pytest.mark.parametrize('query_mode', ['native', 'fixed'])
 def test_sampling_scales_share_positive_geometry_and_skip_redundant_forwards(setup, tmp_path, monkeypatch, query_mode):
     from PIL import Image
@@ -527,3 +556,5 @@ def test_sampling_scales_share_positive_geometry_and_skip_redundant_forwards(set
     for invalid in (float('nan'), float('inf'), 10**400, True):
         with pytest.raises(ValueError, match='finite'):
             run('T2I', dict(s_ctx=invalid), [], 0.)
+    with pytest.raises(ValueError, match='finite'):
+        run('T2I', dict(guidance=float('nan'),s_ctx=1.,s_ins=2.), [], 0.)
