@@ -117,7 +117,9 @@ Ascend 910B 图像 CQ 的 GDN 层前向加反向实测（含 warmup，12 次计�
 - `model.query_interaction`（`--query-interaction`）：`none` 时每个视觉 Q 只读 C；`bidirectional` 时同一目标的 Q 还互相可见。attention 层对「该目标可见的 C 前缀＋同目标全部 Q」做一次 softmax；GDN 层为每个目标另开一条序列，重放其前缀写入后让全部 Q 先写后读，与内容流中图像块的规则相同。C 和文本 Q 不读视觉 Q，不同目标的 Q 互不可见。
 - `model.null_condition`（`--null-condition`）：`masked` 时空条件的 Q 不读任何 C；`bos` 时只读文档起始标记，Q 的坐标改为相对该标记的固定位置，因此空条件与文档内容和长度无关。无起始标记的自然交错文档仍按 `masked` 处理。
 
-位置只通过 rotary 进入注意力分数，分数只对 value 加权。因此相互独立的空条件 Q，以及只能互相读取的空条件 Q，输出都是同一个向量的重复；只有 `bidirectional` 与 `bos` 同时启用时，空条件才随位置变化。验证见 `tests/test_query_interaction.py` 和 `scripts/validation/validate_query_blocks_cuda.py`。
+本次三轮训练将原 bos 实验臂替换为 `--null-condition token`。训练和采样共用 tokenizer 中的 `<null_condition>` 和一个隔离的单 token 内容段。目标图的空条件 query 只读这一位置；双向模式下还读取同一目标图的 query。对话和自然交错格式使用同一条路径。token 使用预训练词表的空余行，由独立随机数生成器初始化，在 checkpoint 中保存。`--until-data-end --data-epochs 3` 按 epoch 更新目录打乱顺序，所有 DP rank 在各自语料耗尽后共同进入下一轮，学习率、优化器和 EMA 贯穿全程。
+
+位置只通过 rotary 进入注意力分数，分数只对 value 加权。因此相互独立的空条件 Q，以及只能互相读取的空条件 Q，输出都是同一个向量的重复；只有 `bidirectional` 与单 token 条件（`bos` 或 `token`）同时启用时，空条件才随位置变化。验证见 `tests/test_query_interaction.py` 和 `scripts/validation/validate_query_blocks_cuda.py`。
 
 query 数量和空条件策略本身不改变参数形状；本次两层 adapter 改变了权重与优化器形状，旧训练结果不再兼容：训练 checkpoint 仅接受 schema 7，推理快照仅接受 v2；不提供旧三层 adapter 转换。新 checkpoint 的精确 `--resume` 同时校验配置、数据游标、源码和实际启用的 kernel 选项。dynamic query 的语义、梯度、交错前缀及恢复规则有 CPU 回归覆盖，原固定 64 query 的 NPU 吞吐数字不能直接当作新配置的测速结果。
 

@@ -229,3 +229,46 @@ def test_joint_losses_train_through_interacting_queries(setup, null):
     assert gdn.conv1d.weight.grad.abs().sum() > 0
     projection = attention.kv_proj if cfg.qwen_fused_projections else attention.k_proj
     assert all(p.grad is not None and p.grad.abs().sum() > 0 for p in projection.parameters())
+
+
+@pytest.mark.parametrize('interaction', ['none', 'bidirectional'])
+@pytest.mark.parametrize('full_pack', [False, True])
+def test_shared_null_token_for_templated_and_natural_documents(setup, interaction, full_pack):
+    from data.batch_layout import content_view
+    from evaluations.sampling import make_null_batch
+
+    cfg, tokens = setup
+    cfg = replace(cfg, query_interaction=interaction, null_condition='token', null_token_id=29)
+    rows = [dict(id='talk', templated=True, elements=[text(11, 12), picture(non_cfg=True)]),
+            dict(id='natural', templated=False, elements=[text(16, 17, 18), picture(non_cfg=True)]),
+            dict(id='conditional', templated=True, elements=[text(19, 20), picture(non_cfg=False)])]
+    batch, receipt = Packer(Documents(rows), cfg, 96, tokens).next()
+    if full_pack:
+        batch, receipt = Packer(Documents(rows), cfg, receipt['occupied'], tokens).next()
+    assert len(receipt['documents']) == 3 and all(d['completed'] for d in receipt['documents'])
+    ids_before = batch.ids.clone()
+    view = content_view(batch, cfg)
+    plan = batch.mainline
+    anchor = plan.null_anchor
+    assert anchor == batch.ids.shape[1] - int(not full_pack)
+    assert view.ids[0, anchor] == 29 and view.segments.eq(view.segments[0, anchor]).sum() == 1
+    assert not batch.ids.eq(29).any()
+    # Use the real forward/readout so gradients include the private token's embedding.
+    model = JointModel(cfg).eval()
+    def features(batch):
+        hidden = model.backbone(batch, reference=True)
+        return batch.mainline.gather_image_conditions(hidden, batch.generation_image_indices)
+    first = features(batch)
+    torch.testing.assert_close(first[0], first[1], atol=2e-5, rtol=2e-5)
+    loss = first[:2].square().mean()
+    gradient, = torch.autograd.grad(loss, model.embedding.weight)
+    assert gradient[29].abs().sum() > 0
+    assert gradient[[tokens['bos'], 11, 12, 16, 17, 18]].count_nonzero() == 0
+    null_batch = make_null_batch(batch, cfg)
+    torch.testing.assert_close(features(null_batch)[:2], first[:2], atol=2e-5, rtol=2e-5)
+    with torch.no_grad():
+        model.embedding.weight[29].add_(0.5)
+    changed = features(batch)
+    assert not torch.allclose(changed[0], first[0])
+    torch.testing.assert_close(changed[2], first[2], atol=1e-6, rtol=1e-6)
+    assert torch.equal(batch.ids, ids_before)

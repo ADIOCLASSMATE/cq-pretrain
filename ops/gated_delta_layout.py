@@ -60,6 +60,7 @@ def build_delta_plan(batch, plan, cfg):
         raise ValueError("Prepare Qwen3.5 CQ plans on CPU, microbatch=1")
     s = batch.ids.shape[1]
     keys = s
+    null_anchor = getattr(plan, "null_anchor", -1)
     nq = len(plan.query_positions)
     sigmas = batch.sigma[0].tolist()
     segments = batch.segments[0].tolist()
@@ -86,6 +87,8 @@ def build_delta_plan(batch, plan, cfg):
         sigma = sigmas[p] if read_sigmas is None else read_sigmas[j]
         if unconditional[j] or (segment < 0 and read_sigmas is not None):
             sigma = None  # Empty prefix also for documents with a nonzero first rank.
+        elif p == null_anchor and sigma == 1:
+            pass  # Read after the singleton segment's only write.
         elif read_sigmas is not None and not 0 <= sigma <= sigmas[p]:
             raise ValueError("A query cutoff cannot read past its physical position")
         query_by_doc.setdefault(max(0, segment), {}).setdefault(sigma, []).append((j, keys + j))
@@ -103,6 +106,8 @@ def build_delta_plan(batch, plan, cfg):
         groups = {}
         for rank, index in sorted(items):
             groups.setdefault(rank, []).append(index)
+        if null_anchor >= 0 and items == [(0, null_anchor)]:
+            groups[1] = []  # Terminal reads see the token and its convolution history.
         queries = query_by_doc.get(doc, {})
         # A numerical cutoff can lie between writes (including zero in a
         # later packed document). Read just before the first rank >= cutoff.

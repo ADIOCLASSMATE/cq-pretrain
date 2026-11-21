@@ -31,9 +31,10 @@ class ModelConfig(RuntimeConfig):
     #   query_interaction: "none" = every visual Q reads C alone (baseline);
     #     "bidirectional" = the Qs of one target also read each other.
     #   null_condition: "masked" = an unconditional Q reads no C;
-    #     "bos" = it reads exactly the document's opening token.
+    #     "bos" reads the document opener; "token" reads a private <null_condition>.
     query_interaction: str = "none"
     null_condition: str = "masked"
+    null_token_id: int | None = None
     wan_assets: str = "/inspire/sj-ssd3/project/high-dimensionaldata/public/models/Wan2.1-T2V-1.3B"
     wan_vae_assets: str = "/inspire/sj-ssd3/project/high-dimensionaldata/public/models/Wan2.1-VAE"
     wan_freq_dim: int = 256
@@ -74,8 +75,10 @@ class ModelConfig(RuntimeConfig):
             raise ValueError("content_visibility must be causal or visual_block")
         if self.query_interaction not in ("none", "bidirectional"):
             raise ValueError("query_interaction must be none or bidirectional")
-        if self.null_condition not in ("masked", "bos"):
-            raise ValueError("null_condition must be masked or bos")
+        if self.null_condition not in ("masked", "bos", "token"):
+            raise ValueError("null_condition must be masked, bos or token")
+        if self.null_token_id is not None and not 0 <= self.null_token_id < self.vocab_size:
+            raise ValueError("Invalid null condition token id")
         if tp not in (1, 2, 4):
             raise ValueError("Supported TP sizes: 1, 2, 4")
         if self.linear_heads % tp or (self.linear_value_heads or self.linear_heads) % tp:

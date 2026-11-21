@@ -9,11 +9,27 @@ from models.cq_layout import MainlinePlan
 from ops.gated_delta_layout import build_delta_plan, rope_tables
 
 
+def uses_null_token(batch, cfg):
+    return (getattr(cfg, "null_condition", "masked") == "token"
+            and batch.generation_unconditional is not None and bool(batch.generation_unconditional.any()))
+
+
 def content_view(batch, cfg):
     if cfg.content_visibility == "causal":
-        ranks = torch.arange(batch.ids.shape[1]).expand_as(batch.sigma)
-        return replace(batch, sigma=ranks)
-    return batch
+        batch = replace(batch, sigma=torch.arange(batch.ids.shape[1]).expand_as(batch.sigma))
+    if not uses_null_token(batch, cfg):
+        return batch
+    if cfg.null_token_id is None:
+        raise ValueError("The tokenizer must register <null_condition> for token conditioning")
+    # Use a padding slot when possible. A completely occupied pack gets one
+    # internal backbone slot; the data pack, labels and all real indices stay intact.
+    anchor = batch.ids.shape[1] - int(batch.segments[0, -1] < 0)
+    def append(tensor, value):
+        return torch.cat((tensor[:, :anchor], torch.full_like(tensor[:, :1], value)), dim=1)
+    return replace(batch, ids=append(batch.ids, cfg.null_token_id),
+                   segments=append(batch.segments, int(batch.segments.max()) + 1),
+                   sigma=append(batch.sigma, 0), row_col=append(batch.row_col, 0),
+                   image_queries=append(batch.image_queries, False))
 
 
 def attach_cq_predicate(batch, plan, valid, unconditional=None):
@@ -56,8 +72,10 @@ def build_plan(batch, cfg):
     """One ragged query plan for both images and videos; understanding has no visual Q."""
     if batch.ids.device.type != "cpu" or batch.ids.shape[0] != 1:
         raise ValueError("Unified Wan training uses CPU-planned CQ_IT with microbatch=1")
+    private_null = uses_null_token(batch, cfg)
     batch = content_view(batch, cfg)
     s = batch.ids.shape[1]
+    null_anchor = s - 1 if private_null else -1
     spans = [x[x.ge(0)] for x in batch.image_indices]
     text = batch.text_indices
     selected = batch.generation_image_indices
@@ -119,11 +137,18 @@ def build_plan(batch, cfg):
             if batch.image_queries[0, read_position:span[0]].any():
                 raise ValueError("An instruction cutoff cannot discard an intervening visual")
         read_sigma[rows] = batch.sigma[0, read_position]
+        query_position = int(span[0])
         if batch.generation_unconditional is not None and batch.generation_unconditional[i]:
             opener = -1
             if null_at_opener and batch.generation_null_positions is not None:
                 opener = int(batch.generation_null_positions[i])
-            if opener >= 0:
+            if private_null:
+                # The singleton segment reads only itself. Its state is shared
+                # by all dropped targets regardless of their document format.
+                query_position = null_anchor
+                read_sigma[rows] = 1
+                coordinates = coordinates - coordinates[0, 0] + 1
+            elif opener >= 0:
                 # Read exactly the document opener. Its token, position and
                 # state are the same in every document, so nothing leaks; the
                 # Q coordinates are re-based so their offset to it is fixed too.
@@ -138,7 +163,7 @@ def build_plan(batch, cfg):
             # C visible to this target is one contiguous prefix of its document:
             # ranks never decrease along positions, and Q reads strictly below
             # its cutoff. The same range drives both attention and GDN.
-            document = (batch.segments[0] == batch.segments[0, span[0]]).nonzero().flatten()
+            document = (batch.segments[0] == batch.segments[0, query_position]).nonzero().flatten()
             first, last = int(document[0]), int(document[-1]) + 1
             visible = batch.sigma[0, first:last] < read_sigma[start]
             count = 0 if unconditional[start] else int(visible.sum())
@@ -146,7 +171,7 @@ def build_plan(batch, cfg):
                 raise ValueError("A bidirectional query block needs a contiguous visible prefix")
             blocks.append((s + start, s + start + n, first, first + count))
             block_rows[rows] = True
-        positions.append(span[0].repeat(n))
+        positions.append(torch.full((n,), query_position, dtype=torch.long))
         ropes.append(coordinates[:, :, None])
         outputs.append(conditions[i, :n])
     qpos = torch.cat((text, *positions))
@@ -165,7 +190,7 @@ def build_plan(batch, cfg):
         output_size=offset,
         query_unconditional=unconditional,
         query_read_sigma=read_sigma,
-        query_blocks=tuple(blocks),
+        query_blocks=tuple(blocks), null_anchor=null_anchor,
     )
     attach_cq_predicate(batch, plan, valid, hidden_from_content)
     return finalize_plan(batch, cfg, plan)

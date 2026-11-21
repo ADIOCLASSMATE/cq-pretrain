@@ -40,7 +40,7 @@ def parse_args(argv=None):
     parser.add_argument('--visual-query-mode',choices=('native','fixed'))
     parser.add_argument('--query-interaction',choices=('none','bidirectional'),
                         help='Ablation: let the visual queries of one target read each other (model.query_interaction)')
-    parser.add_argument('--null-condition',choices=('masked','bos'),
+    parser.add_argument('--null-condition',choices=('masked','bos','token'),
                         help='Ablation: what an unconditional visual query reads (model.null_condition)')
     parser.add_argument('--tp', type=int, default=1)
     parser.add_argument('--sequence-length', type=int, default=8192)
@@ -319,6 +319,16 @@ def main():
     model = model.to(device=ACCEL).train()
     if args.init_checkpoint and not args.resume:
         loaded_weights=checkpoint_io.initialize_model(args.init_checkpoint,model,cfg)
+    if cfg.null_token_id is not None and not (args.resume or args.init_checkpoint):
+        # Initialize the extension row once, with the same private RNG in every arm.
+        first=getattr(model.embedding,'vocab_start_index',0)
+        local=cfg.null_token_id-first
+        if 0 <= local < model.embedding.weight.shape[0]:
+            generator=torch.Generator(device='cpu').manual_seed(args.seed)
+            value=torch.randn(cfg.width,generator=generator,dtype=torch.float32)*0.02
+            with torch.no_grad():
+                model.embedding.weight[local].copy_(value)
+        startup['initialized_null_token_id']=cfg.null_token_id
     startup['weights_to_device_seconds'] = time.perf_counter()-startup_begin
     if rank == 0:print(json.dumps(dict(startup=startup)),flush=True)
     if args.data_root and args.data_mode == 'B':

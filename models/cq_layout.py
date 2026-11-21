@@ -28,6 +28,7 @@ class MainlinePlan:
     # target. Rows index the [C ; Q] hidden sequence, keys are the contiguous C
     # prefix that target may read. Those rows read [prefix ; their own block].
     query_blocks: tuple = ()
+    null_anchor: int = -1  # Shared private one-token content segment in this plan.
 
     def gather_image_conditions(self, hidden, generation_image_indices):
         """Return one CQ row per generation target, in the renderer's sample order."""

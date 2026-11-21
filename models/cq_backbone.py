@@ -10,7 +10,11 @@ def backbone(model, batch, reference=False, vision_features=None, cache=None):
     b, s = batch.ids.shape
     if plan is None:
         raise ValueError("Batch must be prepared with a CQ plan")
-    content = model.embedding(batch.ids).reshape(-1, cfg.width)
+    ids = batch.ids
+    if plan.null_anchor >= 0:
+        ids = torch.cat((ids[:, :plan.null_anchor], ids.new_full((b, 1), cfg.null_token_id)), dim=1)
+        s = ids.shape[1]
+    content = model.embedding(ids).reshape(-1, cfg.width)
     if len(batch.image_indices):
         if batch.vision is None:
             raise ValueError("Qwen vision input is missing")

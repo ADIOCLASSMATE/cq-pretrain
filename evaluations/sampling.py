@@ -63,7 +63,9 @@ def save_visual(frames,path,fps):
 
 def prune_queries(batch,cfg,keep):
     """CQ never writes KV/GDN state: retain only the requested readouts."""
-    plan=batch.mainline;s=batch.ids.shape[1]
+    plan=batch.mainline
+    view=content_view(batch,cfg)
+    s=view.ids.shape[1]
     keep=keep.nonzero().flatten() if keep.dtype==torch.bool else keep
     rows=torch.cat((torch.arange(s),s+keep))
     same_rows = len(keep) == len(plan.query_positions) and torch.equal(keep, torch.arange(len(keep)))
@@ -86,7 +88,7 @@ def prune_queries(batch,cfg,keep):
         # predicate has different row indices and must not be reused here.
         cq_predicate=plan.cq_predicate if same_rows else None,
         cq_mask=plan.cq_mask[:,:,rows].contiguous(),cq_valid=plan.cq_valid[:,rows],cq_plan=None)
-    batch.mainline=finalize_plan(content_view(batch,cfg),cfg,plan)
+    batch.mainline=finalize_plan(view,cfg,plan)
     return batch
 
 

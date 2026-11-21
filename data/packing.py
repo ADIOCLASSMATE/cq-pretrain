@@ -50,7 +50,10 @@ def token_contract(root, cfg):
     added = {value['content']: int(key) for key, value in config['added_tokens_decoder'].items()}
     required = {'bos': '<|im_start|>', 'eos': '<|endoftext|>', 'boi': '<|vision_start|>',
                 'eoi': '<|vision_end|>', 'image': '<|image_pad|>', 'text_mask': '<|fim_pad|>'}
+    if '<null_condition>' in added or cfg.null_condition == 'token':
+        required['null_condition'] = '<null_condition>'
     tokens = {name: added[text] for name, text in required.items()}
+    cfg.null_token_id = tokens.get('null_condition')
     if max(tokens.values()) >= cfg.vocab_size:
         raise ValueError('Model vocabulary cannot represent the selected checkpoint tokenizer IDs')
     cfg.text_mask_token_id, cfg.image_mask_token_id = tokens['text_mask'], tokens['image']
