@@ -90,11 +90,26 @@ def save(path, model, optimizer, step, config, topology, training_state=None, da
     dist.barrier()
 
 
+# Activation scheduling only: what is recomputed and how the DiT and the text
+# loss are chunked. None of these changes the model, the objective or the data
+# stream, so an exact resume may change them -- for instance to recompute more
+# after an out-of-memory failure, or to use spare memory once it is measured.
+EXECUTION_FIELDS = frozenset({
+    'checkpoint_backbone', 'checkpoint_dit', 'checkpoint_backbone_layers', 'checkpoint_dit_layers',
+    'keep_attention_activations', 'checkpoint_vision', 'ce_chunk',
+    'generation_token_budget', 'generation_microbatch_images'})
+
+
+def resume_config(config):
+    """The part of a run configuration an exact resume must reproduce."""
+    return {k: v for k, v in config.items() if k not in EXECUTION_FIELDS}
+
+
 def check_resume_contract(manifest, current, training_state):
     saved_config = manifest['config']
     # Checkpoints predating per-visual RF sampling used a single draw.
     defaults = {'rf': 1, 'timestep_shift': 1.0}
-    if {**defaults, **saved_config} != {**defaults, **current}:
+    if resume_config({**defaults, **saved_config}) != resume_config({**defaults, **current}):
         raise ValueError('Resume model configuration differs from the checkpoint')
     saved = manifest.get('training_state')
     if saved != training_state:

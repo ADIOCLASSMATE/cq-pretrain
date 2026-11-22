@@ -12,7 +12,7 @@ import time
 import torch.distributed as dist
 
 import distributed.megatron as P
-from utils.checkpoint import _save_file
+from utils.checkpoint import _save_file, resume_config
 from utils.checkpoint_catalog import durable_json, fsync_directory
 
 
@@ -104,8 +104,12 @@ def save(path, model, wrapped, step, config, topology, ema=None, provenance=None
             existing = inspect_snapshot(root)
             # DP and attempt provenance can change after a resume; neither alters
             # these replicated model tensors. Never rewrite an existing commit.
-            for key in ('step', 'config', 'weight_sources'):
-                if existing[key] != specification[key]:
+            # Activation scheduling may change across a resume (see resume_config).
+            same = dict(step=existing['step'] == specification['step'],
+                        config=resume_config(existing['config']) == resume_config(specification['config']),
+                        weight_sources=existing['weight_sources'] == specification['weight_sources'])
+            for key, equal in same.items():
+                if not equal:
                     raise ValueError(f'Committed evaluation snapshot differs: {key}')
             if existing['topology']['tp'] != tp:
                 raise ValueError('Committed evaluation snapshot differs: TP size')

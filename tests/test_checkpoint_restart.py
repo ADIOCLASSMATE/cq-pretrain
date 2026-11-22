@@ -143,3 +143,26 @@ class CheckpointRestartTests(unittest.TestCase):
 
 
 if __name__ == '__main__':unittest.main()
+
+
+def test_resume_accepts_new_activation_scheduling_only():
+    import pytest
+    from configs.config import tiny_config
+    from data.stream import resume_signature
+    from utils.checkpoint import check_resume_contract
+    saved = tiny_config(checkpoint_backbone=True, checkpoint_dit=True, generation_token_budget=8192).to_dict()
+    state = dict(seed=42)
+    manifest = dict(config=saved, training_state=state)
+    lighter = tiny_config(checkpoint_backbone=False, checkpoint_backbone_layers=2, keep_attention_activations=1,
+                          checkpoint_dit=False, checkpoint_dit_layers=1, generation_token_budget=4096, ce_chunk=8)
+    check_resume_contract(manifest, lighter.to_dict(), state)
+    for changed in (dict(rf=2), dict(timestep_shift=3.0), dict(visual_uncond_probability=.2), dict(width=48)):
+        with pytest.raises(ValueError, match='configuration differs'):
+            check_resume_contract(manifest, tiny_config(**changed).to_dict(), state)
+    signature = dict(seed=42, generation=dict(renderer='wan', token_budget=8192, rf=1),
+                     packing=dict(preserve_documents=True, generation_microbatch_images=0))
+    other = dict(signature, generation=dict(signature['generation'], token_budget=4096),
+                 packing=dict(signature['packing'], generation_microbatch_images=8))
+    assert resume_signature(other) == resume_signature(signature)
+    assert resume_signature(dict(signature, seed=43)) != resume_signature(signature)
+    assert signature['generation']['token_budget'] == 8192  # the recorded signature is untouched

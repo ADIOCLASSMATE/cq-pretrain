@@ -9,7 +9,9 @@ State lives under RUN/benchmarks:
     controller.log              one line per decision
 A step's snapshot is deleted once all of its tasks have RESULTS.json (unless --keep).
 Low-priority jobs can be preempted; a job that ends without RESULTS.json is submitted
-again (it resumes from its partial outputs) up to job.max_attempts times.
+again (it resumes from its partial outputs) up to job.max_attempts times. Submission
+stops early, with an ATTENTION file, once two attempts in a row ended without adding
+any output file: that is a failure, not a preemption.
 Create RUN/benchmarks/STOP to stop submitting; running jobs are left alone.
 """
 import argparse
@@ -46,6 +48,10 @@ def write_json(path, value):
     temporary = path.with_name(path.name + '.tmp')
     temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + '\n')
     temporary.replace(path)
+
+
+def count_files(path):
+    return sum(len(files) for _, _, files in os.walk(path))
 
 
 def committed(path):
@@ -153,6 +159,8 @@ class Controller:
             return record
         if data.get('status') != record.get('status'):
             self.log('status', name=record['name'], status=data.get('status'), priority=data.get('priority_level'))
+            if str(data.get('status', '')).upper() in TERMINAL:
+                record['files_at_end'] = count_files(record['output'])
         record.update(status=data.get('status'), priority_level=data.get('priority_level'), observed=now())
         write_json(self.root / 'jobs' / f'{record["name"]}.json', record)
         return record
@@ -165,11 +173,13 @@ class Controller:
         arguments = ['create', '--name', name, '--workspace', j['workspace'], '--project', j['project'],
                      '--group', group, '--quota', self.quotas[group], '--nodes', '1', '--image', j['image'],
                      '--priority', str(j['priority']), '--shm-size', str(j['shm_size']),
-                     '--auto-fault-tolerance', '--fault-tolerance-max-retry', '100',
-                     '--fault-tolerance-retry-interval', '60', '--env', f'NPROC_PER_NODE={j["gpus"]}',
+                     # No platform auto-restart: a deterministic failure would loop in
+                     # place. This controller resubmits and stops when nothing progresses.
+                     '--env', f'NPROC_PER_NODE={j["gpus"]}',
                      '--env', f'TRITON_CACHE_DIR={self.root / ".triton"}', '--command', command]
         record = dict(name=name, task=task, step=step, attempt=attempt, snapshot=str(snapshot), output=str(out),
-                      group=group, quota=self.quotas[group], command=command, submitted=now(), status='SUBMITTED')
+                      group=group, quota=self.quotas[group], command=command, submitted=now(), status='SUBMITTED',
+                      files_at_submit=count_files(out))
         if self.dry:
             self.log('dry-run submit', **record)
             return record
@@ -233,6 +243,16 @@ class Controller:
                 if any(r in active for r in mine) or stop:
                     continue
                 attempt = 1 + max((r['attempt'] for r in mine), default=-1)
+                ran = [r for r in sorted(mine, key=lambda r: r['attempt']) if r.get('reason') != 'queue_timeout']
+                stalled = len(ran) >= 2 and all('files_at_end' in r and r['files_at_end'] <= r.get('files_at_submit', 0)
+                                                for r in ran[-2:])
+                if stalled:
+                    attention = self.root / f'ATTENTION-{task}-s{step}.json'
+                    if not attention.exists():
+                        write_json(attention, dict(time=now(), task=task, step=step, reason='no progress in two attempts',
+                                                   jobs=[r['name'] for r in ran[-2:]]))
+                        self.log('stopped: no progress in two attempts', task=task, step=step)
+                    continue
                 if attempt >= self.job['max_attempts']:
                     attention = self.root / f'ATTENTION-{task}-s{step}.json'
                     if not attention.exists():

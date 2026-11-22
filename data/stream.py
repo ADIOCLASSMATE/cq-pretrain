@@ -13,6 +13,16 @@ from data.sources import open_catalog, training_rows
 from data.images import ImageReader
 from data.tokenizer import tokenizer_root, tokenizer_metadata
 from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, image_loss_allowed, occurrence_flags, occurrence_images
+
+
+def resume_signature(signature):
+    """The data identity a resume must match. DiT chunk limits are recorded but
+    only schedule the renderer's work; they never change which documents,
+    images or targets the stream produces."""
+    value = copy.deepcopy(signature)
+    value.get('generation', {}).pop('token_budget', None)
+    value.get('packing', {}).pop('generation_microbatch_images', None)
+    return value
 import data.chat as chat
 import data.captions as captions
 import data.task_groups as task_groups
@@ -70,7 +80,7 @@ class DocumentStream:
             self.signature['vision']={'encoder':'qwen35','min_pixels':cfg.vision_min_pixels,
                                       'max_pixels':cfg.vision_max_pixels,'sequence_length':sequence_length}
         if state:
-            if state['signature'] != self.signature:
+            if resume_signature(state['signature']) != resume_signature(self.signature):
                 raise ValueError('Data identity/view/topology/seed/epoch differs on resume')
             self.position = copy.deepcopy(state['position'])
         self.total = len(range(rank, self.catalog.meta['units'], world))
