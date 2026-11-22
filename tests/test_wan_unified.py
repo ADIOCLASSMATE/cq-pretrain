@@ -305,3 +305,27 @@ def test_adapted_native_checkpoint_keeps_bias_and_second_layer(tmp_path):
         if name!='text_embedding.0.weight':
             torch.testing.assert_close(value,state[name],rtol=0,atol=0)
     assert not any(name.startswith('condition_proj') for name,_ in adapted.named_parameters())
+
+
+def test_uniform_packed_attention_equals_the_per_visual_loop():
+    import torch.nn.functional as F
+    from models.generator_wan21 import packed_attention
+    torch.manual_seed(0)
+    for draws, n, lq, lk, shared in [(1, 3, 8, 8, False), (2, 4, 6, 6, False), (1, 3, 8, 5, True), (3, 2, 4, 7, True)]:
+        q = torch.randn(draws, n * lq, 2, 16, dtype=torch.float64)
+        kd = 1 if shared else draws
+        k = torch.randn(kd, n * lk, 2, 16, dtype=torch.float64)
+        v = torch.randn(kd, n * lk, 2, 16, dtype=torch.float64)
+        q_ends = tuple(lq * (i + 1) for i in range(n)); k_ends = tuple(lk * (i + 1) for i in range(n))
+        expected = []
+        for i in range(n):
+            a = q[:, i * lq:(i + 1) * lq]
+            a = a.reshape(1, -1, 2, 16) if shared else a
+            b, c = (t[:, i * lk:(i + 1) * lk].transpose(1, 2) for t in (k, v))
+            y = F.scaled_dot_product_attention(a.transpose(1, 2), b, c).transpose(1, 2)
+            expected.append(y.reshape(draws, lq, 2, 16))
+        expected = torch.cat(expected, dim=1).flatten(0, 1)
+        torch.testing.assert_close(packed_attention(q, k, v, q_ends, k_ends), expected, rtol=0, atol=1e-12)
+    # Unequal visuals still take the per-visual loop.
+    q = torch.randn(1, 14, 2, 16, dtype=torch.float64); k = torch.randn(1, 9, 2, 16, dtype=torch.float64)
+    assert packed_attention(q, k, k, (6, 14), (4, 9)).shape == (14, 2, 16)

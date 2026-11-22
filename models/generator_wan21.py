@@ -55,9 +55,32 @@ class RMSNorm(nn.Module):
         return (x.float() * torch.rsqrt(variance + self.eps)).to(x.dtype) * self.weight
 
 
+def _uniform(ends):
+    """Segment length when every packed segment has the same length, else None."""
+    size = ends[0]
+    return size if size > 0 and all(end == size * (i + 1) for i, end in enumerate(ends)) else None
+
+
 def packed_attention(q, k, v, q_ends, k_ends):
     """Self-attention batches independent draws. Cross-attention shares each visual's KV."""
     q, k = q.to(v.dtype), k.to(v.dtype)
+    n, lq, lk = len(q_ends), _uniform(q_ends), _uniform(k_ends)
+    if n > 1 and lq and lk:
+        # Same-size visuals (e.g. batched sampling at one resolution): one SDPA
+        # call over [visuals x draws] instead of one per visual; same per-row math.
+        draws, heads, dim = q.shape[0], q.shape[2], q.shape[3]
+        query = q.reshape(draws, n, lq, heads, dim)
+        if k.shape[0] == 1:
+            a = query.transpose(0, 1).reshape(n, draws * lq, heads, dim)
+            b, c = (t.reshape(n, lk, heads, dim) for t in (k, v))
+            y = F.scaled_dot_product_attention(a.transpose(1, 2), b.transpose(1, 2), c.transpose(1, 2))
+            y = y.transpose(1, 2).reshape(n, draws, lq, heads, dim).transpose(0, 1)
+        else:
+            a = query.reshape(draws * n, lq, heads, dim)
+            b, c = (t.reshape(draws * n, lk, heads, dim) for t in (k, v))
+            y = F.scaled_dot_product_attention(a.transpose(1, 2), b.transpose(1, 2), c.transpose(1, 2))
+            y = y.transpose(1, 2).reshape(draws, n, lq, heads, dim)
+        return y.reshape(draws, n * lq, heads, dim).flatten(0, 1)
     result = []
     qa = ka = 0
     for qb, kb in zip(q_ends, k_ends):

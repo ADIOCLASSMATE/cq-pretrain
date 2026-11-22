@@ -27,7 +27,7 @@ def _unit(x):
     return l2norm(flat)[:rows].reshape(shape)
 
 
-def chunk_gated_delta(q, k, v, g, beta, *, cu_seqlens):
+def chunk_gated_delta(q, k, v, g, beta, *, cu_seqlens, output_final_state=False):
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
 
     # FLA 0.4 takes [B,T,H,D] by default. The CPU
@@ -35,5 +35,5 @@ def chunk_gated_delta(q, k, v, g, beta, *, cu_seqlens):
     # order. g remains log-decay FP32; beta is the precomputed sigmoid.
     return chunk_gated_delta_rule(
         _unit(q), _unit(k), v, g=g, beta=beta.to(q.dtype),
-        use_qk_l2norm_in_kernel=False, cu_seqlens=cu_seqlens,
+        use_qk_l2norm_in_kernel=False, cu_seqlens=cu_seqlens, output_final_state=output_final_state,
     )

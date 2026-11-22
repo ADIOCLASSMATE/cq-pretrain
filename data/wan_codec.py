@@ -49,6 +49,18 @@ class WanVideoCodec:
         return (z - self.mean.to(z)) / self.std.to(z)
 
     @torch.no_grad()
+    def decode_batch(self, latents, chunk=8):
+        """Decode same-shape latents in batches; same per-sample result as decode()."""
+        parameter = next(self.vae.parameters())
+        videos = []
+        for start in range(0, len(latents), chunk):
+            raw = torch.stack([z.float() for z in latents[start:start + chunk]])
+            raw = raw * self.std.to(raw) + self.mean.to(raw)
+            with torch.autocast(parameter.device.type, enabled=False):
+                videos.extend(self.vae.decode(raw.to(parameter)).sample.float().clamp(-1, 1).unbind(0))
+        return videos
+
+    @torch.no_grad()
     def decode(self, latents):
         parameter = next(self.vae.parameters())
         videos = []

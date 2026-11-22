@@ -11,7 +11,7 @@ sampling:
   steps: 30
   guidance: 3.0
   shift: 3.0
-  batch: 8          # same-shape T2I cases per batched DiT call
+  batch: 50         # images per DiT batch (x2 with CFG); one FID class is 50 images
   vae_dtype: float32
 tasks: [qa, geneval, fid, vqav2]
 job:

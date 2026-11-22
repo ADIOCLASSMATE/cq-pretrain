@@ -272,7 +272,11 @@ def greedy_token(model,hidden):
 
 @torch.no_grad()
 def caption(model,case,tokenizer,tokens,processor):
-    cfg=model.cfg
+    return decode_caption(model,prepare_caption(model.cfg,case,tokenizer,tokens,processor),tokenizer,tokens)
+
+
+def prepare_caption(cfg,case,tokenizer,tokens,processor):
+    """CPU-only half of caption(): media decoding and the prefill pack. Safe in loader workers."""
     if case['task']=='V2T':
         processed,sequence=video_input(cfg,case)
         video=case.get('video',{})
@@ -282,21 +286,28 @@ def caption(model,case,tokenizer,tokens,processor):
         if not case.get('image_sha256'):raise ValueError('Validation caption image requires its SHA-256')
         processed=context_image(path,case['image_sha256'],processor)
         sequence=None;source=case['image']
-    emitted=[]
     # A suite prompt is a user instruction, not the start of the answer. Feeding
     # it as an assistant prefix made the model read its own instruction back and
     # immediately emit <|im_end|>, yielding an empty caption.
     instruction=case.get('prompt','').strip() or None
+    limit=case.get('max_new_tokens',48)
+    batch=(make_batch(cfg,tokens,[],processed,'I2T',tokenizer=tokenizer,instruction=instruction,sequence=sequence)
+           if limit else None)
+    return dict(batch=batch,limit=limit,source=source,case=case)
+
+
+@torch.no_grad()
+def decode_caption(model,prepared,tokenizer,tokens):
+    """Greedy decoding from a prepare_caption() pack: one fused prefill, then cached steps."""
+    case,limit=prepared['case'],prepared['limit']
+    emitted=[]
     reason='max_new_tokens'
     stops={tokens['eos'],tokens['boi']}
     end=tokenizer.token_to_id('<|im_end|>')
     if end is not None:stops.add(end)
     from models.decoding import CQDecoder
-    limit=case.get('max_new_tokens',48)
     if limit:
-        batch=make_batch(cfg,tokens,[],processed,'I2T',tokenizer=tokenizer,
-                         instruction=instruction,sequence=sequence)
-        decoder=CQDecoder(model,batch,limit)
+        decoder=CQDecoder(model,prepared['batch'],limit)
     for step in range(limit):
         hidden=decoder.hidden
         token=greedy_token(model,hidden)
@@ -306,7 +317,7 @@ def caption(model,case,tokenizer,tokens,processor):
         if step+1<limit:decoder.advance(token)
     return dict(text=tokenizer.decode(emitted,skip_special_tokens=False),token_ids=emitted,
                 stop_reason=reason,reference_captions=case.get('references',[]),
-                image=source,prompt=case.get('prompt',''))
+                image=prepared['source'],prompt=case.get('prompt',''))
 
 
 @torch.no_grad()

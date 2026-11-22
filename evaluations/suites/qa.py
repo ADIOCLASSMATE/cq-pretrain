@@ -12,8 +12,12 @@ import sys
 import types
 from zipfile import ZipFile
 
+import time
+
+import torch
 import torch.distributed as dist
 
+from evaluations.sampling import decode_caption, prepare_caption
 from utils.checkpoint_catalog import durable_json
 
 CHUNK = 32
@@ -23,6 +27,29 @@ LMMS_EVAL_REVISION = 'c969af54173a5b5393a6dfe8304dd87423fc9388'
 
 def rows(path):
     return [json.loads(line) for line in Path(path).read_text().splitlines()]
+
+
+class _Prepared(torch.utils.data.Dataset):
+    """Image decoding, resizing and prefill planning, done in loader worker processes."""
+
+    def __init__(self, items, runtime):
+        self.items, self.cfg = items, runtime.cfg
+        self.tokenizer, self.tokens, self.processor = runtime.tokenizer, runtime.tokens, runtime.processor
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, index):
+        chunk, case = self.items[index]
+        return chunk, prepare_caption(self.cfg, case, self.tokenizer, self.tokens, self.processor)
+
+
+def _worker(_):
+    torch.set_num_threads(1)
+
+
+def _identity(value):
+    return value
 
 
 def run(runtime, out, suite, benchmarks, limit=0):
@@ -42,18 +69,27 @@ def run(runtime, out, suite, benchmarks, limit=0):
     chunks = (len(questions) + CHUNK - 1) // CHUNK
     folder = out / 'raw'
     folder.mkdir(parents=True, exist_ok=True)
-    for k in range(rank, chunks, world):
-        path = folder / f'{k:05d}.json'
-        if path.exists():
-            continue
-        answers = []
-        for case in questions[k * CHUNK:(k + 1) * CHUNK]:
-            result = runtime.answer(case)
-            answers.append(dict(id=case['id'], text=result['text'], stop_reason=result['stop_reason'],
-                                token_ids=result['token_ids']))
-        durable_json(path, answers)
-        if k % 128 == 0:
-            print(f'step {runtime.step} {suite} chunk {k}/{chunks}', flush=True)
+    pending = [k for k in range(rank, chunks, world) if not (folder / f'{k:05d}.json').exists()]
+    items = [(k, case) for k in pending for case in questions[k * CHUNK:(k + 1) * CHUNK]]
+    workers = int(os.environ.get('CQ_EVAL_LOADER_WORKERS', '6'))
+    loader = torch.utils.data.DataLoader(_Prepared(items, runtime), batch_size=None, num_workers=workers,
+                                         collate_fn=_identity, worker_init_fn=_worker,
+                                         prefetch_factor=8 if workers else None)
+    answers, began, done = {}, time.perf_counter(), 0
+    for k, prepared in loader:
+        result = decode_caption(runtime.model, prepared, runtime.tokenizer, runtime.tokens)
+        case = prepared['case']
+        answers.setdefault(k, []).append(dict(id=case['id'], text=result['text'], stop_reason=result['stop_reason'],
+                                              token_ids=result['token_ids']))
+        size = len(questions[k * CHUNK:(k + 1) * CHUNK])
+        if len(answers[k]) == size:
+            durable_json(folder / f'{k:05d}.json', answers.pop(k))
+            done += size
+            if (done // CHUNK) % 64 == 1:
+                print(f'step {runtime.step} {suite} rank {rank}: {done}/{len(items)} answers, '
+                      f'{done / (time.perf_counter() - began):.1f}/s', flush=True)
+    if answers:
+        raise RuntimeError('Incomplete answer chunks left after the loader finished')
     dist.barrier()
     if rank == 0:
         predictions = [p for k in range(chunks) for p in json.loads((folder / f'{k:05d}.json').read_text())]

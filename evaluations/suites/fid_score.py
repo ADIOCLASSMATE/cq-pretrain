@@ -22,7 +22,7 @@ import adm_evaluator as adm
 adm.INCEPTION_V3_PATH=str(FID/'classify_image_graph_def.pb')
 tf.disable_v2_behavior()
 N=50000
-CHUNK=32
+CLASSES=1000
 def atomic_json(p,v):
     tmp=p.with_suffix('.tmp');tmp.write_text(json.dumps(v,indent=2)+'\n');tmp.replace(p)
 def score_one(out,session,input_batch,activations):
@@ -30,41 +30,38 @@ def score_one(out,session,input_batch,activations):
     if (out/'RESULTS.json').is_file():
         return
     feat=out/'features';feat.mkdir(exist_ok=True)
-    pending=set(range((N+CHUNK-1)//CHUNK))
+    pending=set(range(CLASSES))
     while pending:
-        ready=[]
-        for mark in (out/'ready').glob('*.json'):
-            idx=int(mark.stem)
-            if idx in pending:ready.append(idx)
+        ready=[int(mark.stem[1:]) for mark in (out/'ready').glob('c*.json') if int(mark.stem[1:]) in pending]
         if not ready:
             time.sleep(8);continue
-        for k in sorted(ready):
-            start,end=k*CHUNK,min(N,(k+1)*CHUNK);name=f'{k:05d}'
-            final=feat/f'{name}.npy';folder=out/'scratch'/name
+        for c in sorted(ready):
+            final=feat/f'c{c:04d}.npy';folder=out/'scratch'/f'c{c:04d}'
+            indices=[c+CLASSES*j for j in range(N//CLASSES)]
             if not final.is_file():
                 images=[]
-                for i in range(start,end):
+                for i in indices:
                     with Image.open(folder/f'{i:06d}.png') as im:
                         assert im.size==(512,512) and im.mode=='RGB'
                         images.append(np.ascontiguousarray(im))
-                values=session.run(activations,feed_dict={input_batch:np.stack(images).astype(np.float32)}).reshape(end-start,2048)
+                values=session.run(activations,feed_dict={input_batch:np.stack(images).astype(np.float32)}).reshape(len(indices),2048)
                 if not np.isfinite(values).all():raise ValueError('Non-finite Inception features')
                 temp=final.with_suffix('.partial')
                 with temp.open('wb') as w:np.save(w,values,allow_pickle=False)
                 temp.replace(final)
             data=np.load(final,mmap_mode='r')
-            assert data.shape==(end-start,2048)
-            for i in range(start,end):
+            assert data.shape==(len(indices),2048)
+            for i in indices:
                 f=folder/f'{i:06d}.png'
-                if i<1000 and f.is_file():
+                if i<CLASSES and f.is_file():
                     demo=out/'samples';demo.mkdir(exist_ok=True)
                     f.replace(demo/f.name)
                 elif f.is_file():f.unlink()
             if folder.is_dir():folder.rmdir()
-            pending.remove(k)
+            pending.remove(c)
     while not (out/'GENERATED.json').is_file():time.sleep(2)
     ref=json.loads((FID/'reference.json').read_text())
-    values=np.concatenate([np.load(x,mmap_mode='r') for x in sorted(feat.glob('*.npy'))])
+    values=np.concatenate([np.load(x,mmap_mode='r') for x in sorted(feat.glob('c*.npy'))])
     assert values.shape==(50000,2048) and np.isfinite(values).all()
     stats=adm.FIDStatistics(values.mean(axis=0),np.cov(values,rowvar=False))
     real=adm.FIDStatistics(np.load(FID/'mu.npy'),np.load(FID/'sigma.npy'))

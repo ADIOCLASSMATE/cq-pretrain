@@ -227,7 +227,15 @@ class GatedDelta(nn.Module):
         if cache is not None:
             if torch.is_grad_enabled():
                 raise ValueError("CQ state caching is inference-only")
-            y, state = recurrent_delta(q, k, v, g, beta, plan.event_bounds, True)
+            if x.device.type == "cuda":
+                # The fused chunk kernel returns every sequence's final state in
+                # FP32; the Python recurrence is the CPU oracle only.
+                from ops.cuda_gated_delta import chunk_gated_delta
+
+                y, state = chunk_gated_delta(q, k, v, g=g, beta=beta, cu_seqlens=plan.event_cu,
+                                             output_final_state=True)
+            else:
+                y, state = recurrent_delta(q, k, v, g, beta, plan.event_bounds, True)
             # Recurrent decode uses value-first state; only real C enters history.
             cache["state"] = state.transpose(-1, -2).contiguous()
             count = cfg.linear_conv_kernel - 1
