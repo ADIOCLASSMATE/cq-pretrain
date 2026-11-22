@@ -336,10 +336,11 @@ def generate_dit(model, case, tokenizer, tokens, processor):
     if not (type(guidance) in (int, float) and abs(guidance) <= torch.finfo(torch.float32).max):
         raise ValueError('Guidance must be a finite FP32 number')
     prompt_ids = tokenizer.encode(case['prompt'], add_special_tokens=False).ids
-    full = make_batch(cfg, tokens, prompt_ids, processed, 'T2I', tokenizer=tokenizer).to(accel_type())
-    null_batch = make_null_batch(full, cfg).to(accel_type()) if guidance != 1. else None
+    full = make_batch(cfg, tokens, prompt_ids, processed, 'T2I', tokenizer=tokenizer)
+    null_batch = make_null_batch(full, cfg) if guidance != 1. else None
+    full = full.to(accel_type())
     positive = _dit_condition(model, full)
-    null = _dit_condition(model, null_batch) if null_batch is not None else None
+    null = _dit_condition(model, null_batch.to(accel_type())) if null_batch is not None else None
     return positive[0], positive[1], positive[2], full.generation, null
 
 
@@ -388,7 +389,7 @@ def generate_batch_dit(model, conditions, cases, vae, output):
         raise ValueError('Cases in a batch must agree on whether they use a null branch')
     have_null = nulls[0] is not None
     if have_null:
-        nkv = dict(cached_kv=tuple(tuple(torch.cat(t) for t in zip(*layer)) for layer in zip(*(x['cached_kv'] for x in nulls))))
+        nkv = dict(cached_kv=tuple(tuple(torch.cat(t) for t in zip(*layer)) for layer in zip(*(x[2]['cached_kv'] for x in nulls))))
         nraw = torch.cat([x[0] for x in nulls]); nproj = torch.cat([x[1] for x in nulls])
     latents = [torch.randn(sum(lay.lengths), cfg.latent_channels * 4,
                generator=torch.Generator(device='cpu').manual_seed(c['seed'])) for lay, c in zip(layouts, cases)]
@@ -400,7 +401,7 @@ def generate_batch_dit(model, conditions, cases, vae, output):
     torch.cuda.synchronize() if torch.cuda.is_available() else None
     t0=_time.perf_counter()
     for i, (start, end) in enumerate(zip(sigmas[:-1], sigmas[1:])):
-        time = time_features[i:i + 1]
+        time = time_features[i:i + 1].expand(n, -1)
         velocity = predict(raw, projected, kv, latent, time)
         if have_null:
             uncond = predict(nraw, nproj, nkv, latent, time)
