@@ -23,6 +23,7 @@ from distributed.accel import accel_type, device_module
 from models.cq_backbone import backbone
 from data.batch_layout import build_plan, content_view, finalize_plan
 from data.packing import Packer, token_contract
+from data.generation import WanGenerationInputs
 import data.chat as chat
 
 
@@ -306,6 +307,123 @@ def caption(model,case,tokenizer,tokens,processor):
     return dict(text=tokenizer.decode(emitted,skip_special_tokens=False),token_ids=emitted,
                 stop_reason=reason,reference_captions=case.get('references',[]),
                 image=source,prompt=case.get('prompt',''))
+
+
+class _SingleCase(Exception):
+    pass
+
+
+@torch.no_grad()
+def _dit_condition(model, batch, features=None):
+    if features is None:
+        features = model.embedding.weight.new_zeros((len(batch.vision.content_indices), model.cfg.width))
+    hidden = backbone(model, batch, vision_features=features)
+    raw = batch.mainline.gather_image_conditions(hidden, batch.generation_image_indices)
+    projected = model.renderer.project_conditions(raw, batch.generation)
+    return raw, projected, dict(cached_kv=model.renderer.cache_condition_kv(projected))
+
+
+@torch.no_grad()
+def generate_dit(model, case, tokenizer, tokens, processor):
+    """Backbone conditioning for one T2I case; the DiT sampling is left to
+    generate_batch_dit so several cases share one packed DiT. Returns
+    (raw, projected, kv, layout, null) where null is the same tuple or None.
+    Only plain T2I (no EDIT context, no history, no split guidance) belongs here."""
+    cfg = model.cfg
+    if case['task'] != 'T2I' or case.get('history') or 's_ctx' in case or 's_ins' in case:
+        raise ValueError('generate_dit only covers plain T2I cases')
+    height, width = case['height'], case['width']
+    if min(height, width) < 16 or height % 16 or width % 16 or height * width > cfg.generation_max_pixels:
+        raise ValueError('Validation shape violates the training pixel/alignment cap')
+    processed = processor(np.zeros((height, width, 3), np.uint8))
+    guidance = case.get('guidance', 1.)
+    if not (type(guidance) in (int, float) and abs(guidance) <= torch.finfo(torch.float32).max):
+        raise ValueError('Guidance must be a finite FP32 number')
+    prompt_ids = tokenizer.encode(case['prompt'], add_special_tokens=False).ids
+    full = make_batch(cfg, tokens, prompt_ids, processed, 'T2I', tokenizer=tokenizer).to(accel_type())
+    null_batch = make_null_batch(full, cfg).to(accel_type()) if guidance != 1. else None
+    positive = _dit_condition(model, full)
+    null = _dit_condition(model, null_batch) if null_batch is not None else None
+    return positive[0], positive[1], positive[2], full.generation, null
+
+
+@torch.no_grad()
+def generate_batch_dit(model, conditions, cases, vae, output):
+    """Batch the DiT sampling + VAE decode of several same-shape T2I cases whose
+    backbone conditions were computed per case. DiT cross-attention is the bulk
+    of FID/GenEval runtime; the backbone prefix is small and stays per case.
+    Each case keeps its own seed, so results match generate() case-by-case."""
+    cfg = model.cfg
+    if len(cases) == 1:
+        # No batching benefit; run the per-case path so a trailing chunk matches
+        # generate() exactly.
+        raise _SingleCase
+    steps = cases[0].get('steps', 30); shift = cases[0].get('shift', 5.)
+    if steps < 1 or shift <= 0:
+        raise ValueError('Positive steps and shift required')
+    base = torch.linspace(1., 0., steps + 1)
+    sigmas = shift * base / (1 + (shift - 1) * base)
+    half = cfg.wan_freq_dim // 2
+    phase = (sigmas[:-1] * 1000).double()[:, None] * 10000 ** (-torch.arange(half, dtype=torch.float64) / half)
+    time_features = torch.cat((phase.cos(), phase.sin()), -1).to(device=accel_type(), dtype=torch.float32)
+
+    # Merge the per-case single-image DiT layouts into one packed layout. All
+    # cases share the query count (same resolution), so condition_indices stay
+    # regular. latents start from each case's own seeded draw.
+    layouts = [c[3] for c in conditions]  # each case's generation layout
+    n = len(cases)
+    lengths = tuple(x for lay in layouts for x in lay.lengths)
+    query_counts = tuple(x for lay in layouts for x in lay.query_counts)
+    counts = max(query_counts)
+    import numpy as _np
+    video_sample_indices = torch.cat([lay.video_sample_indices + i for i, lay in enumerate(layouts)])
+    condition_indices = torch.cat([lay.condition_indices + i * counts for i, lay in enumerate(layouts)])
+    cos = torch.cat([lay.cos for lay in layouts]); sin = torch.cat([lay.sin for lay in layouts])
+    merged = WanGenerationInputs(pixels=(), grids=tuple(g for lay in layouts for g in lay.grids),
+        lengths=lengths, query_counts=query_counts,
+        video_ends=tuple(_np.cumsum(lengths).tolist()), text_ends=tuple(_np.cumsum(query_counts).tolist()),
+        video_sample_indices=video_sample_indices, condition_indices=condition_indices,
+        loss_weights=torch.empty(0), cos=cos, sin=sin,
+        time_features=time_features.repeat(len(cases), 1))
+    raw = torch.cat([c[0] for c in conditions]); projected = torch.cat([c[1] for c in conditions])
+    kv = dict(cached_kv=tuple(tuple(torch.cat(t) for t in zip(*layer)) for layer in zip(*(c[2]['cached_kv'] for c in conditions))))
+    nulls = [c[4] for c in conditions]
+    if any((x is None) != (nulls[0] is None) for x in nulls):
+        raise ValueError('Cases in a batch must agree on whether they use a null branch')
+    have_null = nulls[0] is not None
+    if have_null:
+        nkv = dict(cached_kv=tuple(tuple(torch.cat(t) for t in zip(*layer)) for layer in zip(*(x['cached_kv'] for x in nulls))))
+        nraw = torch.cat([x[0] for x in nulls]); nproj = torch.cat([x[1] for x in nulls])
+    latents = [torch.randn(sum(lay.lengths), cfg.latent_channels * 4,
+               generator=torch.Generator(device='cpu').manual_seed(c['seed'])) for lay, c in zip(layouts, cases)]
+    latent = torch.cat(latents).to(accel_type())
+    def predict(raw, projected, kv, lat, time):
+        return model.renderer.predict(lat, raw, time, merged, projected, **kv).float()
+    guidance = cases[0].get('guidance', 1.)
+    for i, (start, end) in enumerate(zip(sigmas[:-1], sigmas[1:])):
+        time = time_features[i:i + 1]
+        velocity = predict(raw, projected, kv, latent, time)
+        if have_null:
+            uncond = predict(nraw, nproj, nkv, latent, time)
+            velocity = uncond + guidance * (velocity - uncond)
+        latent = latent + (float(end) - float(start)) * velocity
+    if not torch.isfinite(latent).all().item():
+        raise FloatingPointError('Nonfinite generated latent')
+    from data.generation import unpatch_latent
+    results = []
+    offset = 0
+    for case, lay in zip(cases, layouts):
+        piece = latent[offset:offset + sum(lay.lengths)]; offset += sum(lay.lengths)
+        decoded = vae.decode([unpatch_latent(piece, lay.grids[0])])[0]
+        if not torch.isfinite(decoded).all().item():
+            raise FloatingPointError('Nonfinite decoded visual')
+        frames = decoded.clamp(-1, 1).add(1).mul(127.5).round().to(torch.uint8).permute(1, 2, 3, 0).cpu().numpy()
+        name = f"{case['id']}.png"
+        if P.state().get_tensor_model_parallel_rank() == 0:
+            save_visual(frames, output / name, case.get('fps', 16))
+        results.append(dict(image=name, prompt=case['prompt'], num_frames=1, seed=case['seed'],
+                            guidance=guidance, latent_std=piece.std().item()))
+    return results
 
 
 @torch.no_grad()
