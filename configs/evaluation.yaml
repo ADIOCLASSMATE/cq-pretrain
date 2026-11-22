@@ -17,9 +17,13 @@ tasks: [qa, geneval, fid, vqav2]
 job:
   workspace: 分布式训练空间
   project: 随机序语言建模-统一自回归与掩码扩散的随机顺序生成框架
-  group: 开发区-H100-cuda12.8版本-119核
-  quota: "4,55,900"
+  # The compute group is chosen at each submission from live availability: any
+  # group whose name starts with `zone` and whose GPU type is listed, preferring
+  # whole free nodes, then the most free GPUs. The quota row is read live too.
+  zone: 开发区-
+  gpu_types: [H100, H200]
   gpus: 4
+  queue_timeout_minutes: 20   # a job still queued after this is withdrawn and placed again
   image: docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3
   priority: 1       # LOW in a fair-scheduling workspace; verify the read-back level
   shm_size: 64

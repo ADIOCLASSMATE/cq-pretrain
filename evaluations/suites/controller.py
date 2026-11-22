@@ -72,9 +72,11 @@ class Controller:
         self.root = self.run / 'benchmarks'
         self.snapshots = args.snapshots.resolve() if args.snapshots else self.run / 'eval_snapshots'
         self.prefix, self.keep, self.dry = args.prefix, args.keep, args.dry_run
+        self.capacity, self.quotas = {}, {}
         cli = args.cli or (str(Path.home() / '.local/bin/inspire') if (Path.home() / '.local/bin/inspire').exists()
                            else 'inspire')
-        self.cli = [cli, '--json', 'job'] + (['--account', args.account] if args.account else [])
+        self.base = [cli, '--json'] + (['--account', args.account] if args.account else [])
+        self.cli = [*self.base, 'job']
         (self.root / 'jobs').mkdir(parents=True, exist_ok=True)
 
     def log(self, message, **fields):
@@ -83,9 +85,10 @@ class Controller:
             handle.write(line + '\n')
         print(line, flush=True)
 
-    def call(self, *arguments, timeout=180):
+    def call(self, *arguments, timeout=180, group='job'):
+        command = [*self.base, group] if group != 'job' else self.cli
         for attempt in range(5):
-            process = subprocess.run([*self.cli, *arguments], capture_output=True, text=True, timeout=timeout)
+            process = subprocess.run([*command, *arguments], capture_output=True, text=True, timeout=timeout)
             try:
                 reply = json.loads(process.stdout or process.stderr)
             except ValueError:
@@ -95,11 +98,53 @@ class Controller:
             time.sleep(10 * (attempt + 1))
         raise RuntimeError(f'inspire {" ".join(arguments[:2])} failed: {str(reply)[:800]}')
 
+    def observe_capacity(self):
+        """Free GPUs and whole free nodes per eligible group, read once per cycle."""
+        j = self.job
+        if not self.quotas:
+            rows = self.call('quota', '--workspace', j['workspace'], '--all')['items']
+            self.quotas = {r['compute_group']: r['quota'] for r in rows
+                           if r['quota'].split(',')[0] == str(j['gpus'])}
+        items = self.call('availability', '--workspace', j['workspace'], group='resources')['items']
+        self.capacity = {}
+        for item in items:
+            name = item['compute_group']
+            if (name.startswith(j['zone']) and name in self.quotas
+                    and any(t in item['gpu_type'] for t in j['gpu_types'])):
+                per_node = max(1, int(item.get('gpus_per_node') or 8) // int(j['gpus']))
+                self.capacity[name] = dict(free=int(item['available_gpus']),
+                                           slots=int(item['full_free_nodes']) * per_node, gpu=item['gpu_type'])
+
+    def place(self):
+        """The group to submit to now, or None when no eligible group has room."""
+        gpus = int(self.job['gpus'])
+        ranked = sorted(self.capacity.items(), key=lambda kv: (kv[1]['slots'] > 0, kv[1]['free']), reverse=True)
+        if not ranked or ranked[0][1]['free'] < gpus:
+            return None
+        name, room = ranked[0]
+        room['free'] -= gpus
+        room['slots'] = max(0, room['slots'] - 1)
+        return name
+
     def records(self):
         return [json.loads(p.read_text()) for p in sorted((self.root / 'jobs').glob('*.json'))]
 
     def refresh(self, record):
         if record.get('status', '').upper() in TERMINAL or self.dry:
+            return record
+        waited = (datetime.now(timezone.utc) - datetime.fromisoformat(record['submitted'])).total_seconds() / 60
+        if record.get('status', '').upper() in ('QUEUING', 'PENDING', 'SUBMITTED') and \
+                waited > float(self.job.get('queue_timeout_minutes', 20)):
+            # Still waiting for cards: withdraw it so the next placement can use
+            # a group that has room now. Its outputs, if any, are kept.
+            try:
+                self.call('stop', record['name'], '--workspace', self.job['workspace'])
+            except RuntimeError as error:
+                self.log('withdraw failed', name=record['name'], error=str(error)[:300])
+                return record
+            record.update(status='STOPPED', reason='queue_timeout', observed=now())
+            write_json(self.root / 'jobs' / f'{record["name"]}.json', record)
+            self.log('withdrawn after queueing', name=record['name'], minutes=round(waited, 1), group=record.get('group'))
             return record
         try:
             data = self.call('status', record['name'], '--workspace', self.job['workspace'])
@@ -112,19 +157,19 @@ class Controller:
         write_json(self.root / 'jobs' / f'{record["name"]}.json', record)
         return record
 
-    def submit(self, task, step, snapshot, attempt):
+    def submit(self, task, step, snapshot, attempt, group):
         name = f'{self.prefix}-{task}-s{step}-r{attempt:02d}'
         out = task_dir(self.root, task, step)
         command = shlex.join(['bash', str(self.source / 'scripts/evaluate.sh'), task, str(snapshot), str(out)])
         j = self.job
         arguments = ['create', '--name', name, '--workspace', j['workspace'], '--project', j['project'],
-                     '--group', j['group'], '--quota', str(j['quota']), '--nodes', '1', '--image', j['image'],
+                     '--group', group, '--quota', self.quotas[group], '--nodes', '1', '--image', j['image'],
                      '--priority', str(j['priority']), '--shm-size', str(j['shm_size']),
                      '--auto-fault-tolerance', '--fault-tolerance-max-retry', '100',
                      '--fault-tolerance-retry-interval', '60', '--env', f'NPROC_PER_NODE={j["gpus"]}',
                      '--env', f'TRITON_CACHE_DIR={self.root / ".triton"}', '--command', command]
         record = dict(name=name, task=task, step=step, attempt=attempt, snapshot=str(snapshot), output=str(out),
-                      command=command, submitted=now(), status='SUBMITTED')
+                      group=group, quota=self.quotas[group], command=command, submitted=now(), status='SUBMITTED')
         if self.dry:
             self.log('dry-run submit', **record)
             return record
@@ -134,7 +179,7 @@ class Controller:
         created = self.call(*arguments)
         record.update(created=created)
         write_json(self.root / 'jobs' / f'{name}.json', record)
-        self.log('submitted', name=name, task=task, step=step, attempt=attempt)
+        self.log('submitted', name=name, task=task, step=step, attempt=attempt, group=group)
         return record
 
     def table(self):
@@ -170,6 +215,7 @@ class Controller:
 
     def cycle(self):
         records = [self.refresh(r) for r in self.records()]
+        self.observe_capacity()
         active = [r for r in records if r.get('status', '').upper() not in TERMINAL]
         running = len(active)
         stop = (self.root / 'STOP').exists()
@@ -195,7 +241,12 @@ class Controller:
                     continue
                 if running >= self.job['max_running']:
                     continue
-                record = self.submit(task, step, snapshot, attempt)
+                group = self.place()
+                if group is None:
+                    self.log('no free cards', task=task, step=step,
+                             capacity={k: v['free'] for k, v in self.capacity.items()})
+                    continue
+                record = self.submit(task, step, snapshot, attempt, group)
                 records.append(record)
                 active.append(record)
                 running += 1
