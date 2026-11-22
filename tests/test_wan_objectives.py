@@ -632,3 +632,17 @@ def test_sampling_scales_share_positive_geometry_and_skip_redundant_forwards(set
             run('T2I', dict(s_ctx=invalid), [], 0.)
     with pytest.raises(ValueError, match='finite'):
         run('T2I', dict(guidance=float('nan'),s_ctx=1.,s_ins=2.), [], 0.)
+
+
+def test_wsd_schedule_keeps_the_plateau_until_a_decay_is_scheduled():
+    import math
+    from types import SimpleNamespace
+    from training.train import learning_rate
+    args = SimpleNamespace(lr=1., min_lr=.1, lr_decay_style='wsd', lr_warmup_steps=10,
+                           lr_decay_steps=100, lr_decay_start=None)
+    assert learning_rate(0, args) == .1 and learning_rate(9, args) == 1.
+    assert learning_rate(10_000, args) == 1.
+    args.lr_decay_start = 60
+    assert learning_rate(59, args) == 1. and learning_rate(60, args) == 1.
+    assert math.isclose(learning_rate(80, args), .55) and math.isclose(learning_rate(100, args), .1)
+    assert learning_rate(500, args) == .1

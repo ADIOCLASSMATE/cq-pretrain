@@ -57,9 +57,13 @@ def parse_args(argv=None):
     parser.add_argument('--renderer-ema-decay',type=float,default=0.,
                         help='FP32 distributed optimizer-shard renderer EMA; zero disables')
     parser.add_argument('--min-lr', type=float, help='Cosine floor; defaults to one tenth of --lr')
-    parser.add_argument('--lr-decay-style', choices=('constant', 'cosine'), default='constant')
+    parser.add_argument('--lr-decay-style', choices=('constant', 'cosine', 'wsd'), default='constant')
     parser.add_argument('--lr-warmup-steps', type=int, default=0)
-    parser.add_argument('--lr-decay-steps', type=int, default=100000)
+    parser.add_argument('--lr-decay-steps', type=int, default=100000,
+                        help='Step at which the LR reaches min-lr (cosine and wsd)')
+    parser.add_argument('--lr-decay-start', type=int,
+                        help='wsd only: first step of the cosine decay; omit to stay stable. '
+                             'Both wsd decay settings may change on resume')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--init-checkpoint',type=Path,help='New-stage model-only initialization; fresh optimizer and data cursor')
     parser.add_argument('--validation-suite',type=Path,help='Fixed local T2I/I2T qualitative suite')
@@ -150,6 +154,11 @@ def parse_args(argv=None):
         parser.error('Require finite lr > 0 and 0 <= min-lr <= lr')
     if not math.isfinite(args.renderer_ema_decay) or not 0<=args.renderer_ema_decay<1:
         parser.error('Require finite 0 <= renderer-ema-decay < 1')
+    if args.lr_decay_style == 'wsd' and args.lr_decay_start is not None and not (
+            args.lr_warmup_steps <= args.lr_decay_start < args.lr_decay_steps):
+        parser.error('wsd requires lr-warmup-steps <= lr-decay-start < lr-decay-steps')
+    if args.lr_decay_start is not None and args.lr_decay_style != 'wsd':
+        parser.error('--lr-decay-start applies only to --lr-decay-style wsd')
     if args.eval_snapshot_every < 0:
         parser.error('Require eval-snapshot-every >= 0')
     if not 0 <= args.optimizer_offload_fraction <= 1:
@@ -162,8 +171,15 @@ def learning_rate(step, args):
         return args.lr * (step + 1) / args.lr_warmup_steps
     if args.lr_decay_style == 'constant':
         return args.lr
-    progress = min(1., max(0., (step - args.lr_warmup_steps) /
-        max(1, args.lr_decay_steps - args.lr_warmup_steps)))
+    start = args.lr_warmup_steps
+    if args.lr_decay_style == 'wsd':
+        # Warmup, then a stable plateau, then cosine to min-lr. The decay can be
+        # scheduled later, on resume, once the stopping point is known.
+        start = getattr(args, 'lr_decay_start', None)
+        if start is None or step < start:
+            return args.lr
+    progress = min(1., max(0., (step - start) /
+        max(1, args.lr_decay_steps - start)))
     return args.min_lr + .5 * (args.lr - args.min_lr) * (1 + math.cos(math.pi * progress))
 
 
@@ -363,6 +379,10 @@ def main():
     topology = dict(tp=args.tp, dp=dp, pp=1, cp=1, optimizer_instances=args.optimizer_instances)
     training_state = {key: getattr(args, key) for key in ('lr', 'min_lr', 'lr_decay_style',
         'lr_warmup_steps', 'lr_decay_steps', 'seed', 'sequence_length', 'images', 'micro_batch', 'grad_accum')}
+    if args.lr_decay_style == 'wsd':
+        # The tail of a WSD schedule is decided while training; it never
+        # changes steps already taken, so it is not part of the resume contract.
+        training_state.pop('lr_decay_steps')
     training_state['renderer_schedule_sha256']=hashlib.sha256((Path(__file__).parent/'renderer_schedule.py').read_bytes()).hexdigest()
     training_state['initialization_checkpoint']=str(args.init_checkpoint) if args.init_checkpoint else None
     training_state['deterministic']=args.deterministic
