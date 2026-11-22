@@ -121,7 +121,7 @@ Ascend 910B 图像 CQ 的 GDN 层前向加反向实测（含 warmup，12 次计�
 
 位置只通过 rotary 进入注意力分数，分数只对 value 加权。因此相互独立的空条件 Q，以及只能互相读取的空条件 Q，输出都是同一个向量的重复；只有 `bidirectional` 与单 token 条件（`bos` 或 `token`）同时启用时，空条件才随位置变化。验证见 `tests/test_query_interaction.py` 和 `scripts/validation/validate_query_blocks_cuda.py`。
 
-query 数量和空条件策略本身不改变参数形状；本次两层 adapter 改变了权重与优化器形状，旧训练结果不再兼容：训练 checkpoint 仅接受 schema 7，推理快照仅接受 v2；不提供旧三层 adapter 转换。新 checkpoint 的精确 `--resume` 同时校验配置、数据游标、源码和实际启用的 kernel 选项。dynamic query 的语义、梯度、交错前缀及恢复规则有 CPU 回归覆盖，原固定 64 query 的 NPU 吞吐数字不能直接当作新配置的测速结果。
+query 数量和空条件策略本身不改变参数形状；本次两层 adapter 改变了权重与优化器形状，旧训练结果不再兼容：训练 checkpoint 仅接受 schema 7，推理快照仅接受 v2；不提供旧三层 adapter 转换。新 checkpoint 的精确 `--resume` 同时校验配置、数据游标、源码和实际启用的 kernel 选项。激活重算（`--checkpoint`、`--checkpoint-*-layers`、`--keep-attention-activations`）和 DiT／文本 loss 的分块（`--dit-microbatch-*`、`--ce-chunk`）只安排计算，不改变模型、目标和数据流，因此不在校验范围内，续训时可以修改，例如 OOM 后加深重算。dynamic query 的语义、梯度、交错前缀及恢复规则有 CPU 回归覆盖，原固定 64 query 的 NPU 吞吐数字不能直接当作新配置的测速结果。
 
 每 1000 个绝对更新默认保存独立推理快照（`--eval-snapshot-every`）；训练恢复 checkpoint 的频率、保留策略和完整性校验独立管理。`--eval-snapshot-dir` 指定持久评估权重目录，零间隔关闭快照。
 
@@ -130,8 +130,8 @@ query 数量和空条件策略本身不改变参数形状；本次两层 adapter
 推理快照由 `evaluations/suites` 评测，指标为 GQA、MME 感知与认知、POPE F1、TextVQA、VQAv2、ImageNet FID-50K 和 GenEval。配置在 `configs/evaluation.yaml`，包括评测数据与 GenEval 运行环境的路径、生图协议和评测作业规格。
 
 - 一个作业评测一个快照的一项任务（`qa` 为 GQA、MME、POPE、TextVQA 四项，另有 `vqav2`、`geneval`、`fid`），使用本机全部 GPU。作业命令是 `scripts/evaluate.sh TASK WEIGHTS OUTPUT`。结果分块写入，被抢占后重新提交会从已完成的部分继续。`EVAL_LIMIT=N` 只跑前 N 项，用作冒烟测试。
-- 控制器在 CPU 主机上运行，不需要 torch：`.venv-cuda/bin/python -m evaluations.suites.controller --run RUN --source SRC`。它为每个已提交的快照和每项任务提交一个低优先级作业，跟踪状态。作业未产出 `RESULTS.json` 就结束时，控制器会再次提交。四项任务都有结果后，控制器删除该快照，并在 `RUN/benchmarks/RESULTS.md` 和 `results.jsonl` 汇总分数。在 `RUN/benchmarks` 下创建 `STOP` 文件，控制器即停止提交新作业。
-- 生图统一使用 512×512、30 步 Euler、CFG 3.0、shift 3.0。问答均为单图零样本贪心解码，计分使用 lmms-eval 插件和官方 VQA 脚本。FID 与 ADM 的 ImageNet-512 参考统计量对比，Inception 特征在采样的同时由 CPU 提取。GenEval 使用固定版本的官方检测器。权重除了评测快照，也可以是带渲染器 EMA 的 TP1 训练 checkpoint。
+- 控制器在 CPU 主机上运行，不需要 torch：`.venv-cuda/bin/python -m evaluations.suites.controller --run RUN --source SRC`。它为每个已提交的快照和每项任务提交一个低优先级作业，跟踪状态。作业未产出 `RESULTS.json` 就结束时，控制器会再次提交。四项任务都有结果后，控制器删除该快照，并在 `RUN/benchmarks/RESULTS.md` 和 `results.jsonl` 汇总分数。在 `RUN/benchmarks` 下创建 `STOP` 文件，控制器即停止提交新作业。评测作业不开平台自动重启；同一任务连续两次结束都没有新增输出文件时，控制器停止重提并写出 `ATTENTION-*.json`。提交前读取开发区各 H100/H200 分区的实时空闲卡，优先整台空闲的节点，排队超过 20 分钟的作业撤回后重新选分区。
+- 生图统一使用 512×512、30 步 Euler、CFG 3.0、shift 3.0。问答均为单图零样本贪心解码，计分使用 lmms-eval 插件和官方 VQA 脚本。FID 与 ADM 的 ImageNet-512 参考统计量对比，Inception 特征在采样的同时由 CPU 提取。GenEval 使用固定版本的官方检测器；它的运行环境是 torch 1.13，只支持到 sm_86，因此在 H100/H200 上自动改用作业的 CPU 运行同一个评测脚本，只替换设备选择。权重除了评测快照，也可以是带渲染器 EMA 的 TP1 训练 checkpoint。
 
 
 ## video 共享执行层

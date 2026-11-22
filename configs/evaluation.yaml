@@ -27,5 +27,7 @@ job:
   image: docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3
   priority: 1       # LOW in a fair-scheduling workspace; verify the read-back level
   shm_size: 64
-  max_running: 8    # 4-GPU jobs alive at once, across all steps and tasks
+  # 4-GPU jobs alive at once, across all steps and tasks. The project's low-priority
+  # quota in this workspace is 32 GPUs, shared with anything else the project runs.
+  max_running: 6
   max_attempts: 30  # per (step, task); preempted low-priority jobs resume from partial outputs

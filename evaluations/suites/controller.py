@@ -28,6 +28,10 @@ import time
 
 from evaluations.suites import settings, task_dir
 
+class QuotaFull(RuntimeError):
+    """The project's low-priority GPU quota has no room for another job."""
+
+
 TERMINAL = {'SUCCEEDED', 'FAILED', 'CANCELLED', 'STOPPED', 'JOB_STOPPED', 'TERMINATED', 'COMPLETED', 'DELETED'}
 COLUMNS = (('GQA ↑', 'qa', lambda r: 100 * r['metrics']['gqa_accuracy'], '{:.2f}'),
            ('MME 感知 ↑', 'qa', lambda r: r['metrics']['mme_perception_score'], '{:.2f}'),
@@ -101,6 +105,9 @@ class Controller:
                 reply = {'success': False, 'error': (process.stdout or process.stderr)[-800:]}
             if reply.get('success'):
                 return reply['data']
+            if '配额' in str(reply.get('error', '')):
+                # A quota refusal is an answer, not a transient error: do not retry it.
+                raise QuotaFull(str(reply.get('error'))[:400])
             time.sleep(10 * (attempt + 1))
         raise RuntimeError(f'inspire {" ".join(arguments[:2])} failed: {str(reply)[:800]}')
 
@@ -266,7 +273,12 @@ class Controller:
                     self.log('no free cards', task=task, step=step,
                              capacity={k: v['free'] for k, v in self.capacity.items()})
                     continue
-                record = self.submit(task, step, snapshot, attempt, group)
+                try:
+                    record = self.submit(task, step, snapshot, attempt, group)
+                except QuotaFull as error:
+                    self.log('project quota full', task=task, step=step, error=str(error)[:200])
+                    running = self.job['max_running']  # nothing more fits this cycle
+                    continue
                 records.append(record)
                 active.append(record)
                 running += 1

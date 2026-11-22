@@ -36,6 +36,18 @@ def cpu_quota():
     return len(os.sched_getaffinity(0))
 
 
+def memory_quota():
+    """Bytes this container may use (cgroup limit), or None when unlimited/unknown."""
+    for path in ('/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes'):
+        try:
+            value = open(path).read().strip()
+        except OSError:
+            continue
+        if value != 'max' and int(value) < 1 << 60:
+            return int(value)
+    return None
+
+
 def detector_env(root):
     env = dict(os.environ, PYTHONPATH=str(root / 'runtime/mmdetection'), XDG_CACHE_HOME=str(root / 'cache'),
                TOKENIZERS_PARALLELISM='false')
@@ -85,7 +97,10 @@ def score(out, root):
         [str(i) for i in range(int(os.environ.get('NPROC_PER_NODE', '1')))]
     on_gpu = gpu_supported(root, devices)
     threads = 2
-    workers = len(devices) if on_gpu else max(1, min(len(prompts), cpu_quota() // threads))
+    # A CPU shard holds the detector and CLIP ViT-L/14 (about 3.5 GiB resident).
+    memory = memory_quota()
+    by_memory = int(memory * .7 // (4 << 30)) if memory else len(prompts)
+    workers = len(devices) if on_gpu else max(1, min(len(prompts), cpu_quota() // threads, by_memory))
     print(f'GenEval detector on {"GPU" if on_gpu else "CPU"}: {workers} shards', flush=True)
     shards = out / 'detector'
     layout = dict(device='gpu' if on_gpu else 'cpu', shards=workers)
