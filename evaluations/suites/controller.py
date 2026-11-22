@@ -8,6 +8,7 @@ State lives under RUN/benchmarks:
     RESULTS.md, results.jsonl   the score table, rewritten every cycle
     controller.log              one line per decision
 A step's snapshot is deleted once all of its tasks have RESULTS.json (unless --keep).
+--snapshots may also name a directory of TP1 training checkpoints; use --keep for those.
 Low-priority jobs can be preempted; a job that ends without RESULTS.json is submitted
 again (it resumes from its partial outputs) up to job.max_attempts times. Submission
 stops early, with an ATTENTION file, once two attempts in a row ended without adding
@@ -59,12 +60,14 @@ def count_files(path):
 
 
 def committed(path):
-    """A complete evaluation snapshot, checked without torch (see utils.eval_snapshot)."""
+    """A complete evaluation snapshot, or a TP1 training checkpoint with renderer EMA
+    (evaluations.suites.runtime reads both), checked without torch."""
     try:
         manifest = json.loads((path / 'manifest.json').read_text())
     except (OSError, ValueError):
         return None
-    if manifest.get('kind') != 'inference_weights' or path.is_symlink():
+    training = 'schema' in manifest and 'ema' in manifest and manifest.get('topology', {}).get('tp') == 1
+    if (manifest.get('kind') != 'inference_weights' and not training) or path.is_symlink():
         return None
     for name, size in manifest.get('files', {}).items():
         shard = path / name
