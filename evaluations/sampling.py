@@ -394,6 +394,9 @@ def generate_batch_dit(model, conditions, cases, vae, output):
     def predict(raw, projected, kv, lat, time):
         return model.renderer.predict(lat, raw, time, merged, projected, **kv).float()
     guidance = cases[0].get('guidance', 1.)
+    import time as _time
+    torch.cuda.synchronize() if torch.cuda.is_available() else None
+    t0=_time.perf_counter()
     for i, (start, end) in enumerate(zip(sigmas[:-1], sigmas[1:])):
         time = time_features[i:i + 1]
         velocity = predict(raw, projected, kv, latent, time)
@@ -403,6 +406,8 @@ def generate_batch_dit(model, conditions, cases, vae, output):
         latent = latent + (float(end) - float(start)) * velocity
     if not torch.isfinite(latent).all().item():
         raise FloatingPointError('Nonfinite generated latent')
+    if torch.cuda.is_available():torch.cuda.synchronize()
+    print(f'FID-batch n={len(cases)} steps={steps} guidance={guidance} dit={_time.perf_counter()-t0:.1f}s',flush=True)
     from data.generation import unpatch_latent
     results = []
     offset = 0
