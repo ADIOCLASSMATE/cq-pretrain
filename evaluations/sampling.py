@@ -352,6 +352,8 @@ def generate_batch_dit(model, conditions, cases, vae, output):
     cfg = model.cfg
     if len(cases) == 1:
         raise ValueError('generate_batch_dit needs at least two cases; use generate()')
+    assert len({len(c[3].lengths) for c in conditions}) == 1  # one target image per case
+    assert len({c[3].lengths[0] for c in conditions}) == 1  # same resolution
     steps = cases[0].get('steps', 30); shift = cases[0].get('shift', 5.)
     if steps < 1 or shift <= 0:
         raise ValueError('Positive steps and shift required')
