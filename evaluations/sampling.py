@@ -309,10 +309,6 @@ def caption(model,case,tokenizer,tokens,processor):
                 image=source,prompt=case.get('prompt',''))
 
 
-class _SingleCase(Exception):
-    pass
-
-
 @torch.no_grad()
 def _dit_condition(model, batch, features=None):
     if features is None:
@@ -355,9 +351,7 @@ def generate_batch_dit(model, conditions, cases, vae, output):
     Each case keeps its own seed, so results match generate() case-by-case."""
     cfg = model.cfg
     if len(cases) == 1:
-        # No batching benefit; run the per-case path so a trailing chunk matches
-        # generate() exactly.
-        raise _SingleCase
+        raise ValueError('generate_batch_dit needs at least two cases; use generate()')
     steps = cases[0].get('steps', 30); shift = cases[0].get('shift', 5.)
     if steps < 1 or shift <= 0:
         raise ValueError('Positive steps and shift required')
