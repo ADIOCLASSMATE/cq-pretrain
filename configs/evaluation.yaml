@@ -1,0 +1,27 @@
+# Benchmark evaluation of committed training evaluation snapshots.
+# `python -m evaluations.suites.controller` submits one job per task and step,
+# collects RESULTS.json files and removes a snapshot once every task is scored.
+assets:
+  # qa/ (GQA test-dev, MME, POPE, TextVQA val), vqav2/ (val), fid/ (ADM ImageNet-512 reference).
+  benchmarks: /inspire/hdd/global_user/wanjiaxin-253108030048/benchmarks/cq_eval_v1
+  # Pinned official GenEval checkout, Mask2Former detector, CLIP cache and its Python 3.9 runtime.
+  geneval: /inspire/hdd/global_user/wanjiaxin-253108030048/evaluations/conflux-geneval-20261112-r1
+sampling:
+  resolution: 512
+  steps: 30
+  guidance: 3.0
+  shift: 3.0
+  batch: 8          # same-shape T2I cases per batched DiT call
+  vae_dtype: float32
+tasks: [qa, geneval, fid, vqav2]
+job:
+  workspace: 分布式训练空间
+  project: 随机序语言建模-统一自回归与掩码扩散的随机顺序生成框架
+  group: 开发区-H100-cuda12.8版本-119核
+  quota: "4,55,900"
+  gpus: 4
+  image: docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3
+  priority: 1       # LOW in a fair-scheduling workspace; verify the read-back level
+  shm_size: 64
+  max_running: 8    # 4-GPU jobs alive at once, across all steps and tasks
+  max_attempts: 30  # per (step, task); preempted low-priority jobs resume from partial outputs
