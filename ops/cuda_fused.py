@@ -10,6 +10,8 @@ every caller keeps its own weight convention (the backbone passes ``1+weight``).
 import functools
 import os
 
+import ops.audit as audit
+
 _ENABLED = os.environ.get("PRETRAIN_CUDA_FUSED_NORM", "1") == "1"
 _GATED_ROW_BUCKET = int(os.environ.get("PRETRAIN_GATED_NORM_ROW_BUCKET", "32768"))
 
@@ -39,10 +41,33 @@ def _kernels_present():
     return True
 
 
+def wgrad(total_input, grad_output, main_grad):
+    """Accumulate the BF16 GEMM product straight into MCore's FP32 buffer."""
+    import fused_weight_gradient_mlp_cuda
+
+    audit.record("wgrad", "apex_wgrad_gemm_accum_fp32")
+    fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(total_input.contiguous(), grad_output.contiguous(), main_grad)
+
+
+def rotary_enabled(x):
+    """No vendor rotary kernel is used here.
+
+    The rotate-half form in ops.functional is already one pass per tensor and
+    bandwidth-bound; a kernel call would not remove a pass. The reference is
+    therefore the implementation on this backend, not a fallback.
+    """
+    return False
+
+
+def rotary(x, cos, sin):
+    raise NotImplementedError("CUDA uses the rotate-half expression in ops.functional")
+
+
 def rms_norm(x, weight, eps):
     """x * rsqrt(mean(x^2)+eps) * weight, fused; weight may be FP32 with BF16 x."""
     from flash_attn.ops.triton.layer_norm import rms_norm_fn
 
+    audit.record("rms_norm", "flash_attn_rms_norm")
     shape = x.shape
     flat = x.reshape(-1, shape[-1])
     out = rms_norm_fn(flat, weight, None, eps=eps)
@@ -53,6 +78,7 @@ def gated_rms_norm(x, gate, weight, eps):
     """rmsnorm(x) * weight * silu(gate), fused by upstream FLA."""
     from fla.modules.fused_norm_gate import rms_norm_gated
 
+    audit.record("gated_rms_norm", "fla_rms_norm_gated")
     shape = x.shape
     flat, flat_gate = x.reshape(-1, shape[-1]), gate.reshape(-1, shape[-1])
     rows = flat.shape[0]
@@ -106,16 +132,17 @@ def ops_enabled(x, fused=True):
 # Measured in evaluations/benchmarks/cuda_l40s_tuning_20261117/fused_ops.json.
 
 
-def causal_conv1d(x, weight, cu_seqlens):
+def causal_conv1d(x, weight, plan):
     """Depthwise causal convolution + silu over packed documents.
 
-    x is [1, T, D]; weight is [D, W]; cu_seqlens holds the same document
+    x is [1, T, D]; weight is [D, W]; the plan holds the same document
     boundaries the reference loop iterates over, so documents stay independent
     and no token reads across a document edge.
     """
     from fla.modules.convolution import causal_conv1d as _conv
 
-    return _conv(x, weight=weight, activation="silu", cu_seqlens=cu_seqlens)[0]
+    audit.record("causal_conv1d", "fla_causal_conv1d")
+    return _conv(x, weight=weight, activation="silu", cu_seqlens=plan.content_cu)[0]
 
 
 @functools.lru_cache(maxsize=1)
@@ -150,4 +177,5 @@ def swiglu(projected):
     Same expression as the reference below it in models.backbone_qwen35.MLP;
     this only changes how many passes over memory it takes.
     """
+    audit.record("swiglu", "inductor_swiglu")
     return _compiled_swiglu()(projected)

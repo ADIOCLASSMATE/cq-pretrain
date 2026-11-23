@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import torch
 import torch.distributed as dist
+import distributed.accel as accel
 import distributed.megatron as P
 from utils.checkpoint_catalog import SCHEMA, durable_json, fsync_directory, shard_names
 
@@ -89,7 +90,7 @@ def save(path, model, optimizer, step, config, topology, training_state=None, da
         tp_rank=tp_rank,
         topology=topology,
         cpu_rng=torch.get_rng_state(),
-        device_rng=torch.cuda.get_rng_state(),
+        device_rng=accel.device_module().get_rng_state(),
         schema=schema,
         data_state=data_state,
         optimizer=[_optimizer_state(opt) for opt in _optimizers(optimizer)],
@@ -200,8 +201,8 @@ def load(path, model, optimizer, config, topology, training_state=None, data_sta
         if ema.metadata() != manifest["ema"]:
             raise ValueError("EMA metadata differs across checkpoint shards")
     torch.set_rng_state(saved["cpu_rng"])
-    # Checkpoints written before the NPU backend was removed used 'npu_rng'.
-    torch.cuda.set_rng_state(saved["device_rng"] if "device_rng" in saved else saved["npu_rng"])
+    # Checkpoints written before the backend became explicit used 'npu_rng'.
+    accel.device_module().set_rng_state(saved["device_rng"] if "device_rng" in saved else saved["npu_rng"])
     return saved["step"]
 
 

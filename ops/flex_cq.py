@@ -49,6 +49,15 @@ def _table():
 
 
 @functools.lru_cache(maxsize=8)
+def device_tile_options(head_dim):
+    """Tile config for the GPU this process runs on, or None to stay dense."""
+    import torch
+
+    if not (_ENABLED and torch.cuda.is_available()):
+        return None
+    return tile_options(head_dim, "%d%d" % torch.cuda.get_device_capability())
+
+
 def tile_options(head_dim, capability):
     """Recorded tile config for this head size and GPU, or None to stay dense."""
     entry = _table().get(f"sm{capability}", {}).get(str(head_dim))

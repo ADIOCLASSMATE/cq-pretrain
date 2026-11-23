@@ -1,6 +1,8 @@
 """Exact tiled attention with one output buffer and FP32 K/V accumulation."""
 
 import torch
+
+import distributed.accel as accel
 from ops import functional as K
 from ops import flex_cq
 
@@ -8,6 +10,10 @@ from ops import flex_cq
 def attend(q, k, v, mask, valid, plan, fused, predicate=None):
     # The predicate is the same visibility rule as `mask`, so this only changes
     # which kernel evaluates it; `fused=False` keeps the numerical reference.
+    if fused and accel.IS_NPU and q.device.type == "npu":
+        from ops import npu_attention
+
+        return npu_attention.attend(q, k, v, mask, valid, plan)
     if fused and flex_cq.usable(q, predicate, mask):
         return flex_cq.attention(q, k, v, predicate, valid)
     if plan is None:

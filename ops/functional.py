@@ -1,15 +1,28 @@
-"""CUDA training operators and their explicit PyTorch numerical references.
+"""Training operators and their explicit PyTorch numerical references.
 
-Each entry point has one fused path and one reference implementation. The
-reference is not dead code: it is the oracle every GPU gate compares against
-and the only path on CPU, so it stays a literal transcription of the math.
+Each entry point has one accelerator path per backend and one reference
+implementation. The reference is not dead code: it is the oracle every GPU
+gate compares against and the only path on CPU, so it stays a literal
+transcription of the math. Which path ran is recorded in ``ops.audit``.
 """
 
 import os
+
 import torch
 from torch.nn import functional as F
 
+import distributed.accel as accel
+import ops.audit as audit
+
 _COMPILE_MODULATION = os.environ.get("PRETRAIN_COMPILE_MODULATION", "0") == "1"
+
+
+def _compiled(name):
+    if accel.IS_NPU:
+        from ops.npu_compile import compiled
+    else:
+        from ops.cuda_compile import compiled
+    return compiled(name)
 
 
 def modulated_norm_reference(hidden, scale, shift, eps=1e-6, upcast=False):
@@ -22,45 +35,50 @@ def gated_add_reference(hidden, branch, gate):
 
 
 def modulated_norm(hidden, scale, shift, fused=True, eps=1e-6, upcast=False):
-    if _COMPILE_MODULATION and fused and hidden.device.type == "cuda":
-        from ops.cuda_compile import compiled
-
-        return compiled("modulated_norm")(hidden, scale, shift, eps, upcast)
+    if _COMPILE_MODULATION and fused and accel.on_accelerator(hidden):
+        audit.record("modulated_norm", "compiled")
+        return _compiled("modulated_norm")(hidden, scale, shift, eps, upcast)
+    audit.record("modulated_norm", "reference")
     return modulated_norm_reference(hidden, scale, shift, eps, upcast)
 
 
 def gated_add(hidden, branch, gate, fused=True):
-    if _COMPILE_MODULATION and fused and hidden.device.type == "cuda":
-        from ops.cuda_compile import compiled
-
-        return compiled("gated_add")(hidden, branch, gate)
+    if _COMPILE_MODULATION and fused and accel.on_accelerator(hidden):
+        audit.record("gated_add", "compiled")
+        return _compiled("gated_add")(hidden, branch, gate)
+    audit.record("gated_add", "reference")
     return gated_add_reference(hidden, branch, gate)
 
 
 def fused_wgrad(total_input, grad_output, main_grad):
     """Accumulate the BF16 GEMM product straight into MCore's FP32 buffer."""
-    import fused_weight_gradient_mlp_cuda
+    import ops.fused as fused_ops
 
     if total_input.numel() and grad_output.numel():
-        fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32(
-            total_input.contiguous(), grad_output.contiguous(), main_grad
-        )
+        fused_ops.wgrad(total_input, grad_output, main_grad)
 
 
 def rms_norm(x, weight, eps, fused=True):
     if not x.numel():
         return x * weight.to(x.dtype)
-    from ops.cuda_fused import enabled as _cuda_fused, rms_norm as _cuda_rms_norm
+    import ops.fused as fused_ops
 
-    if _cuda_fused(x, fused):
-        return _cuda_rms_norm(x, weight, eps)
+    if fused_ops.enabled(x, fused):
+        return fused_ops.rms_norm(x, weight, eps)
+    audit.reference("rms_norm", x)
     normalized = (x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + eps)).to(x.dtype)
     return normalized * weight
 
 
 def rotary(x, cos, sin, fused=True):
-    # `fused` is kept so call sites can still request reference mode explicitly;
-    # this rotate-half form is both the reference and the only implementation.
+    """Rotate-half rotary embedding; `fused` lets a caller force the reference."""
+    import ops.fused as fused_ops
+
+    if fused and fused_ops.rotary_enabled(x):
+        return fused_ops.rotary(x, cos, sin)
+    # Where no vendor rotary is used this expression is the implementation:
+    # the elementwise chain is bandwidth-bound and already one pass per tensor.
+    audit.record("rotary", "rotate_half")
     first, second = x.chunk(2, -1)
     return x * cos + torch.cat((-second, first), -1) * sin
 
@@ -90,6 +108,14 @@ def _allow_mask(mask):
 def attention(q, k, v, mask=None, valid_rows=None, fused=True, scale=None):
     """Q/K/V: [sequence,batch,heads,dim]; bool mask True means forbidden."""
     scale = q.shape[-1] ** -0.5 if scale is None else scale
+    if fused and accel.IS_NPU and q.device.type == "npu":
+        import ops.npu_attention as npu_attention
+
+        return npu_attention.attention(q, k, v, mask, valid_rows, scale)
+    if q.device.type == "cuda":
+        audit.record("attention", "sdpa")
+    else:
+        audit.reference("attention", q, "fused attention unavailable")
     query, key, value = (t.permute(1, 2, 0, 3) for t in (q, k, v))
     repeat = q.shape[2] // k.shape[2]
     if repeat != 1:

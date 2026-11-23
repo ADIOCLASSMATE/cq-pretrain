@@ -35,7 +35,7 @@ PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
   .venv-cuda/bin/python -m scripts.validation.validate_cq_cuda \
   --kernel-head-shards 2 --output .runs/gdn-tp2
 PRETRAIN_BACKEND=cuda PRETRAIN_STACK=cuda OMP_NUM_THREADS=1 \
-  .venv-cuda/bin/python -m scripts.validation.validate_cuda_ops --output .runs/cuda-ops.json
+  .venv-cuda/bin/python -m scripts.validation.validate_accel_ops --output .runs/cuda-ops.json
 ```
 
 The second gate keeps the same full layer and FP64 oracle and splits each FLA

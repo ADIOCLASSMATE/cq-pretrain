@@ -5,10 +5,12 @@ The custom backward returns ordinary parameter gradients, preserving MCore's
 gradient hooks, tied embeddings, accumulation and distributed optimizer.
 """
 
-import os
 import torch
 import torch.distributed as dist
+
+import distributed.accel as accel
 import distributed.megatron as parallel
+import ops.audit as audit
 from ops.functional import fused_wgrad
 
 
@@ -74,7 +76,7 @@ class _LinearCE(torch.autograd.Function):
             dh[start : start + ctx.chunk] = gradient @ weight
             # Vendor GEMM accumulates BF16 products directly into FP32, with no
             # full FP32 cast or separately materialized dW for each chunk.
-            if hidden.device.type == "cuda":
+            if accel.on_accelerator(hidden):
                 fused_wgrad(h, gradient, dw)
             else:
                 dw.addmm_(gradient.float().T, h.float())
@@ -93,10 +95,14 @@ class _LinearCE(torch.autograd.Function):
 
 
 def linear_cross_entropy(hidden, weight, targets, chunk):
-    from ops import cuda_cross_entropy as fused
+    if accel.IS_NPU:
+        from ops import npu_cross_entropy as fused
+    else:
+        from ops import cuda_cross_entropy as fused
 
     # Same chunking, recompute and gradient protocol; only the per-chunk
     # softmax/gradient kernel differs, and only where that is equivalent.
     if fused.available(hidden, parallel.tp_size()):
         return fused.linear_cross_entropy(hidden, weight, targets, chunk)
+    audit.reference("cross_entropy", hidden, "fused CE unavailable, disabled, or TP>1")
     return _LinearCE.apply(hidden, weight, targets, chunk)

@@ -11,6 +11,7 @@ import time
 import numpy as np
 import torch
 
+from distributed.accel import device_module
 from data.batch import Batch
 from data.batch_layout import build_plan
 from data.loss_permissions import CONTRACT as LOSS_PERMISSION_CONTRACT, generation_target
@@ -585,7 +586,9 @@ class ConsumedLoader:
         self.packer, self.limit = packer, prefetch
         self.pool = ThreadPoolExecutor(
             max_workers=1,
-            initializer=(lambda: torch.cuda.set_device(self.packer.pin_device)) if self.packer.pin_device else None,
+            initializer=(lambda: device_module().set_device(self.packer.pin_device))
+            if self.packer.pin_device
+            else None,
         )
         self.pending, self.delivered = deque(), deque()
         self.consumed = copy.deepcopy(state or packer.state_dict())

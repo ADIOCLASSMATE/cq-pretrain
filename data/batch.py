@@ -42,7 +42,10 @@ class Batch:
             }
         )
 
-    def pin_memory(self, device="cuda"):
+    def pin_memory(self, device=None):
+        from distributed.accel import accel_type
+
+        device = accel_type() if device is None else device
         import warnings
 
         with warnings.catch_warnings():

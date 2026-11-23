@@ -31,10 +31,17 @@ BACKBONE_SOURCES = (
     "ops/attention.py",
     "ops/attention_layout.py",
     "ops/flex_cq.py",
+    "ops/fused.py",
+    "ops/gated_delta.py",
     "ops/cuda_gated_delta.py",
     "ops/cuda_fused.py",
     "ops/cuda_cross_entropy.py",
     "ops/cuda_compile.py",
+    "ops/npu_gated_delta.py",
+    "ops/npu_fused.py",
+    "ops/npu_attention.py",
+    "ops/npu_cross_entropy.py",
+    "ops/npu_compile.py",
     "training/renderer_schedule.py",
     "training/loss.py",
     "ops/cross_entropy.py",
@@ -97,27 +104,45 @@ def training_state(args, cfg, ema, assets, data):
 
 def kernel_options(args, cfg):
     """A kernel switch that changes speed or numerics must be attributable from the run record alone."""
-    import ops.cuda_fused as cuda_fused
-    from ops import cuda_cross_entropy, flex_cq
+    import utils.dependencies as stack
     from ops.functional import _COMPILE_MODULATION
 
-    cuda = accel.BACKEND == "cuda"
-    return dict(
+    options = dict(
+        backend=accel.BACKEND,
+        stack=stack.name(),
         compile_modulation=_COMPILE_MODULATION,
         attention_tile=os.environ.get("PRETRAIN_ATTENTION_TILE", "0"),
-        cuda_fused_norm=cuda_fused._ENABLED,
-        backend=accel.BACKEND,
-        cuda_fused_swiglu=cuda_fused._SWIGLU_ENABLED if cuda else None,
-        cuda_fused_ops=cuda_fused._OPS_ENABLED,
         grad_reduce_in_fp32=not args.bf16_grad_reduce,
-        flex_attention=flex_cq._ENABLED,
-        flex_tiles=(
-            flex_cq.tile_options(cfg.head_dim, "%d%d" % torch.cuda.get_device_capability())
-            if flex_cq._ENABLED and cuda
-            else None
-        ),
-        cuda_fused_ce=cuda_cross_entropy._ENABLED,
     )
+    if accel.IS_NPU:
+        import ops.npu_cross_entropy as npu_ce
+        import ops.npu_fused as npu_fused
+        import ops.npu_gated_delta as npu_gdn
+        from ops import npu_attention
+
+        options.update(
+            npu_fused_norm=npu_fused._ENABLED,
+            npu_fused_swiglu=npu_fused._SWIGLU_ENABLED,
+            npu_fused_ops=npu_fused._OPS_ENABLED,
+            npu_fused_ce=npu_ce._ENABLED,
+            attention_layout=npu_attention.LAYOUT,
+            gated_norm_row_floor=npu_fused._GATED_ROW_FLOOR,
+            gdn=npu_gdn.backend_name(),
+            mc2_row=os.environ.get("PRETRAIN_MC2_ROW", "0"),
+        )
+        return options
+    import ops.cuda_fused as cuda_fused
+    from ops import cuda_cross_entropy, flex_cq
+
+    options.update(
+        cuda_fused_norm=cuda_fused._ENABLED,
+        cuda_fused_swiglu=cuda_fused._SWIGLU_ENABLED,
+        cuda_fused_ops=cuda_fused._OPS_ENABLED,
+        cuda_fused_ce=cuda_cross_entropy._ENABLED,
+        flex_attention=flex_cq._ENABLED,
+        flex_tiles=flex_cq.device_tile_options(cfg.head_dim),
+    )
+    return options
 
 
 def data_contract(args, cfg, data):
@@ -194,11 +219,17 @@ def run_record(args, cfg, run, model, ema, state, assets, data, pipeline, loaded
     from utils.experiment import source_hashes
     import utils.dependencies as stack
 
+    if accel.IS_NPU:
+        # The AscendC backend reports its own dispatch table and asserts that
+        # no operator fell back to a composite implementation.
+        import ops.npu_gated_delta as npu_gdn
+
+        record["gdn_backend"] = npu_gdn.provenance()
     record["source_sha256"] = source_hashes()
     record["stack"] = stack.name()
     record["dependencies"] = json.loads(stack.lock_path().read_text())
     record["installed_versions"] = stack.installed_versions()
-    record["nccl"] = torch.cuda.nccl.version()
+    record["collective"] = accel.collective_version()
     host = dict(
         rank=run.rank,
         local_rank=int(os.environ.get("LOCAL_RANK", 0)),

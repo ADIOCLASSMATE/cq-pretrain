@@ -5,9 +5,12 @@ from utils.assets import asset_path, asset_manifest
 import torch
 from torch import nn
 from torch.nn import functional as F
+import ops.audit as audit
+import ops.fused as fused_ops
 import ops.functional as K
 import distributed.megatron as P
 from ops.attention import attend
+from ops.gated_delta import chunk as gated_delta_chunk, chunk_with_state as gated_delta_prefill
 
 
 class RMSNorm(nn.Module):
@@ -21,31 +24,12 @@ class RMSNorm(nn.Module):
         if x.dtype == torch.float64:
             return x * torch.rsqrt(x.square().mean(-1, keepdim=True) + self.eps) * (1 + self.weight)
         weight = 1 + self.weight.float()
-        from ops.cuda_fused import enabled as _cuda_fused, rms_norm as _cuda_rms_norm
-
-        if _cuda_fused(x, fused):
-            # Published Triton RMSNorm; the offset weight convention is applied
-            # here, exactly as in the explicit reference below.
-            return _cuda_rms_norm(x, weight, self.eps)
+        if fused_ops.enabled(x, fused):
+            # Vendor RMSNorm; the offset weight convention is applied here,
+            # exactly as in the explicit reference below.
+            return fused_ops.rms_norm(x, weight, self.eps)
+        audit.reference("rms_norm", x, "fused norm disabled or unsupported dtype")
         return (x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + self.eps) * weight).to(x.dtype)
-
-
-def _cuda_swiglu_enabled(x):
-    """True when the Inductor-fused SwiGLU should run instead of chunk+silu+mul."""
-    if x.device.type != "cuda":
-        return False
-    from ops.cuda_fused import swiglu_enabled
-
-    return swiglu_enabled(x)
-
-
-def _cuda_ops_enabled(x):
-    """True when the published fused SwiGLU / causal conv should run."""
-    if x.device.type != "cuda":
-        return False
-    from ops.cuda_fused import ops_enabled
-
-    return ops_enabled(x)
 
 
 class MLP(nn.Module):
@@ -62,11 +46,10 @@ class MLP(nn.Module):
     def forward(self, x):
         if self.fused_projections:
             projected = self.gate_up_proj(x)
-            if _cuda_swiglu_enabled(projected):
-                from ops.cuda_fused import swiglu as _cuda_swiglu
-
-                activated = _cuda_swiglu(projected)
+            if fused_ops.swiglu_enabled(projected):
+                activated = fused_ops.swiglu(projected)
             else:
+                audit.reference("swiglu", projected)
                 gate, up = projected.chunk(2, -1)
                 activated = F.silu(gate) * up
             return self.down_proj(activated)
@@ -99,10 +82,9 @@ class CausalConv(nn.Module):
         nn.init.uniform_(self.weight, -0.5, 0.5)
 
     def forward(self, x, plan):
-        if _cuda_ops_enabled(x):
-            from ops.cuda_fused import causal_conv1d as _cuda_conv
-
-            return _cuda_conv(x, self.weight[:, 0], plan.content_cu)
+        if fused_ops.ops_enabled(x):
+            return fused_ops.causal_conv1d(x, self.weight[:, 0], plan)
+        audit.reference("causal_conv1d", x)
         results = []
         for a, b in zip(plan.content_bounds, plan.content_bounds[1:]):
             y = F.conv1d(x[:, a:b].transpose(1, 2), self.weight, padding=self.weight.shape[-1] - 1, groups=x.shape[-1])[
@@ -119,11 +101,9 @@ class GatedNorm(nn.Module):
         self.eps = eps
 
     def forward(self, x, z):
-        from ops.cuda_fused import enabled as _cuda_fused, gated_rms_norm as _cuda_gated_norm
-
-        if _cuda_fused(x):
-            # Same upstream FLA entry point the Ascend backend calls.
-            return _cuda_gated_norm(x, z, self.weight, self.eps)
+        if fused_ops.enabled(x):
+            return fused_ops.gated_rms_norm(x, z, self.weight, self.eps)
+        audit.reference("gated_rms_norm", x)
         compute = x if x.dtype == torch.float64 else x.float()
         normalized = compute * torch.rsqrt(compute.square().mean(-1, keepdim=True) + self.eps)
         return (normalized.to(x.dtype) * self.weight * F.silu(z.to(compute.dtype))).to(x.dtype)
@@ -222,12 +202,10 @@ class GatedDelta(nn.Module):
         if cache is not None:
             if torch.is_grad_enabled():
                 raise ValueError("CQ state caching is inference-only")
-            if x.device.type == "cuda":
-                # The fused chunk kernel returns every sequence's final state in
-                # FP32; the Python recurrence is the CPU oracle only.
-                from ops.cuda_gated_delta import chunk_gated_delta
-
-                y, state = chunk_gated_delta(q, k, v, g=g, beta=beta, cu_seqlens=plan.event_cu, output_final_state=True)
+            if x.device.type != "cpu":
+                # The fused kernels return every sequence's final state in their
+                # own precision; the Python recurrence is the CPU oracle only.
+                y, state = gated_delta_prefill(q, k, v, g, beta, plan)
             else:
                 y, state = recurrent_delta(q, k, v, g, beta, plan.event_bounds, True)
             # Recurrent decode uses value-first state; only real C enters history.
@@ -238,18 +216,10 @@ class GatedDelta(nn.Module):
             if len(tail):
                 history[0, -len(tail) :].copy_(tail)
             cache["conv"] = history
-        elif x.device.type == "cuda":
-            from ops.cuda_gated_delta import chunk_gated_delta
-
-            y = chunk_gated_delta(
-                q,
-                k,
-                v,
-                g=g,
-                beta=beta,
-                cu_seqlens=plan.event_cu,
-            )[0]
+        elif x.device.type != "cpu":
+            y = gated_delta_chunk(q, k, v, g, beta, plan)
         else:
+            audit.reference("gated_delta", x)
             y = recurrent_delta(q, k, v, g, beta, plan.event_bounds)
         selected = y[0].index_select(0, plan.hidden_event).to(x.dtype)
         if plan.padding_hidden.numel():

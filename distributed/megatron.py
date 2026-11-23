@@ -1,7 +1,13 @@
-"""Megatron Core tensor parallelism and distributed optimizer over NCCL."""
+"""Megatron Core tensor parallelism and distributed optimizer, per accelerator.
+
+CUDA rendezvous over NCCL with upstream MCore; Ascend over HCCL with the
+MindSpeed adaptor, which patches MCore for NPU transports and optimizers.
+Both arrive at the same TransformerConfig and the same module wrappers below.
+"""
 
 from datetime import timedelta
 import os
+import sys
 import logging
 import torch
 from torch import nn
@@ -23,6 +29,47 @@ def prepare_cuda():
         raise RuntimeError("Install NVIDIA Apex with --cuda_ext for MCore gradient accumulation")
 
 
+def prepare_npu():
+    """Select the Ascend kernel/transport stack before any weight is built."""
+    import torch_npu  # noqa: F401
+
+    import utils.dependencies as stack
+
+    torch.npu.set_device(int(os.environ.get("LOCAL_RANK", 0)))
+    # Capture the native AscendC/Triton callables before MindSpeed patches FLA.
+    import ops.npu_gated_delta as delta_ascendc
+
+    delta_ascendc.initialize()
+    for path in stack.source_directories():
+        if not path.is_dir():
+            raise RuntimeError("Run scripts/setup_mindspeed.py on the CPU host first")
+        sys.path.insert(0, str(path))
+    # Limit global patches; model kernels call public torch_npu APIs explicitly.
+    previous = sys.argv
+    compile_function = torch.compile
+    sys.argv = [previous[0], "--optimization-level", "0", "--optimizer-selection", "fused_torch_adamw"]
+    try:
+        from transformers.utils import logging as transformers_logging
+
+        transformers_logging.set_verbosity_error()
+        import megatron_adaptor  # noqa: F401
+        import mindspeed.megatron_adaptor  # noqa: F401
+    finally:
+        sys.argv = previous
+    # MindSpeed suppresses CUDA compile decorators during imports. Restore
+    # PyTorch's real entry point for our own explicit TorchAIR compilation.
+    torch.compile = compile_function
+    # Native ATB accumulates directly into FP32, validated at vocabulary size.
+    import fused_weight_gradient_mlp_cuda
+    from ops.functional import fused_wgrad
+
+    fused_weight_gradient_mlp_cuda.wgrad_gemm_accum_fp32 = fused_wgrad
+
+
+def prepare_accelerator():
+    prepare_npu() if accel.IS_NPU else prepare_cuda()
+
+
 # Allow enough time for every process to load weights before rendezvous.
 def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, initialize_weights=True):
     global _active, _config, _optimizer_instances
@@ -33,7 +80,9 @@ def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, init
     # still be exact: a remainder would silently drop heads from the recurrence.
     if heads % tp or local_heads < 1:
         raise ValueError(f"GDN head count {heads} must divide TP={tp}")
-    prepare_cuda()
+    if accel.IS_NPU and (model_config.linear_head_dim != 128 or local_heads not in (4, 8, 16, 32)):
+        raise ValueError("AscendC requires 128-dimensional GDN heads with a supported local head count")
+    prepare_accelerator()
     logging.getLogger("megatron.core.optimizer").setLevel(logging.WARNING)
     from megatron.core import parallel_state as ps
     from megatron.core.transformer.transformer_config import TransformerConfig
@@ -61,6 +110,10 @@ def initialize(tp, model_config, timeout_minutes=60, optimizer_instances=1, init
         gradient_accumulation_fusion=True,
         perform_initialization=initialize_weights,
     )
+    if accel.IS_NPU:
+        from distributed.mc2 import configure_mc2
+
+        configure_mc2(tp)
     _active = True
     return _config
 
@@ -140,6 +193,22 @@ class RowLinear(nn.Module):
                 skip_bias_add=False,
             )
             mark_sharded(self.impl.weight, dim=1)
+            if (
+                accel.IS_NPU
+                and os.environ.get("PRETRAIN_MC2_ROW", "0") == "1"
+                and tp_size() > 1
+                and self.impl.weight.shape[1] % 32 == 0
+                and out_features % 32 == 0
+            ):
+                if tp_size() not in (2, 4, 8):
+                    raise ValueError("MC2 rows require TP2/4/8")
+                from types import MethodType
+
+                from distributed.mc2 import row_forward
+
+                # Invoke the original submodule so DDP parameter pre-hooks
+                # still gather its current weight before the fused operation.
+                self.impl.forward = MethodType(row_forward, self.impl)
         else:
             self.impl = nn.Linear(in_features, out_features, bias=bias)
             normal_init(self.impl.weight)

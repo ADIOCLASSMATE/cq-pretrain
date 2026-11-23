@@ -237,6 +237,12 @@ def write_summary(args, cfg, run, measurements, wall_seconds, completed_step, pa
             summary[key] = statistics.mean(x[key] for x in measurements)
     if real_data:
         _real_data_summary(args, run, summary, measurements, wall_seconds)
+    # Which implementation every dispatched operator actually ran, counted on
+    # this rank. A run that meant to be fused but shows a 'reference' path here
+    # measured the fallback, not the kernel.
+    import ops.audit as audit
+
+    summary["operator_paths"] = audit.report()
     (run.output / "summary.json").write_text(json.dumps(summary, indent=2))
 
 
