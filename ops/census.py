@@ -29,6 +29,11 @@ from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parents[1])
 
+# The interpreter, the virtual environments and the vendor stacks all live
+# under ROOT, so "starts with ROOT" alone would attribute every dispatch to
+# torch's or MindSpeed's own frames and never reach the line that asked for it.
+VENDORED = ("/.venv", "/site-packages/", "/.deps/", "/.python/", "/archive/")
+
 # Dispatches that force the host to wait for the device.
 SYNC_OPS = ("_local_scalar_dense", "item", "nonzero", "_assert_async", "equal", "allclose")
 
@@ -79,7 +84,12 @@ class OperatorCensus:
         direct = True
         while frame is not None:
             path = frame.f_code.co_filename
-            if path.startswith(ROOT) and not path.endswith("ops/census.py"):
+            if path.endswith("ops/census.py"):
+                # This module's own frames sit between every dispatch and its
+                # caller; counting them as a hop would make nothing look direct.
+                frame = frame.f_back
+                continue
+            if path.startswith(ROOT) and not any(part in path for part in VENDORED):
                 return f"{path[len(ROOT) + 1 :]}:{frame.f_lineno}", direct
             direct = False
             frame = frame.f_back

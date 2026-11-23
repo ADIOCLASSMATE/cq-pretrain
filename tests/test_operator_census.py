@@ -32,6 +32,17 @@ class SiteAttributionTests(unittest.TestCase):
         self.assertEqual(path, "tests/test_operator_census.py")
         self.assertTrue(line.isdigit())
 
+    def test_a_vendored_frame_under_the_repository_root_is_walked_through(self):
+        counter = census.OperatorCensus()
+        # torch, MindSpeed and the pinned interpreter all live under ROOT.
+        vendored = compile(
+            "counter.record('mm.default')", f"{census.ROOT}/.venv-core17/lib/torch/autograd/graph.py", "exec"
+        )
+        exec(vendored, {"counter": counter})
+        site = next(iter(counter.sites))
+        self.assertTrue(site.startswith("tests/test_operator_census.py:"), site)
+        self.assertEqual(counter.direct[site], 0)
+
     def test_the_census_module_is_never_the_reported_site(self):
         counter = census.OperatorCensus()
         counter.record("empty.memory_format")
