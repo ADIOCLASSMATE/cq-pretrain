@@ -129,9 +129,7 @@ class Attention(nn.Module):
             q, k = rotary(q, (layout.cos, layout.sin)), rotary(k, (layout.cos, layout.sin))
         else:
             k, v = k.unsqueeze(0), v.unsqueeze(0)
-        y = packed_attention(
-            q, k, v, layout.video_ends, layout.video_ends if self_attention else layout.text_ends
-        )
+        y = packed_attention(q, k, v, layout.video_ends, layout.video_ends if self_attention else layout.text_ends)
         return self.o(y.flatten(1))
 
 
@@ -203,9 +201,7 @@ class Wan21Generator(nn.Module):
             nn.GELU(approximate="tanh"),
             P.RowLinear(dim, dim, bias=True),
         )
-        self.time_embedding = nn.Sequential(
-            FP32Linear(cfg.wan_freq_dim, dim), nn.SiLU(), FP32Linear(dim, dim)
-        )
+        self.time_embedding = nn.Sequential(FP32Linear(cfg.wan_freq_dim, dim), nn.SiLU(), FP32Linear(dim, dim))
         self.time_projection = nn.Sequential(nn.SiLU(), FP32Linear(dim, 6 * dim))
         self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.dit_layers)])
         self.head = Head(cfg)
@@ -226,11 +222,7 @@ class Wan21Generator(nn.Module):
     def predict(self, xt, conditions, time_features, layout, projected_conditions=None, cached_kv=None):
         if cached_kv is not None and torch.is_grad_enabled():
             raise ValueError("Condition KV caching is inference-only")
-        context = (
-            self.project_conditions(conditions, layout)
-            if projected_conditions is None
-            else projected_conditions
-        )
+        context = self.project_conditions(conditions, layout) if projected_conditions is None else projected_conditions
         return self._predict(xt, time_features, layout, context, cached_kv)
 
     def _predict(self, xt, time_features, layout, context, condition_kv):
@@ -246,7 +238,9 @@ class Wan21Generator(nn.Module):
                 if condition_kv is None and time.shape[0] > 1:
                     kv = block.cross_attn.project_kv(context)
                 # Give reentrant checkpointing the shared KV as individual gradient inputs.
-                x = checkpoint(block, x, modulation, context if kv[0] is None else None, layout, *kv, use_reentrant=True)
+                x = checkpoint(
+                    block, x, modulation, context if kv[0] is None else None, layout, *kv, use_reentrant=True
+                )
             else:
                 x = block(x, modulation, context, layout, *kv)
         return self.head(x, head_time).float()
@@ -303,10 +297,7 @@ class Wan21Generator(nn.Module):
                     if name not in targets:
                         raise ValueError(f"Unexpected Wan weight {name}")
                     # Native Wan config omits text_dim; the tensor is authoritative.
-                    if (
-                        name == "text_embedding.0.weight"
-                        and source.get_slice(name).get_shape()[1] != self.cfg.width
-                    ):
+                    if name == "text_embedding.0.weight" and source.get_slice(name).get_shape()[1] != self.cfg.width:
                         generator = torch.Generator().manual_seed(torch.initial_seed())
                         weight = torch.empty(self.cfg.dit_width, self.cfg.width)
                         nn.init.normal_(weight, std=0.02, generator=generator)

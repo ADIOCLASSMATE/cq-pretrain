@@ -1,4 +1,5 @@
 """CUDA runtime regressions that can be checked without a GPU."""
+
 import io
 import os
 import re
@@ -82,8 +83,20 @@ def test_production_synthetic_cli_keeps_model_configuration():
     path = "configs/qwen35_2b_wan.yaml"
     before = RunConfig.load(path).to_dict()
     with patch.dict(os.environ):
-        args = parse_args(['--config', path, '--synthetic', '--tp', '1', '--global-batch', '1',
-                           '--log-all-ranks', '--output', '/tmp/cq-test-unused'])
+        args = parse_args(
+            [
+                "--config",
+                path,
+                "--synthetic",
+                "--tp",
+                "1",
+                "--global-batch",
+                "1",
+                "--log-all-ranks",
+                "--output",
+                "/tmp/cq-test-unused",
+            ]
+        )
     assert args.synthetic and args.log_all_ranks
     assert args.tp == 1 and args.global_batch == 1
     assert RunConfig.load(path).to_dict() == before

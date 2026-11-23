@@ -6,6 +6,7 @@ gated norm) against an FP64 CPU reference built from recurrent_delta, for both
 mainline methods and chunk-boundary lengths. Also re-checks that read-only CQ
 queries never perturb content/key outputs. No distributed init required.
 """
+
 import argparse
 import copy
 import json
@@ -33,13 +34,18 @@ def main():
     p.add_argument("--key-heads", type=int, default=16)
     p.add_argument("--value-heads", type=int, default=16)
     p.add_argument("--tol", type=float, default=0.035)
-    p.add_argument("--kernel-head-shards", type=int, default=1,
-                   help="Split the same layer's packed kernel heads; single-GPU check, not collectives")
-    p.add_argument("--control-tol", type=float, default=0.035,
-                   help="Tolerance for the conditioned A_log/dt_bias gradient error")
+    p.add_argument(
+        "--kernel-head-shards",
+        type=int,
+        default=1,
+        help="Split the same layer's packed kernel heads; single-GPU check, not collectives",
+    )
+    p.add_argument(
+        "--control-tol", type=float, default=0.035, help="Tolerance for the conditioned A_log/dt_bias gradient error"
+    )
     a = p.parse_args()
     if a.kernel_head_shards < 1 or a.value_heads % a.kernel_head_shards:
-        p.error('value-heads must be divisible by a positive kernel-head-shards')
+        p.error("value-heads must be divisible by a positive kernel-head-shards")
     if not torch.cuda.is_available():
         raise SystemExit("CUDA device required")
     dev = "cuda"
@@ -49,12 +55,12 @@ def main():
     cases = []
     if a.kernel_head_shards > 1:
         import ops.cuda_gated_delta as binding
+
         original = binding.chunk_gated_delta
 
         def split_heads(q, k, v, g, beta, **kwargs):
             shards = [t.chunk(a.kernel_head_shards, dim=2) for t in (q, k, v, g, beta)]
-            outputs = [original(qi, ki, vi, gi, bi, **kwargs)[0]
-                       for qi, ki, vi, gi, bi in zip(*shards)]
+            outputs = [original(qi, ki, vi, gi, bi, **kwargs)[0] for qi, ki, vi, gi, bi in zip(*shards)]
             return torch.cat(outputs, dim=2), None
 
         # Keep the full 16-head fixture and FP64 oracle identical while testing
@@ -78,8 +84,7 @@ def main():
 
     for length in (61, 64, 65):
         torch.manual_seed(101)
-        cfg = tiny_config(linear_heads=a.key_heads, linear_value_heads=a.value_heads,
-                          linear_head_dim=128)
+        cfg = tiny_config(linear_heads=a.key_heads, linear_value_heads=a.value_heads, linear_head_dim=128)
         batch = fake_batch(cfg, length, 1, 2)
         plan = batch.mainline.delta_plan
         layer = GatedDelta(cfg)
@@ -121,14 +126,13 @@ def main():
             dg = rg.grad
             activation = reference.in_proj_a(xr[:, 0]).index_select(0, plan.content_order) + reference.dt_bias
             derivative = -reference.A_log.exp() * activation.sigmoid()
-            derivative = torch.cat(
-                (derivative, derivative.new_zeros(1, heads))
-            ).index_select(0, plan.event_write)[None]
-            scales = dict(A_log=(dg * rg).abs().sum((0, 1)).norm(),
-                          dt_bias=(dg * derivative).abs().sum((0, 1)).norm())
+            derivative = torch.cat((derivative, derivative.new_zeros(1, heads))).index_select(0, plan.event_write)[None]
+            scales = dict(A_log=(dg * rg).abs().sum((0, 1)).norm(), dt_bias=(dg * derivative).abs().sum((0, 1)).norm())
             conditioned = {
-                name: float((getattr(layer, name).grad.cpu().double()
-                             - getattr(reference, name).grad).norm() / scale.clamp_min(1e-8))
+                name: float(
+                    (getattr(layer, name).grad.cpu().double() - getattr(reference, name).grad).norm()
+                    / scale.clamp_min(1e-8)
+                )
                 for name, scale in scales.items()
             }
         # Read-only CQ queries must not perturb content/key outputs.
@@ -145,10 +149,18 @@ def main():
         # only reported next to the conditioned one.
         passed_raw = all(math.isfinite(v) and v <= a.tol for v in errors.values())
         passed = passed_ordinary and passed_control and isolation == 0.0
-        cases.append(dict(method="CQ_IT", length=length, events=len(plan.event_q),
-                          errors=errors, conditioned_control_error=conditioned,
-                          isolation_max_abs=isolation, passed=passed,
-                          passed_raw_unconditioned=passed_raw))
+        cases.append(
+            dict(
+                method="CQ_IT",
+                length=length,
+                events=len(plan.event_q),
+                errors=errors,
+                conditioned_control_error=conditioned,
+                isolation_max_abs=isolation,
+                passed=passed,
+                passed_raw_unconditioned=passed_raw,
+            )
+        )
 
     result = dict(
         passed=all(c["passed"] for c in cases) and all(math.isfinite(v) and v <= a.tol for v in norm_err.values()),
@@ -158,7 +170,8 @@ def main():
         control_tolerance=a.control_tol,
         passed_raw_unconditioned=all(c["passed_raw_unconditioned"] for c in cases),
         worst_conditioned_control_error=max(
-            (v for c in cases for v in c["conditioned_control_error"].values()), default=0.0),
+            (v for c in cases for v in c["conditioned_control_error"].values()), default=0.0
+        ),
         norm_errors=norm_err,
         worst_case_error=max((v for c in cases for v in c["errors"].values()), default=0.0),
         cases=cases,
@@ -166,8 +179,16 @@ def main():
     (out / "cuda_cq.json").write_text(json.dumps(result, indent=2))
     print(json.dumps({k: v for k, v in result.items() if k != "cases"}, indent=2))
     for c in cases:
-        print(c["method"], c["length"], "worst", round(max(c["errors"].values()), 5),
-              "iso", c["isolation_max_abs"], "pass", c["passed"])
+        print(
+            c["method"],
+            c["length"],
+            "worst",
+            round(max(c["errors"].values()), 5),
+            "iso",
+            c["isolation_max_abs"],
+            "pass",
+            c["passed"],
+        )
     if not result["passed"]:
         raise SystemExit("CUDA CQ GDN accuracy gate failed")
     print("CUDA CQ GDN GATE PASSED")

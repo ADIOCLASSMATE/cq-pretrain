@@ -34,6 +34,12 @@ def chunk_gated_delta(q, k, v, g, beta, *, cu_seqlens, output_final_state=False)
     # plan already supplies packed varlen write/read events in precisely this
     # order. g remains log-decay FP32; beta is the precomputed sigmoid.
     return chunk_gated_delta_rule(
-        _unit(q), _unit(k), v, g=g, beta=beta.to(q.dtype),
-        use_qk_l2norm_in_kernel=False, cu_seqlens=cu_seqlens, output_final_state=output_final_state,
+        _unit(q),
+        _unit(k),
+        v,
+        g=g,
+        beta=beta.to(q.dtype),
+        use_qk_l2norm_in_kernel=False,
+        cu_seqlens=cu_seqlens,
+        output_final_state=output_final_state,
     )

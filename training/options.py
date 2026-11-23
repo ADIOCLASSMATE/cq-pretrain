@@ -9,9 +9,7 @@ from pathlib import Path
 def build_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config")
-    parser.add_argument(
-        "--vision-assets", help="Local pinned Qwen3.5 vision assets; training never downloads weights"
-    )
+    parser.add_argument("--vision-assets", help="Local pinned Qwen3.5 vision assets; training never downloads weights")
     parser.add_argument("--text-assets", help="Local pinned Qwen3.5 language checkpoint and tokenizer")
     parser.add_argument("--wan-assets", help="Local native Wan2.1 DiT checkpoint")
     parser.add_argument("--wan-vae-assets", help="Local frozen Wan2.1 VAE checkpoint")
@@ -102,9 +100,7 @@ def build_parser():
     parser.add_argument("--validate-final", action="store_true")
     parser.add_argument("--output")
     parser.add_argument("--save-every", type=int, default=0)
-    parser.add_argument(
-        "--checkpoint-dir", type=Path, help="Shared checkpoint root, independent of attempt logs"
-    )
+    parser.add_argument("--checkpoint-dir", type=Path, help="Shared checkpoint root, independent of attempt logs")
     parser.add_argument("--keep-checkpoints", type=int, default=3)
     parser.add_argument(
         "--eval-snapshot-every",
@@ -143,12 +139,8 @@ def build_parser():
         "resident main_grad buffer. Changes reduction numerics; validate loss parity.",
     )
     parser.add_argument("--no-param-overlap", action="store_true")
-    parser.add_argument(
-        "--phase-timing", action="store_true", help="Measure forward/backward/optimizer device time"
-    )
-    parser.add_argument(
-        "--log-all-ranks", action="store_true", help="Print successful step receipts on every rank"
-    )
+    parser.add_argument("--phase-timing", action="store_true", help="Measure forward/backward/optimizer device time")
+    parser.add_argument("--log-all-ranks", action="store_true", help="Print successful step receipts on every rank")
     parser.add_argument("--checkpoint-backbone-layers", type=int, default=0)
     parser.add_argument("--checkpoint-dit-layers", type=int, default=0)
     parser.add_argument("--keep-attention-activations", type=int, default=0)
@@ -183,9 +175,7 @@ def build_parser():
     parser.add_argument("--data-mode", choices=("A", "B"), default="A")
     parser.add_argument("--allow-development-data", action="store_true")
     parser.add_argument("--data-workers", type=int, default=2)
-    parser.add_argument(
-        "--data-prefetch", type=int, default=0, help="CPU packs ahead; zero selects GA+4 (minimum 4)"
-    )
+    parser.add_argument("--data-prefetch", type=int, default=0, help="CPU packs ahead; zero selects GA+4 (minimum 4)")
     parser.add_argument("--source-root", help="Optional local TAR pool relocation")
     parser.add_argument("--tokenize-rows", type=int, default=32)
     parser.add_argument("--shuffle-block-rows", type=int, default=4)
@@ -215,9 +205,7 @@ def build_parser():
         type=int,
         help="Optional limit on image draws per DiT chunk; zero is unlimited",
     )
-    parser.add_argument(
-        "--rf", type=int, help="Rectified-flow draws per generation target (data.rf, default 4)"
-    )
+    parser.add_argument("--rf", type=int, help="Rectified-flow draws per generation target (data.rf, default 4)")
     parser.add_argument(
         "--timestep-shift", type=float, help="Wan shift applied to logit-normal training times (default 1)"
     )
@@ -273,12 +261,7 @@ def _validate(parser, args):
             setattr(args, key, Path(getattr(args, key)))
     if args.min_lr is None:
         args.min_lr = args.lr * 0.1
-    if (
-        not math.isfinite(args.lr)
-        or args.lr <= 0
-        or not math.isfinite(args.min_lr)
-        or not 0 <= args.min_lr <= args.lr
-    ):
+    if not math.isfinite(args.lr) or args.lr <= 0 or not math.isfinite(args.min_lr) or not 0 <= args.min_lr <= args.lr:
         parser.error("Require finite lr > 0 and 0 <= min-lr <= lr")
     if not math.isfinite(args.renderer_ema_decay) or not 0 <= args.renderer_ema_decay < 1:
         parser.error("Require finite 0 <= renderer-ema-decay < 1")

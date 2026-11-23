@@ -40,11 +40,7 @@ class MainlinePlan:
     def _map_tensors(self, fn):
         return replace(
             self,
-            **{
-                f.name: fn(value)
-                for f in fields(self)
-                if isinstance(value := getattr(self, f.name), torch.Tensor)
-            },
+            **{f.name: fn(value) for f in fields(self) if isinstance(value := getattr(self, f.name), torch.Tensor)},
         )
 
     def to(self, device, non_blocking=False):
@@ -60,8 +56,13 @@ class MainlinePlan:
     def pin_memory(self, device):
         out = self._map_tensors(lambda t: t.pin_memory(device=device) if t.numel() else t)
         if self.cq_plan is not None:
-            out.cq_plan = replace(self.cq_plan, owner=out.cq_mask, mask_pointer=out.cq_mask.data_ptr(),
-                                  mask_version=out.cq_mask._version, tile_masks=())
+            out.cq_plan = replace(
+                self.cq_plan,
+                owner=out.cq_mask,
+                mask_pointer=out.cq_mask.data_ptr(),
+                mask_version=out.cq_mask._version,
+                tile_masks=(),
+            )
         if self.delta_plan is not None:
             out.delta_plan = self.delta_plan.pin_memory(device)
         if self.cq_predicate is not None:

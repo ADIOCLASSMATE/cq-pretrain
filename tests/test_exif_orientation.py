@@ -1,4 +1,5 @@
 """A damaged EXIF block must not stop training: the picture is used as stored."""
+
 import io
 
 import numpy as np

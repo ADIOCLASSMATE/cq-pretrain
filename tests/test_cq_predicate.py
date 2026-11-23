@@ -4,6 +4,7 @@ If this passes on real plan layouts -- multi-document packs, tied image blocks,
 unconditional queries and invalid/padding rows -- then a kernel driven by the
 predicate computes exactly the attention the dense mask describes.
 """
+
 import random
 import unittest
 from pathlib import Path
@@ -16,7 +17,7 @@ from data.batch import fake_batch
 from ops.attention_layout import document_cq_mask, cq_mask_vectors
 
 
-ASSETS = Path(__file__).resolve().parents[1] / '.assets/Qwen3.5-2B-Base'
+ASSETS = Path(__file__).resolve().parents[1] / ".assets/Qwen3.5-2B-Base"
 
 
 def wan_cfg(**kw):
@@ -36,9 +37,8 @@ class CQPredicateEquivalence(unittest.TestCase):
         mask, valid = document_cq_mask(batch, query_positions, unconditional)
         pred = cq_mask_vectors(batch, query_positions, valid, unconditional)
         rebuilt = pred.dense()
-        self.assertEqual(rebuilt.shape, mask.shape, 'shape differs')
-        self.assertTrue(torch.equal(rebuilt, mask),
-                        f'predicate differs in {(rebuilt != mask).sum().item()} entries')
+        self.assertEqual(rebuilt.shape, mask.shape, "shape differs")
+        self.assertTrue(torch.equal(rebuilt, mask), f"predicate differs in {(rebuilt != mask).sum().item()} entries")
         return mask, valid
 
     def test_single_document(self):
@@ -100,40 +100,41 @@ class CQPredicateEquivalence(unittest.TestCase):
 
     def test_cutoffs_match_visible_keys_recurrent_writes_and_conv_history(self):
         from ops.gated_delta_layout import build_delta_plan
+
         rng = random.Random(315)
         for _ in range(32):
             docs, sigmas = [], []
             for doc in range(3):
                 rank = rng.randrange(1, 10)
                 for j in range(8):
-                    rank += rng.choice([0,0,1,3])
+                    rank += rng.choice([0, 0, 1, 3])
                     docs.append(doc)
                     sigmas.append(rank)
             size = len(docs)
             positions = torch.tensor([rng.randrange(size) for _ in range(12)])
-            cuts = torch.tensor([rng.randrange(sigmas[p]+1) for p in positions])
-            null = torch.tensor([i%5==0 for i in range(len(positions))])
-            batch = SimpleNamespace(ids=torch.zeros(1,size,dtype=torch.long),
-                                    segments=torch.tensor([docs]),sigma=torch.tensor([sigmas]))
-            plan = SimpleNamespace(
-                                   query_positions=positions,query_read_sigma=cuts,query_unconditional=null)
-            kernel = rng.randrange(1,6)
-            delta = build_delta_plan(batch,plan,SimpleNamespace(linear_conv_kernel=kernel))
-            mask,valid = document_cq_mask(batch,positions,null,cuts)
-            assert torch.equal(mask,cq_mask_vectors(batch,positions,valid,null,cuts).dense())
-            for i,p in enumerate(positions.tolist()):
-                visible = [k for k in range(size) if docs[k]==docs[p] and sigmas[k]<cuts[i] and not null[i]]
-                event = int(delta.hidden_event[size+i])
-                writes = delta.event_write[delta.event_bounds[docs[p]]:event]
-                assert delta.content_order[writes[writes<size]].tolist() == visible
-                row = (delta.query_source==size+i).nonzero().item()
+            cuts = torch.tensor([rng.randrange(sigmas[p] + 1) for p in positions])
+            null = torch.tensor([i % 5 == 0 for i in range(len(positions))])
+            batch = SimpleNamespace(
+                ids=torch.zeros(1, size, dtype=torch.long), segments=torch.tensor([docs]), sigma=torch.tensor([sigmas])
+            )
+            plan = SimpleNamespace(query_positions=positions, query_read_sigma=cuts, query_unconditional=null)
+            kernel = rng.randrange(1, 6)
+            delta = build_delta_plan(batch, plan, SimpleNamespace(linear_conv_kernel=kernel))
+            mask, valid = document_cq_mask(batch, positions, null, cuts)
+            assert torch.equal(mask, cq_mask_vectors(batch, positions, valid, null, cuts).dense())
+            for i, p in enumerate(positions.tolist()):
+                visible = [k for k in range(size) if docs[k] == docs[p] and sigmas[k] < cuts[i] and not null[i]]
+                event = int(delta.hidden_event[size + i])
+                writes = delta.event_write[delta.event_bounds[docs[p]] : event]
+                assert delta.content_order[writes[writes < size]].tolist() == visible
+                row = (delta.query_source == size + i).nonzero().item()
                 conv = delta.query_history[row]
-                expected_conv = visible[-(kernel-1):] if kernel>1 else []
-                assert delta.content_order[conv[conv<size]].tolist() == expected_conv
-                allowed = ~mask[0,0,size+i] & valid[0,size+i]
+                expected_conv = visible[-(kernel - 1) :] if kernel > 1 else []
+                assert delta.content_order[conv[conv < size]].tolist() == expected_conv
+                allowed = ~mask[0, 0, size + i] & valid[0, size + i]
                 assert allowed.nonzero().flatten().tolist() == visible
 
-    @unittest.skipUnless(ASSETS.is_dir(), 'local Qwen3.5-2B-Base assets required')
+    @unittest.skipUnless(ASSETS.is_dir(), "local Qwen3.5-2B-Base assets required")
     def test_real_plan_layouts(self):
         """Layouts produced by the actual Wan plan builder."""
         for seed, length, images in ((11, 1024, 1), (12, 1536, 2), (13, 2048, 3)):
@@ -157,12 +158,12 @@ class CQPredicateEquivalence(unittest.TestCase):
                 n = min(n, s - cursor)
                 if n <= 0:
                     break
-                seg[cursor:cursor + n] = d
+                seg[cursor : cursor + n] = d
                 r = torch.arange(n)
                 if bool(torch.randint(0, 2, (1,), generator=g)):  # tie a block
                     a = int(torch.randint(0, max(1, n - 1), (1,), generator=g))
-                    r[a:min(n, a + 3)] = a
-                sigma[cursor:cursor + n] = r
+                    r[a : min(n, a + 3)] = a
+                sigma[cursor : cursor + n] = r
                 cursor += n
             batch.segments = seg[None]
             batch.sigma = sigma[None]
@@ -172,5 +173,5 @@ class CQPredicateEquivalence(unittest.TestCase):
             self.check(batch, qp, unc)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,4 +1,5 @@
 """Bounded H2D/latent prefetch on a separate device stream, with safe lifetimes."""
+
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, is_dataclass
@@ -6,6 +7,7 @@ import time
 
 import torch
 from distributed.accel import device_module
+
 _DEV = device_module()
 
 
@@ -47,25 +49,37 @@ class DeviceLoader:
     acquire() inserts its event dependency immediately before its forward,
     allowing GA microbatches to overlap with preparation of later items.
     """
+
     def __init__(self, host_loader, preparer, prefetch=2):
         if prefetch < 0:
-            raise ValueError('Device prefetch must be nonnegative; zero is the synchronous control')
+            raise ValueError("Device prefetch must be nonnegative; zero is the synchronous control")
         self.host, self.preparer = host_loader, preparer
         self.limit, self.pending = prefetch, deque()
-        self.is_npu = preparer.device.startswith(('npu', 'cuda'))
+        self.is_npu = preparer.device.startswith(("npu", "cuda"))
         self.stream = _DEV.Stream(device=preparer.device) if self.is_npu and prefetch else None
         if self.stream is not None:
             self.stream.wait_stream(_DEV.current_stream(preparer.device))
         self.closed, self.stopped = False, False
         self.wait_events = []
-        self.stats = dict(host_wait_seconds=0., acquired=0, not_ready_on_acquire=0,
-                          max_queued=0, prepare_enqueue_seconds=0.,acquire_wait_seconds=0.,
-                          future_submit_seconds=0.)
+        self.stats = dict(
+            host_wait_seconds=0.0,
+            acquired=0,
+            not_ready_on_acquire=0,
+            max_queued=0,
+            prepare_enqueue_seconds=0.0,
+            acquire_wait_seconds=0.0,
+            future_submit_seconds=0.0,
+        )
+
         def initialize():
             if self.is_npu:
                 _DEV.set_device(preparer.device)
-        self.pool = ThreadPoolExecutor(max_workers=1, initializer=initialize,
-                                       thread_name_prefix='latent-prefetch') if prefetch else None
+
+        self.pool = (
+            ThreadPoolExecutor(max_workers=1, initializer=initialize, thread_name_prefix="latent-prefetch")
+            if prefetch
+            else None
+        )
         self.waiting = deque()
         self.inflight = deque()
 
@@ -83,13 +97,13 @@ class DeviceLoader:
         return DeviceItem(batch, receipt, ready, (host_batch, randoms), time.perf_counter() - begin)
 
     def _fill(self):
-        begin=time.perf_counter()
+        begin = time.perf_counter()
         while self.pool is not None and self.waiting and len(self.inflight) < self.limit:
-            item=self.waiting.popleft()
-            item.future=self.pool.submit(self._prepare,item)
+            item = self.waiting.popleft()
+            item.future = self.pool.submit(self._prepare, item)
             self.inflight.append(item)
-        self.stats['max_queued'] = max(self.stats['max_queued'], len(self.inflight))
-        self.stats['future_submit_seconds']+=time.perf_counter()-begin
+        self.stats["max_queued"] = max(self.stats["max_queued"], len(self.inflight))
+        self.stats["future_submit_seconds"] += time.perf_counter() - begin
 
     def next_group(self, count):
         """Collect CPU metadata for exact loss normalization, bound device lookahead.
@@ -100,9 +114,9 @@ class DeviceLoader:
         microbatches have device preparations in flight.
         """
         if self.waiting or self.inflight:
-            raise RuntimeError('Acquire every previous group item before requesting another')
+            raise RuntimeError("Acquire every previous group item before requesting another")
         if count < 1:
-            raise ValueError('Require a positive microbatch count')
+            raise ValueError("Require a positive microbatch count")
         begin = time.perf_counter()
         group = []
         for _ in range(count):
@@ -110,31 +124,33 @@ class DeviceLoader:
             if pair is None:
                 self.closed = True
                 break
-            item = DeviceItem(pair[0], pair[1], None, (), 0.)
+            item = DeviceItem(pair[0], pair[1], None, (), 0.0)
             group.append(item)
             self.waiting.append(item)
-        group.extend([None]*(count-len(group)))
-        self.stats['host_wait_seconds'] += time.perf_counter() - begin
+        group.extend([None] * (count - len(group)))
+        self.stats["host_wait_seconds"] += time.perf_counter() - begin
         self._fill()
         return group
 
     def acquire(self, item):
-        begin=time.perf_counter()
+        begin = time.perf_counter()
         if self.pool is not None:
-            if self.inflight[0] is not item:raise ValueError('Acquire device batches in order')
-            prepared=item.future.result()
-            item.future=None
+            if self.inflight[0] is not item:
+                raise ValueError("Acquire device batches in order")
+            prepared = item.future.result()
+            item.future = None
             self.inflight.popleft()
         else:
-            if self.waiting.popleft() is not item:raise ValueError('Acquire device batches in order')
-            prepared=self._prepare(item)
-        self.stats['acquire_wait_seconds']+=time.perf_counter()-begin
+            if self.waiting.popleft() is not item:
+                raise ValueError("Acquire device batches in order")
+            prepared = self._prepare(item)
+        self.stats["acquire_wait_seconds"] += time.perf_counter() - begin
         # Retain pinned transfer sources until the consumer releases this item.
-        item.host_keepalive=prepared.host_keepalive
-        self.stats['prepare_enqueue_seconds']+=prepared.prepare_seconds
+        item.host_keepalive = prepared.host_keepalive
+        self.stats["prepare_enqueue_seconds"] += prepared.prepare_seconds
         if prepared.ready is not None:
             stream = _DEV.current_stream(self.preparer.device)
-            self.stats['not_ready_on_acquire'] += int(not prepared.ready.query())
+            self.stats["not_ready_on_acquire"] += int(not prepared.ready.query())
             start, end = [_DEV.Event(enable_timing=True) for _ in range(2)]
             start.record(stream)
             stream.wait_event(prepared.ready)
@@ -143,9 +159,9 @@ class DeviceLoader:
             # Objects can leave Python scope before forward/backward finishes.
             # Record every plan/vision/batch tensor on the consuming stream.
             for tensor in tensors(prepared.batch):
-                if tensor.device.type in ('npu', 'cuda') and tensor.numel():
+                if tensor.device.type in ("npu", "cuda") and tensor.numel():
                     tensor.record_stream(stream)
-        self.stats['acquired'] += 1
+        self.stats["acquired"] += 1
         self._fill()
         return prepared.batch
 

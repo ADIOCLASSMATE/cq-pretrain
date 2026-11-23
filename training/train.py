@@ -172,7 +172,16 @@ def main():
         wall_seconds = wall.item()
     if run.rank == 0:
         metrics.write_summary(
-            args, cfg, run, measurements, wall_seconds, completed_step, parameters, persistence, ema, pipeline is not None
+            args,
+            cfg,
+            run,
+            measurements,
+            wall_seconds,
+            completed_step,
+            parameters,
+            persistence,
+            ema,
+            pipeline is not None,
         )
     if pipeline:
         pipeline.close(run.output, run.rank)

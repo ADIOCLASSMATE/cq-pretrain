@@ -39,9 +39,10 @@ def fp8_gemm(m, k, n, device="cuda"):
     b = torch.randn(n, k, device=device).to(torch.float8_e4m3fn).t()
     scale_a = torch.tensor(1.0, device=device)
     scale_b = torch.tensor(1.0, device=device)
+
     def run():
-        return torch._scaled_mm(a, b, scale_a=scale_a, scale_b=scale_b,
-                                out_dtype=torch.bfloat16)
+        return torch._scaled_mm(a, b, scale_a=scale_a, scale_b=scale_b, out_dtype=torch.bfloat16)
+
     run()  # surface unsupported layouts/dtypes immediately
     return run
 
@@ -73,8 +74,10 @@ def main():
 
     capability = torch.cuda.get_device_capability()
     print(f"device {torch.cuda.get_device_name(0)} sm{capability[0]}{capability[1]}", flush=True)
-    print(f"{'shape':<24}{'M':>7}{'K':>7}{'N':>8}{'bf16 ms':>10}{'fp8 ms':>10}"
-          f"{'ratio':>8}{'bf16 TF':>9}{'fp8 TF':>9}", flush=True)
+    print(
+        f"{'shape':<24}{'M':>7}{'K':>7}{'N':>8}{'bf16 ms':>10}{'fp8 ms':>10}{'ratio':>8}{'bf16 TF':>9}{'fp8 TF':>9}",
+        flush=True,
+    )
     results = []
     for name, m, k, n in shapes:
         flops = 2 * m * k * n
@@ -88,17 +91,30 @@ def main():
             ratio = bf16_ms / fp8_ms
         except Exception as error:
             fp8_ms, ratio = float("nan"), float("nan")
-            results.append(dict(name=name, m=m, k=k, n=n, bf16_ms=bf16_ms,
-                                fp8_error=f"{type(error).__name__}: {error}"))
-            print(f"{name:<24}{m:>7}{k:>7}{n:>8}{bf16_ms:>10.3f}"
-                  f"{'unsupported':>10}", flush=True)
+            results.append(
+                dict(name=name, m=m, k=k, n=n, bf16_ms=bf16_ms, fp8_error=f"{type(error).__name__}: {error}")
+            )
+            print(f"{name:<24}{m:>7}{k:>7}{n:>8}{bf16_ms:>10.3f}{'unsupported':>10}", flush=True)
             torch.cuda.empty_cache()
             continue
-        results.append(dict(name=name, m=m, k=k, n=n, bf16_ms=bf16_ms, fp8_ms=fp8_ms,
-                            ratio=ratio, bf16_tflops=flops / (bf16_ms * 1e-3) / 1e12,
-                            fp8_tflops=flops / (fp8_ms * 1e-3) / 1e12))
-        print(f"{name:<24}{m:>7}{k:>7}{n:>8}{bf16_ms:>10.3f}{fp8_ms:>10.3f}{ratio:>8.2f}"
-              f"{flops/(bf16_ms*1e-3)/1e12:>9.1f}{flops/(fp8_ms*1e-3)/1e12:>9.1f}", flush=True)
+        results.append(
+            dict(
+                name=name,
+                m=m,
+                k=k,
+                n=n,
+                bf16_ms=bf16_ms,
+                fp8_ms=fp8_ms,
+                ratio=ratio,
+                bf16_tflops=flops / (bf16_ms * 1e-3) / 1e12,
+                fp8_tflops=flops / (fp8_ms * 1e-3) / 1e12,
+            )
+        )
+        print(
+            f"{name:<24}{m:>7}{k:>7}{n:>8}{bf16_ms:>10.3f}{fp8_ms:>10.3f}{ratio:>8.2f}"
+            f"{flops / (bf16_ms * 1e-3) / 1e12:>9.1f}{flops / (fp8_ms * 1e-3) / 1e12:>9.1f}",
+            flush=True,
+        )
         torch.cuda.empty_cache()
 
     usable = [r for r in results if r.get("ratio") == r.get("ratio") and "ratio" in r]
@@ -109,10 +125,19 @@ def main():
         weighted = None
         print("\nNo FP8 GEMM succeeded on this device.", flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(dict(
-        device=torch.cuda.get_device_name(0), capability=list(capability),
-        torch=torch.__version__, tokens=tokens,
-        weighted_speedup=weighted, shapes=results), indent=2))
+    args.output.write_text(
+        json.dumps(
+            dict(
+                device=torch.cuda.get_device_name(0),
+                capability=list(capability),
+                torch=torch.__version__,
+                tokens=tokens,
+                weighted_speedup=weighted,
+                shapes=results,
+            ),
+            indent=2,
+        )
+    )
     print(f"wrote {args.output}", flush=True)
 
 

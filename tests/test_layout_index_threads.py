@@ -1,4 +1,5 @@
 """The layout index is queried from the image thread pool; connections must not be shared."""
+
 import os
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -8,10 +9,10 @@ from corpus_pipeline.production import portable_refs
 
 
 def _index(tmp_path, rows=2000):
-    path = tmp_path / 'layout.sqlite'
+    path = tmp_path / "layout.sqlite"
     db = sqlite3.connect(path)
-    db.execute('create table entries(id integer primary key, offset integer, payload text)')
-    db.executemany('insert into entries values(?,?,?)', ((i, i * 512, 'x' * 64) for i in range(rows)))
+    db.execute("create table entries(id integer primary key, offset integer, payload text)")
+    db.executemany("insert into entries values(?,?,?)", ((i, i * 512, "x" * 64) for i in range(rows)))
     db.commit()
     db.close()
     return str(path)
@@ -36,8 +37,11 @@ def test_concurrent_lookups_return_the_right_rows(tmp_path):
     index = _index(tmp_path)
 
     def lookup(i):
-        row = portable_refs._layout_db(index, os.getpid()).execute(
-            'select id from entries where offset=?', (i * 512,)).fetchone()
+        row = (
+            portable_refs._layout_db(index, os.getpid())
+            .execute("select id from entries where offset=?", (i * 512,))
+            .fetchone()
+        )
         return row[0]
 
     with ThreadPoolExecutor(max_workers=8) as pool:

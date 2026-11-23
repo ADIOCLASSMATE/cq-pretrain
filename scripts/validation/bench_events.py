@@ -12,6 +12,7 @@ Variants, all producing bitwise-identical values and gradients:
            one for g|beta
   masked   clamp the index and zero the read-only rows instead of padding
 """
+
 import argparse
 import json
 from pathlib import Path
@@ -77,6 +78,7 @@ def timed(fn, args, iters=20):
         for a in args:
             if torch.is_tensor(a) and a.dtype.is_floating_point and a.grad is not None:
                 a.grad = None
+
     for _ in range(5):
         run()
     torch.cuda.synchronize()
@@ -112,14 +114,12 @@ def main():
     events = len(plan.event_q)
 
     # How ordered is the real index, versus the random one I first assumed?
-    diffs = (ew[1:].long() - ew[:-1].long())
+    diffs = ew[1:].long() - ew[:-1].long()
     monotonic = float((diffs >= 0).float().mean())
-    print(f"  real plan: content={content} events={events} "
-          f"nondecreasing_steps={monotonic:.1%}")
+    print(f"  real plan: content={content} events={events} nondecreasing_steps={monotonic:.1%}")
     rnd = torch.randint(0, content, (events,), device="cuda")
-    rdiff = (rnd[1:].long() - rnd[:-1].long())
-    print(f"  random index for comparison: nondecreasing_steps="
-          f"{float((rdiff >= 0).float().mean()):.1%}")
+    rdiff = rnd[1:].long() - rnd[:-1].long()
+    print(f"  random index for comparison: nondecreasing_steps={float((rdiff >= 0).float().mean()):.1%}")
 
     size = cfg.linear_heads * cfg.linear_head_dim // 1
     heads = cfg.linear_value_heads or cfg.linear_heads
@@ -134,8 +134,7 @@ def main():
     write_slots = (ew < content).nonzero().flatten()
     src = ew.index_select(0, write_slots)
     identity = bool(torch.equal(src, torch.arange(content, device=src.device, dtype=src.dtype)))
-    print(f"  write events are arange(nc) in order: {identity} "
-          f"({len(write_slots)} writes of {events} events)")
+    print(f"  write events are arange(nc) in order: {identity} ({len(write_slots)} writes of {events} events)")
 
     variants = [("current", current), ("merged", merged), ("masked", masked)]
     if identity:
@@ -157,22 +156,24 @@ def main():
         else:
             verr = max(float((x - y).abs().max()) for x, y in zip(values, base))
             gerr = max(float((x - y).abs().max()) for x, y in zip(grads, bgrad))
-        out[name] = dict(ms=ms, value_max_abs=verr, grad_max_abs=gerr,
-                         speedup=bms / ms)
-        print(f"  {name:9s} {ms:7.3f} ms  value_err={verr:.1e} grad_err={gerr:.1e} "
-              f"-> {bms/ms:.2f}x")
+        out[name] = dict(ms=ms, value_max_abs=verr, grad_max_abs=gerr, speedup=bms / ms)
+        print(f"  {name:9s} {ms:7.3f} ms  value_err={verr:.1e} grad_err={gerr:.1e} -> {bms / ms:.2f}x")
 
     # Is this block bandwidth-bound? Bytes actually moved by `current`.
-    fwd = (content * size * 2 * 2          # k, v padded copies
-           + events * size * 2 * 2 * 2)    # k, v gather read+write
-    gbytes = fwd * 2 / 2**30               # forward + a comparable backward
+    fwd = (
+        content * size * 2 * 2  # k, v padded copies
+        + events * size * 2 * 2 * 2
+    )  # k, v gather read+write
+    gbytes = fwd * 2 / 2**30  # forward + a comparable backward
     best = min(v["ms"] for v in out.values())
-    print(f"\n  ~{gbytes:.2f} GiB moved per layer; best {best:.3f} ms "
-          f"-> {gbytes/(best/1000):.0f} GiB/s of ~864 GB/s peak")
+    print(
+        f"\n  ~{gbytes:.2f} GiB moved per layer; best {best:.3f} ms "
+        f"-> {gbytes / (best / 1000):.0f} GiB/s of ~864 GB/s peak"
+    )
     a.output.parent.mkdir(parents=True, exist_ok=True)
-    a.output.write_text(json.dumps(dict(content=content, events=events,
-                                        nondecreasing_fraction=monotonic,
-                                        variants=out), indent=2))
+    a.output.write_text(
+        json.dumps(dict(content=content, events=events, nondecreasing_fraction=monotonic, variants=out), indent=2)
+    )
 
 
 if __name__ == "__main__":

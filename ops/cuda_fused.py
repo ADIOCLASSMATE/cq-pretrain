@@ -38,6 +38,7 @@ def _kernels_present():
         return False
     return True
 
+
 def rms_norm(x, weight, eps):
     """x * rsqrt(mean(x^2)+eps) * weight, fused; weight may be FP32 with BF16 x."""
     from flash_attn.ops.triton.layer_norm import rms_norm_fn

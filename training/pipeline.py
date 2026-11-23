@@ -68,7 +68,7 @@ class DataPipeline:
         from data.runtime import empty_batch
 
         self.args, self.cfg, self.tokens = args, cfg, data.tokens
-        self.device = f'{ACCEL}:{int(os.environ.get("LOCAL_RANK", 0))}'
+        self.device = f"{ACCEL}:{int(os.environ.get('LOCAL_RANK', 0))}"
         # Spawned CPU workers must not autoload the accelerator backend on import.
         os.environ["TORCH_DEVICE_BACKEND_AUTOLOAD"] = "0"
         with torch.random.fork_rng(devices=[DEV.current_device()], device_type=ACCEL):

@@ -108,13 +108,17 @@ def main():
     if observed:
         observed.sort()
         quantile = lambda q: observed[min(len(observed) - 1, int(q * len(observed)))]
-        profile = dict(packs=len(observed), min=observed[0], p50=quantile(0.5),
-                       p90=quantile(0.9), max=observed[-1],
-                       mean=sum(observed) / len(observed))
+        profile = dict(
+            packs=len(observed),
+            min=observed[0],
+            p50=quantile(0.5),
+            p90=quantile(0.9),
+            max=observed[-1],
+            mean=sum(observed) / len(observed),
+        )
     else:
         profile = {}
-    rows_to_test = args.rows or sorted({profile.get("p50", 4096), profile.get("p90", 6144),
-                                        profile.get("max", 8192)})
+    rows_to_test = args.rows or sorted({profile.get("p50", 4096), profile.get("p90", 6144), profile.get("max", 8192)})
     print(json.dumps(dict(observed_text_rows=profile, benchmarking=rows_to_test), indent=2), flush=True)
 
     candidates = {"baseline": baseline_ce}
@@ -150,8 +154,9 @@ def main():
                     results.append(dict(rows=rows, direct=direct, name=name, oom=True))
                     print(f"  rows={rows} direct={direct} {name:18s} OOM", flush=True)
                     continue
-                entry = dict(rows=rows, direct=direct, name=name, ms=value["ms"],
-                             peak_gib=value["peak_gib"], loss=value["loss"])
+                entry = dict(
+                    rows=rows, direct=direct, name=name, ms=value["ms"], peak_gib=value["peak_gib"], loss=value["loss"]
+                )
                 if reference is None:
                     reference = value
                 else:
@@ -166,17 +171,30 @@ def main():
                 if "vs_baseline" in entry:
                     worst = max(entry["vs_baseline"].values())
                     suffix = f" speedup={entry['speedup']:.3f}x worst_err={worst:.2e}"
-                print(f"  rows={rows} direct={direct} {name:18s} {entry['ms']:8.2f} ms "
-                      f"peak={entry['peak_gib']:5.2f} GiB{suffix}", flush=True)
+                print(
+                    f"  rows={rows} direct={direct} {name:18s} {entry['ms']:8.2f} ms "
+                    f"peak={entry['peak_gib']:5.2f} GiB{suffix}",
+                    flush=True,
+                )
                 del value
                 torch.cuda.empty_cache()
         del hidden, weight, targets
         torch.cuda.empty_cache()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(dict(
-        device=torch.cuda.get_device_name(0), width=args.width, vocab=args.vocab,
-        chunk=args.chunk, observed_text_rows=profile, results=results), indent=2))
+    args.output.write_text(
+        json.dumps(
+            dict(
+                device=torch.cuda.get_device_name(0),
+                width=args.width,
+                vocab=args.vocab,
+                chunk=args.chunk,
+                observed_text_rows=profile,
+                results=results,
+            ),
+            indent=2,
+        )
+    )
     print(f"wrote {args.output}", flush=True)
 
 

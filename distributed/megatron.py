@@ -13,8 +13,6 @@ _config = None
 _optimizer_instances = 1
 
 
-
-
 def prepare_cuda():
     """Check upstream CUDA dependencies before constructing any training weights."""
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
@@ -23,8 +21,6 @@ def prepare_cuda():
 
     if not callable(getattr(fused_weight_gradient_mlp_cuda, "wgrad_gemm_accum_fp32", None)):
         raise RuntimeError("Install NVIDIA Apex with --cuda_ext for MCore gradient accumulation")
-
-
 
 
 # Allow enough time for every process to load weights before rendezvous.
@@ -171,9 +167,19 @@ def make_embedding(vocab, width):
     return embedding
 
 
-def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_param_gather=True,
-                   *, optimizer_config=None, config_overrides=None, overlap_grad_reduce=True,
-                   optimizer_offload_fraction=0.0, grad_reduce_in_fp32=True):
+def make_optimizer(
+    model,
+    lr,
+    weight_decay=0.1,
+    bucket_size=40_000_000,
+    overlap_param_gather=True,
+    *,
+    optimizer_config=None,
+    config_overrides=None,
+    overlap_grad_reduce=True,
+    optimizer_offload_fraction=0.0,
+    grad_reduce_in_fp32=True,
+):
     from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig
     from megatron.core.optimizer import get_megatron_optimizer, AdamOptimizerConfig as OptimizerConfig
 
@@ -210,8 +216,9 @@ def make_optimizer(model, lr, weight_decay=0.1, bucket_size=40_000_000, overlap_
     # Optimizer-owned FP32 shard views are state, not part of the model graph.
     # The upstream CPU-offload optimizer requires leaf tensors here.
     with torch.no_grad():
-        optimizer = get_megatron_optimizer(optimizer_cfg, [wrapped], config_overrides=config_overrides,
-                                            use_gloo_process_groups=False)
+        optimizer = get_megatron_optimizer(
+            optimizer_cfg, [wrapped], config_overrides=config_overrides, use_gloo_process_groups=False
+        )
     return wrapped, optimizer
 
 
@@ -230,8 +237,7 @@ def finish_grad_sync(wrapped):
         grads = [
             p.main_grad
             for name, p in wrapped.module.named_parameters()
-            if p.requires_grad
-            and name.endswith((".q_norm.weight", ".k_norm.weight", ".linear_attn.norm.weight"))
+            if p.requires_grad and name.endswith((".q_norm.weight", ".k_norm.weight", ".linear_attn.norm.weight"))
         ]
         if not grads:
             return

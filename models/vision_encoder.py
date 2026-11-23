@@ -166,9 +166,7 @@ class QwenVisionInput(nn.Module):
         super().__init__()
         vc = vision_config(cfg.vision_assets)
         vc["_tensor_parallel"] = cfg.vision_tensor_parallel
-        self.visual = QwenVisionTower(
-            vc, cfg.fused, cfg.checkpoint_vision, cfg.freeze_vision, cfg.freeze_vision_merger
-        )
+        self.visual = QwenVisionTower(vc, cfg.fused, cfg.checkpoint_vision, cfg.freeze_vision, cfg.freeze_vision_merger)
         self.bridge = (
             nn.Identity()
             if vc["out_hidden_size"] == cfg.width

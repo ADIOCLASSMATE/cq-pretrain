@@ -1,4 +1,5 @@
 """Indexed JSONL and published Parquet sources share the consumed block cursor."""
+
 from array import array
 from bisect import bisect_right
 import hashlib
@@ -11,90 +12,130 @@ from data.catalog import Catalog, digest
 class JsonlCatalog:
     def __init__(self, path, block_rows, source):
         self.path, self.block_rows, self.source = Path(path).resolve(), block_rows, source
-        self.offsets = array('Q'); h = hashlib.sha256()
-        with self.path.open('rb') as handle:
+        self.offsets = array("Q")
+        h = hashlib.sha256()
+        with self.path.open("rb") as handle:
             while True:
-                offset = handle.tell(); line = handle.readline()
-                if not line: break
+                offset = handle.tell()
+                line = handle.readline()
+                if not line:
+                    break
                 h.update(line)
-                if line.strip(): self.offsets.append(offset)
+                if line.strip():
+                    self.offsets.append(offset)
         self.source_root, self.source_sizes = self.path.parent, {}
-        self.meta = dict(identity=digest(dict(sha256=h.hexdigest(), source=source)),
-            units=(len(self.offsets)+block_rows-1)//block_rows, documents=len(self.offsets),
-            tokenizer={}, development=False)
+        self.meta = dict(
+            identity=digest(dict(sha256=h.hexdigest(), source=source)),
+            units=(len(self.offsets) + block_rows - 1) // block_rows,
+            documents=len(self.offsets),
+            tokenizer={},
+            development=False,
+        )
 
     def check(self, allow_development=False):
-        return dict(identity=self.meta['identity'], complete=True, development=False)
+        return dict(identity=self.meta["identity"], complete=True, development=False)
 
     def block(self, index):
-        start = index*self.block_rows
-        return 0, start, min(self.block_rows, len(self.offsets)-start)
+        start = index * self.block_rows
+        return 0, start, min(self.block_rows, len(self.offsets) - start)
 
     def read_rows(self, shard, start, count):
-        rows=[]
-        with self.path.open('rb') as handle:
-            for index in range(start, start+count):
-                handle.seek(self.offsets[index]); row=json.loads(handle.readline())
+        rows = []
+        with self.path.open("rb") as handle:
+            for index in range(start, start + count):
+                handle.seek(self.offsets[index])
+                row = json.loads(handle.readline())
                 rows.append(self.normalize(row, index))
         return rows
 
     def normalize(self, row, index):
-        if not isinstance(row.get('segments'), list):
-            raise ValueError('A training document requires ordered segments')
+        if not isinstance(row.get("segments"), list):
+            raise ValueError("A training document requires ordered segments")
         media = []
-        for asset in row.get('images', []):
+        for asset in row.get("images", []):
             item = dict(asset)
-            for name in ('path','frames_path'):
+            for name in ("path", "frames_path"):
                 if item.get(name):
                     item[name] = str((self.path.parent / item[name]).resolve())
-            if item.get('video'):
-                item.setdefault('settings', self.source.get('video', {'mode':'native'}))
+            if item.get("video"):
+                item.setdefault("settings", self.source.get("video", {"mode": "native"}))
             media.append(item)
-        return dict(row, sample_id=str(row.get('sample_id', f'{self.path.stem}:{index}')),
-                    images=media, format=row.get('format','interleaved'), source_shard='', text_tokens=None)
+        return dict(
+            row,
+            sample_id=str(row.get("sample_id", f"{self.path.stem}:{index}")),
+            images=media,
+            format=row.get("format", "interleaved"),
+            source_shard="",
+            text_tokens=None,
+        )
 
-    def close(self): pass
+    def close(self):
+        pass
 
 
 class MixedCatalog:
     def __init__(self, path, sources, block_rows, cache_bytes):
-        self.path=Path(path).resolve(); self.catalogs=[]; self.ends=[]; total=0
-        self.source_root=Path('/'); self.source_sizes={}
+        self.path = Path(path).resolve()
+        self.catalogs = []
+        self.ends = []
+        total = 0
+        self.source_root = Path("/")
+        self.source_sizes = {}
         for source in sources:
-            root=(self.path.parent/source['path']).resolve()
-            catalog=(open_catalog(root, source.get('source_root'), block_rows, cache_bytes) if root.is_dir()
-                     else JsonlCatalog(root,block_rows,{k:v for k,v in source.items() if k not in ('path','source_root')}))
-            self.catalogs.append(catalog); total+=catalog.meta['units']; self.ends.append(total)
-            self.source_sizes.update({str(catalog.source_root/k).lstrip('/'):v for k,v in catalog.source_sizes.items()})
-        self.meta=dict(identity=digest([c.meta['identity'] for c in self.catalogs]),units=total,
-            documents=sum(c.meta['documents'] for c in self.catalogs),tokenizer={},
-            development=any(c.meta['development'] for c in self.catalogs))
-        if any(c.meta.get('caption_sampling') for c in self.catalogs):
+            root = (self.path.parent / source["path"]).resolve()
+            catalog = (
+                open_catalog(root, source.get("source_root"), block_rows, cache_bytes)
+                if root.is_dir()
+                else JsonlCatalog(
+                    root, block_rows, {k: v for k, v in source.items() if k not in ("path", "source_root")}
+                )
+            )
+            self.catalogs.append(catalog)
+            total += catalog.meta["units"]
+            self.ends.append(total)
+            self.source_sizes.update(
+                {str(catalog.source_root / k).lstrip("/"): v for k, v in catalog.source_sizes.items()}
+            )
+        self.meta = dict(
+            identity=digest([c.meta["identity"] for c in self.catalogs]),
+            units=total,
+            documents=sum(c.meta["documents"] for c in self.catalogs),
+            tokenizer={},
+            development=any(c.meta["development"] for c in self.catalogs),
+        )
+        if any(c.meta.get("caption_sampling") for c in self.catalogs):
             from data.captions import CONTRACT
-            self.meta['caption_sampling'] = CONTRACT
-        if any(c.meta.get('task_sampling') for c in self.catalogs):
+
+            self.meta["caption_sampling"] = CONTRACT
+        if any(c.meta.get("task_sampling") for c in self.catalogs):
             from data.task_groups import CONTRACT
-            self.meta['task_sampling'] = CONTRACT
+
+            self.meta["task_sampling"] = CONTRACT
 
     def check(self, allow_development=False):
-        for c in self.catalogs:c.check(allow_development)
-        return dict(identity=self.meta['identity'],complete=True,development=self.meta['development'])
+        for c in self.catalogs:
+            c.check(allow_development)
+        return dict(identity=self.meta["identity"], complete=True, development=self.meta["development"])
 
-    def block(self,index):
-        source=bisect_right(self.ends,index); previous=self.ends[source-1] if source else 0
-        shard,start,count=self.catalogs[source].block(index-previous)
-        return (source,shard),start,count
+    def block(self, index):
+        source = bisect_right(self.ends, index)
+        previous = self.ends[source - 1] if source else 0
+        shard, start, count = self.catalogs[source].block(index - previous)
+        return (source, shard), start, count
 
-    def read_rows(self,shard,start,count):
-        source,index=shard; catalog=self.catalogs[source]
-        rows=catalog.read_rows(index,start,count)
+    def read_rows(self, shard, start, count):
+        source, index = shard
+        catalog = self.catalogs[source]
+        rows = catalog.read_rows(index, start, count)
         for row in rows:
-            row['sample_id']=f'{source}:{row["sample_id"]}'
-            if row['source_shard']:row['source_shard']=str(catalog.source_root/row['source_shard']).lstrip('/')
+            row["sample_id"] = f"{source}:{row['sample_id']}"
+            if row["source_shard"]:
+                row["source_shard"] = str(catalog.source_root / row["source_shard"]).lstrip("/")
         return rows
 
     def close(self):
-        for c in self.catalogs:c.close()
+        for c in self.catalogs:
+            c.close()
 
 
 def training_rows(catalog, shard, start, count, signature):
@@ -105,32 +146,32 @@ def training_rows(catalog, shard, start, count, signature):
     from data.loss_permissions import bound_flags, occurrence_images
 
     rows = catalog.read_rows(shard, start, count)
-    if any(row.get('format') == 'task_group' for row in rows):
-        if signature.get('task_sampling') != task_groups.CONTRACT:
-            raise ValueError('Task families require their published sampling contract')
-        rows = [task_groups.select(row, signature['seed'], signature['epoch']) for row in rows]
-    if any(row.get('caption_candidates_json') is not None or 'caption_members' in row for row in rows):
-        if signature.get('caption_sampling') != captions.CONTRACT:
-            raise ValueError('Caption groups require their published sampling contract')
-        rows = [captions.select(row, signature['seed'], signature['epoch']) for row in rows]
+    if any(row.get("format") == "task_group" for row in rows):
+        if signature.get("task_sampling") != task_groups.CONTRACT:
+            raise ValueError("Task families require their published sampling contract")
+        rows = [task_groups.select(row, signature["seed"], signature["epoch"]) for row in rows]
+    if any(row.get("caption_candidates_json") is not None or "caption_members" in row for row in rows):
+        if signature.get("caption_sampling") != captions.CONTRACT:
+            raise ValueError("Caption groups require their published sampling contract")
+        rows = [captions.select(row, signature["seed"], signature["epoch"]) for row in rows]
 
     while isinstance(catalog, MixedCatalog):
         source, shard = shard
         catalog = catalog.catalogs[source]
     if isinstance(catalog, (SelectionCatalog, GroupedCaptionCatalog)):
         for row in rows:
-            for occurrence in row['segments']:
-                if occurrence['kind'] == 'image':
+            for occurrence in row["segments"]:
+                if occurrence["kind"] == "image":
                     logical, bound = occurrence_images(row, occurrence)
                     flags = bound_flags(row, logical, bound, occurrence)
-                    occurrence['generation_target'] = flags.get('image_loss_allowed') is True and all(flags.values())
+                    occurrence["generation_target"] = flags.get("image_loss_allowed") is True and all(flags.values())
     return rows
 
 
 def release_entry(root):
     path = Path(root).resolve()
-    if path.is_dir() and (path/'sources.yaml').is_file():
-        return path/'sources.yaml'
+    if path.is_dir() and (path / "sources.yaml").is_file():
+        return path / "sources.yaml"
     return path
 
 
@@ -138,69 +179,84 @@ def release_geometry(root):
     """Read only the entry declaration, before constructing the shuffled block index."""
     path = release_entry(root)
     if path.is_dir():
-        path = path/'manifest.json'
-    if path.name == 'manifest.json' and path.is_file():
+        path = path / "manifest.json"
+    if path.name == "manifest.json" and path.is_file():
         entry = json.loads(path.read_text())
-    elif path.suffix in ('.yaml', '.yml') and path.is_file():
+    elif path.suffix in (".yaml", ".yml") and path.is_file():
         import yaml
+
         entry = yaml.safe_load(path.read_text())
     else:
         return {}
-    geometry = entry.get('training_geometry', {})
-    for key in ('sequence_length','shuffle_block_rows','vision_max_pixels','generation_max_pixels'):
+    geometry = entry.get("training_geometry", {})
+    for key in ("sequence_length", "shuffle_block_rows", "vision_max_pixels", "generation_max_pixels"):
         if key in geometry and (type(geometry[key]) is not int or geometry[key] < 1):
-            raise ValueError(f'training_geometry.{key} must be a positive integer')
+            raise ValueError(f"training_geometry.{key} must be a positive integer")
     return geometry
 
 
-def open_catalog(root, source_root=None, block_rows=2048, cache_bytes=128<<20):
-    path=release_entry(root)
-    if path.is_dir() or path.name == 'manifest.json':
+def open_catalog(root, source_root=None, block_rows=2048, cache_bytes=128 << 20):
+    path = release_entry(root)
+    if path.is_dir() or path.name == "manifest.json":
         if path.is_file():
             path = path.parent
-        manifest=json.loads((path/'manifest.json').read_text())
-        if manifest.get('schema_version') == 'corpus.combined_training.v1':
+        manifest = json.loads((path / "manifest.json").read_text())
+        if manifest.get("schema_version") == "corpus.combined_training.v1":
             from corpus_pipeline.postprocess.reconcile import file_sha, validate_artifacts
-            completion=json.loads((path/'COMPLETE.json').read_text())
-            if not completion.get('complete') or completion['manifest_sha256'] != file_sha(path/'manifest.json'):
-                raise ValueError('Combined training publication changed')
-            validate_artifacts(path, {'artifacts':manifest['children']})
-            sources=[dict(s,source_root=source_root) if source_root is not None else s for s in manifest['sources']]
-            catalog = MixedCatalog(path/'manifest.json',sources,block_rows,cache_bytes)
-            if 'training_geometry' in manifest:
-                catalog.meta['training_geometry'] = manifest['training_geometry']
+
+            completion = json.loads((path / "COMPLETE.json").read_text())
+            if not completion.get("complete") or completion["manifest_sha256"] != file_sha(path / "manifest.json"):
+                raise ValueError("Combined training publication changed")
+            validate_artifacts(path, {"artifacts": manifest["children"]})
+            sources = [dict(s, source_root=source_root) if source_root is not None else s for s in manifest["sources"]]
+            catalog = MixedCatalog(path / "manifest.json", sources, block_rows, cache_bytes)
+            if "training_geometry" in manifest:
+                catalog.meta["training_geometry"] = manifest["training_geometry"]
             return catalog
-        if manifest.get('schema_version') == 'corpus.training_selection.v1':
+        if manifest.get("schema_version") == "corpus.training_selection.v1":
             from data.selection_catalog import SelectionCatalog
-            return SelectionCatalog(path,source_root,block_rows,cache_bytes)
-        if manifest.get('schema_version') == 'corpus.caption_groups.v2':
+
+            return SelectionCatalog(path, source_root, block_rows, cache_bytes)
+        if manifest.get("schema_version") == "corpus.caption_groups.v2":
             from data.grouped_catalog import GroupedCaptionCatalog
-            return GroupedCaptionCatalog(path,source_root,block_rows,cache_bytes)
-        if manifest.get('schema_version') == 'corpus.openuni_image_captions.v2':
+
+            return GroupedCaptionCatalog(path, source_root, block_rows, cache_bytes)
+        if manifest.get("schema_version") == "corpus.openuni_image_captions.v2":
             from data.grouped_catalog import ImageCaptionCatalog
-            return ImageCaptionCatalog(path,source_root,block_rows,cache_bytes)
-        if manifest.get('schema_version') in ('corpus.task_groups.v1','corpus.task_groups.v2','corpus.task_groups.v3'):
+
+            return ImageCaptionCatalog(path, source_root, block_rows, cache_bytes)
+        if manifest.get("schema_version") in (
+            "corpus.task_groups.v1",
+            "corpus.task_groups.v2",
+            "corpus.task_groups.v3",
+        ):
             from data.grouped_catalog import TaskGroupCatalog
-            return TaskGroupCatalog(path,source_root,block_rows,cache_bytes)
-        return Catalog(path,source_root,block_rows,cache_bytes)
-    if path.suffix=='.jsonl':return JsonlCatalog(path,block_rows,{})
+
+            return TaskGroupCatalog(path, source_root, block_rows, cache_bytes)
+        return Catalog(path, source_root, block_rows, cache_bytes)
+    if path.suffix == ".jsonl":
+        return JsonlCatalog(path, block_rows, {})
     import yaml
-    entry=yaml.safe_load(path.read_text())
-    unknown = set(entry) - {'catalog','catalog_sha256','sources','training_geometry'}
+
+    entry = yaml.safe_load(path.read_text())
+    unknown = set(entry) - {"catalog", "catalog_sha256", "sources", "training_geometry"}
     if unknown:
-        raise ValueError(f'Unknown training entry fields: {sorted(unknown)}')
-    if 'catalog' in entry:
-        manifest = (path.parent/entry['catalog']).resolve(strict=True)
-        if ('sources' in entry or manifest.name != 'manifest.json' or
-                hashlib.sha256(manifest.read_bytes()).hexdigest() != entry['catalog_sha256']):
-            raise ValueError('Training entry does not match its pinned catalog manifest')
+        raise ValueError(f"Unknown training entry fields: {sorted(unknown)}")
+    if "catalog" in entry:
+        manifest = (path.parent / entry["catalog"]).resolve(strict=True)
+        if (
+            "sources" in entry
+            or manifest.name != "manifest.json"
+            or hashlib.sha256(manifest.read_bytes()).hexdigest() != entry["catalog_sha256"]
+        ):
+            raise ValueError("Training entry does not match its pinned catalog manifest")
         catalog = open_catalog(manifest, source_root, block_rows, cache_bytes)
     else:
-        catalog=MixedCatalog(path,entry['sources'],block_rows,cache_bytes)
-    if 'training_geometry' in entry:
-        existing = catalog.meta.get('training_geometry', {})
-        geometry = entry['training_geometry']
+        catalog = MixedCatalog(path, entry["sources"], block_rows, cache_bytes)
+    if "training_geometry" in entry:
+        existing = catalog.meta.get("training_geometry", {})
+        geometry = entry["training_geometry"]
         if any(geometry[k] != existing[k] for k in existing.keys() & geometry.keys()):
-            raise ValueError('Training geometry conflicts with the pinned catalog')
-        catalog.meta['training_geometry'] = {**existing, **geometry}
+            raise ValueError("Training geometry conflicts with the pinned catalog")
+        catalog.meta["training_geometry"] = {**existing, **geometry}
     return catalog

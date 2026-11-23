@@ -69,13 +69,13 @@ def backward_deferred_renderer(
     for index, part in enumerate(layout.microbatches):
         rows = slice(part.start, part.stop)
         leaf = conditions[rows].detach().requires_grad_(gradient is not None)
-        group_sync = suspend_gradient_readiness(wrapped) if index+1 < len(layout.microbatches) else nullcontext()
+        group_sync = suspend_gradient_readiness(wrapped) if index + 1 < len(layout.microbatches) else nullcontext()
         with group_sync, shared_flow_kv(model.renderer, leaf, part.layout, part.draws_per_chunk < layout.rf) as kv:
             for first_draw in part.draw_ranges(layout.rf):
                 chunk = part.bind(batch, first_draw)
                 draws = chunk.generation.rf
                 # DP readiness belongs to the last contribution, including the shared KV backward.
-                sync = suspend_gradient_readiness(wrapped) if first_draw+draws < layout.rf else nullcontext()
+                sync = suspend_gradient_readiness(wrapped) if first_draw + draws < layout.rf else nullcontext()
                 with sync:
                     if forward_events is not None:
                         pair = [device_module().Event(enable_timing=True) for _ in range(2)]

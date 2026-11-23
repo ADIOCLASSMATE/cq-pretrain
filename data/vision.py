@@ -82,22 +82,14 @@ class VisionInputs:
         for t, h, w in grid:
             if t < 1 or h < merge or w < merge or h % merge or w % merge:
                 raise ValueError("Visual grids require positive time and spatial multiples of merge_size")
-            order = (
-                torch.arange(h * w)
-                .reshape(h // merge, merge, w // merge, merge)
-                .permute(0, 2, 1, 3)
-                .flatten()
-            )
+            order = torch.arange(h * w).reshape(h // merge, merge, w // merge, merge).permute(0, 2, 1, 3).flatten()
             row, col = order // w, order % w
             y, x = torch.linspace(0, side - 1, h), torch.linspace(0, side - 1, w)
             y0, x0 = y.long(), x.long()
             y1, x1 = (y0 + 1).clamp(max=side - 1), (x0 + 1).clamp(max=side - 1)
             dy, dx = y - y0, x - x0
             indices = torch.stack(
-                [
-                    (a[:, None] * side + b[None, :]).flatten()[order]
-                    for a, b in ((y0, x0), (y0, x1), (y1, x0), (y1, x1))
-                ]
+                [(a[:, None] * side + b[None, :]).flatten()[order] for a, b in ((y0, x0), (y0, x1), (y1, x0), (y1, x1))]
             )
             weights = torch.stack(
                 [
@@ -197,5 +189,6 @@ class NativeImageProcessor:
         result = self.processor(images=self.supported_aspect(original), return_tensors="pt", device="cpu")
         grid = tuple(map(int, result["image_grid_thw"][0].tolist()))
         from data.generation import target_image
+
         target = target_image(original, self.generation_max_pixels)
         return np.asarray(target, dtype=np.uint8).copy(), result["pixel_values"], grid

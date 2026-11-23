@@ -19,3 +19,7 @@ data = ["*.yaml"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["archive", "corpus_pipeline", "models/vendor"]

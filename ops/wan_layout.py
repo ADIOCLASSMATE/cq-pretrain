@@ -1,4 +1,5 @@
 """Packed Wan latent geometry shared by image and video execution."""
+
 from dataclasses import dataclass, fields, replace
 from itertools import accumulate
 import math
@@ -7,14 +8,17 @@ import torch
 
 
 def wan_rope(grid, head_dim):
-    coordinates = torch.stack(torch.meshgrid(
-        *(torch.arange(n, dtype=torch.float64) for n in grid), indexing="ij"
-    ), -1).reshape(-1, 3)
+    coordinates = torch.stack(
+        torch.meshgrid(*(torch.arange(n, dtype=torch.float64) for n in grid), indexing="ij"), -1
+    ).reshape(-1, 3)
     widths = (head_dim - 4 * (head_dim // 6), 2 * (head_dim // 6), 2 * (head_dim // 6))
-    angles = torch.cat([
-        coordinates[:, i, None] * 10000 ** (-torch.arange(0, d, 2, dtype=torch.float64) / d)
-        for i, d in enumerate(widths)
-    ], -1)
+    angles = torch.cat(
+        [
+            coordinates[:, i, None] * 10000 ** (-torch.arange(0, d, 2, dtype=torch.float64) / d)
+            for i, d in enumerate(widths)
+        ],
+        -1,
+    )
     return angles.cos().float()[:, None], angles.sin().float()[:, None]
 
 
@@ -41,10 +45,14 @@ class WanLayout:
     sin: torch.Tensor
 
     def to(self, device, non_blocking=False):
-        return replace(self, **{
-            f.name: v.to(device, non_blocking=non_blocking)
-            for f in fields(self) if isinstance(v := getattr(self, f.name), torch.Tensor)
-        })
+        return replace(
+            self,
+            **{
+                f.name: v.to(device, non_blocking=non_blocking)
+                for f in fields(self)
+                if isinstance(v := getattr(self, f.name), torch.Tensor)
+            },
+        )
 
     @classmethod
     def prepare(cls, grids, query_counts, head_dim, condition_width=None):
@@ -54,5 +62,14 @@ class WanLayout:
         samples = torch.repeat_interleave(torch.arange(len(grids)), torch.tensor(lengths))
         indices = torch.cat([torch.arange(q) + i * width for i, q in enumerate(counts)])
         cos, sin = zip(*(wan_rope(g, head_dim) for g in grids))
-        return cls(grids, lengths, counts, tuple(accumulate(lengths)), tuple(accumulate(counts)),
-                   samples, indices, torch.cat(cos), torch.cat(sin))
+        return cls(
+            grids,
+            lengths,
+            counts,
+            tuple(accumulate(lengths)),
+            tuple(accumulate(counts)),
+            samples,
+            indices,
+            torch.cat(cos),
+            torch.cat(sin),
+        )

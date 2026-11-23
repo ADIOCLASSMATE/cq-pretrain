@@ -175,8 +175,12 @@ class Trainer:
         # measured forward time to forward_ms, not backward_ms.
         renderer = [sum(a.elapsed_time(b) for a, b in pairs) for pairs in result.renderer_forward_events]
         result.renderer_forward_ms = renderer
-        result.pack_forward_ms = [e[0].elapsed_time(e[1]) + r for e, r in zip(result.phase_events, renderer, strict=True)]
-        result.pack_backward_ms = [e[1].elapsed_time(e[2]) - r for e, r in zip(result.phase_events, renderer, strict=True)]
+        result.pack_forward_ms = [
+            e[0].elapsed_time(e[1]) + r for e, r in zip(result.phase_events, renderer, strict=True)
+        ]
+        result.pack_backward_ms = [
+            e[1].elapsed_time(e[2]) - r for e, r in zip(result.phase_events, renderer, strict=True)
+        ]
 
     def _reduce(self, result):
         """Step time and peak memory are maxima over ranks; losses are DP means."""

@@ -14,72 +14,73 @@ The document BOS supplied by the packer is the first ``<|im_start|>``; the
 opening span therefore starts at the role name. Instructions are selected by
 hashing the immutable sample id, so a restart reproduces the exact same text.
 """
+
 import hashlib
 
 # Varied phrasings prevent the model from binding image synthesis to one
 # literal string. They are deliberately plain: the corpus caption carries the
 # content, the instruction only marks the direction of the turn.
 T2I_INSTRUCTIONS = (
-    'Generate an image from the following description: ',
-    'Draw a picture that matches this description: ',
-    'Create an image based on this caption: ',
-    'Please render the following scene as an image: ',
-    'Produce a photograph matching this text: ',
-    'Make an image of the following: ',
-    'Visualize this description as a picture: ',
-    'Turn the following caption into an image: ',
-    'Illustrate the following: ',
-    'Synthesize an image for this prompt: ',
-    'Show me an image of the following scene: ',
-    'Using this description, generate the corresponding picture: ',
-    'Render an image that depicts the following: ',
-    'Based on the caption below, create a matching image: ',
-    'Compose a picture from this description: ',
-    'Generate the image described here: ',
+    "Generate an image from the following description: ",
+    "Draw a picture that matches this description: ",
+    "Create an image based on this caption: ",
+    "Please render the following scene as an image: ",
+    "Produce a photograph matching this text: ",
+    "Make an image of the following: ",
+    "Visualize this description as a picture: ",
+    "Turn the following caption into an image: ",
+    "Illustrate the following: ",
+    "Synthesize an image for this prompt: ",
+    "Show me an image of the following scene: ",
+    "Using this description, generate the corresponding picture: ",
+    "Render an image that depicts the following: ",
+    "Based on the caption below, create a matching image: ",
+    "Compose a picture from this description: ",
+    "Generate the image described here: ",
 )
 
 I2T_INSTRUCTIONS = (
-    'Describe this image.',
-    'What is shown in this image?',
-    'Write a caption for this image.',
-    'Please describe what you see in the picture.',
-    'Provide a description of this image.',
-    'Explain the contents of this image.',
-    'Caption the image above.',
-    'Tell me what this picture shows.',
-    'Give a short description of this image.',
-    'What does this image depict?',
-    'Summarize the visual content of this image.',
-    'Describe the scene in the picture.',
-    'Put the content of this image into words.',
-    'Write a sentence describing this image.',
-    'What can be seen in this photograph?',
-    'Describe the image in detail.',
+    "Describe this image.",
+    "What is shown in this image?",
+    "Write a caption for this image.",
+    "Please describe what you see in the picture.",
+    "Provide a description of this image.",
+    "Explain the contents of this image.",
+    "Caption the image above.",
+    "Tell me what this picture shows.",
+    "Give a short description of this image.",
+    "What does this image depict?",
+    "Summarize the visual content of this image.",
+    "Describe the scene in the picture.",
+    "Put the content of this image into words.",
+    "Write a sentence describing this image.",
+    "What can be seen in this photograph?",
+    "Describe the image in detail.",
 )
 
-ROLE_USER = 'user\n'
-ROLE_ASSISTANT = 'assistant\n'
-IM_END = '<|im_end|>'
-TURN_END = IM_END + '\n'
-IM_START = '<|im_start|>'
+ROLE_USER = "user\n"
+ROLE_ASSISTANT = "assistant\n"
+IM_END = "<|im_end|>"
+TURN_END = IM_END + "\n"
+IM_START = "<|im_start|>"
 
 
 def choose(options, sample_id, salt):
     """Deterministic selection; a resumed run must rebuild identical text."""
-    digest = hashlib.sha256(f'{salt}:{sample_id}'.encode()).digest()
-    return options[int.from_bytes(digest[:8], 'big') % len(options)]
+    digest = hashlib.sha256(f"{salt}:{sample_id}".encode()).digest()
+    return options[int.from_bytes(digest[:8], "big") % len(options)]
 
 
 def text(value, supervised, synthetic):
-    return dict(kind='text', text=value, supervised=supervised, synthetic=synthetic)
+    return dict(kind="text", text=value, supervised=supervised, synthetic=synthetic)
 
 
 def corpus(segment):
     """Count every corpus span and supervise it unless the release opts out."""
-    supervised = segment.get('supervised')
+    supervised = segment.get("supervised")
     if supervised is not None and type(supervised) is not bool:
-        raise ValueError('Text supervision must be boolean when specified')
-    return text(segment['text'], supervised is not False, False)
+        raise ValueError("Text supervision must be boolean when specified")
+    return text(segment["text"], supervised is not False, False)
 
 
 def scaffold(value):
@@ -95,36 +96,36 @@ def closing():
 def header(role, first):
     """The packer's document BOS stands in for the first ``<|im_start|>``."""
     # The newline after a terminator belongs to the unsupervised template.
-    return scaffold(role if first else '\n' + IM_START + role)
+    return scaffold(role if first else "\n" + IM_START + role)
 
 
 def raw_direction(segments):
     """Caption direction from the stored order, before any templating."""
-    kinds = [s['kind'] for s in segments]
-    if kinds == ['text', 'image']:
-        return 'T2I'
-    if kinds == ['image', 'text']:
-        return 'I2T'
+    kinds = [s["kind"] for s in segments]
+    if kinds == ["text", "image"]:
+        return "T2I"
+    if kinds == ["image", "text"]:
+        return "I2T"
     return None
 
 
 def caption_spans(segments, direction, sample_id):
-    body = next(s for s in segments if s['kind'] == 'text')
-    picture = next(s for s in segments if s['kind'] == 'image')
+    body = next(s for s in segments if s["kind"] == "text")
+    picture = next(s for s in segments if s["kind"] == "image")
     spans = [header(ROLE_USER, True)]
-    if direction == 'T2I':
-        spans.append(scaffold(choose(T2I_INSTRUCTIONS, sample_id, 't2i')))
+    if direction == "T2I":
+        spans.append(scaffold(choose(T2I_INSTRUCTIONS, sample_id, "t2i")))
         spans.append(corpus(body))
         spans.append(closing())
         spans.append(header(ROLE_ASSISTANT, False))
         spans.append(picture)
     else:
         spans.append(picture)
-        spans.append(scaffold(choose(I2T_INSTRUCTIONS, sample_id, 'i2t')))
+        spans.append(scaffold(choose(I2T_INSTRUCTIONS, sample_id, "i2t")))
         spans.append(closing())
         spans.append(header(ROLE_ASSISTANT, False))
         spans.append(corpus(body))
-    spans.extend((closing(), scaffold('\n')))
+    spans.extend((closing(), scaffold("\n")))
     return spans
 
 
@@ -133,34 +134,36 @@ def conversation_spans(segments, *, explicit_turns=False):
     spans = []
     current = None
     for segment in segments:
-        role = segment['role'] if explicit_turns else segment.get('role') or 'user'
-        turn = segment['turn'] if explicit_turns else segment.get('turn')
-        if role not in ('system', 'user', 'assistant', 'tool'):
-            raise ValueError(f'Invalid conversation role: {role!r}')
+        role = segment["role"] if explicit_turns else segment.get("role") or "user"
+        turn = segment["turn"] if explicit_turns else segment.get("turn")
+        if role not in ("system", "user", "assistant", "tool"):
+            raise ValueError(f"Invalid conversation role: {role!r}")
         if current != (role, turn):
             if current is not None:
                 spans.append(closing())
-            spans.append(header(role + '\n', current is None))
+            spans.append(header(role + "\n", current is None))
             current = (role, turn)
             first_text = True
-        if segment['kind'] == 'image':
+        if segment["kind"] == "image":
             spans.append(segment)
-        elif segment['text']:
+        elif segment["text"]:
             span = corpus(segment)
-            if segment['text'].strip():
-                span['instruction_start'] = first_text or segment.get('instruction_start', False)
+            if segment["text"].strip():
+                span["instruction_start"] = first_text or segment.get("instruction_start", False)
                 first_text = False
             spans.append(span)
     if current is not None:
-        spans.extend((closing(), scaffold('\n')))
+        spans.extend((closing(), scaffold("\n")))
     return spans
 
 
 def natural_spans(segments):
     """Interleaved documents stay natural documents; no chat wrapper."""
-    return [s if s['kind'] == 'image' else
-            dict(corpus(s),instruction_start=s.get('instruction_start',False))
-            for s in segments if s['kind'] == 'image' or s['text']]
+    return [
+        s if s["kind"] == "image" else dict(corpus(s), instruction_start=s.get("instruction_start", False))
+        for s in segments
+        if s["kind"] == "image" or s["text"]
+    ]
 
 
 def build(row):
@@ -174,15 +177,15 @@ def build(row):
     ``<|im_start|>``. Natural documents are plain text and must not be dressed
     as a conversation, so they receive no opener at all.
     """
-    segments = row['segments']
-    fmt = row.get('format')
-    if fmt == 'causal_sequence':
-        return conversation_spans(segments, explicit_turns=True),row.get('direction'),True
-    if fmt == 'caption':
+    segments = row["segments"]
+    fmt = row.get("format")
+    if fmt == "causal_sequence":
+        return conversation_spans(segments, explicit_turns=True), row.get("direction"), True
+    if fmt == "caption":
         direction = raw_direction(segments)
         if direction is not None:
-            return caption_spans(segments, direction, row['sample_id']), direction, True
+            return caption_spans(segments, direction, row["sample_id"]), direction, True
         return natural_spans(segments), None, False
-    if fmt in ('conversation', 'text_conversation', 'conditional_generation'):
-        return conversation_spans(segments), row.get('direction'), True
+    if fmt in ("conversation", "text_conversation", "conditional_generation"):
+        return conversation_spans(segments), row.get("direction"), True
     return natural_spans(segments), None, False

@@ -27,9 +27,7 @@ class RMSNorm(nn.Module):
             # Published Triton RMSNorm; the offset weight convention is applied
             # here, exactly as in the explicit reference below.
             return _cuda_rms_norm(x, weight, self.eps)
-        return (x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + self.eps) * weight).to(
-            x.dtype
-        )
+        return (x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + self.eps) * weight).to(x.dtype)
 
 
 def _cuda_swiglu_enabled(x):
@@ -48,6 +46,7 @@ def _cuda_ops_enabled(x):
     from ops.cuda_fused import ops_enabled
 
     return ops_enabled(x)
+
 
 class MLP(nn.Module):
     def __init__(self, cfg):
@@ -106,9 +105,9 @@ class CausalConv(nn.Module):
             return _cuda_conv(x, self.weight[:, 0], plan.content_cu)
         results = []
         for a, b in zip(plan.content_bounds, plan.content_bounds[1:]):
-            y = F.conv1d(
-                x[:, a:b].transpose(1, 2), self.weight, padding=self.weight.shape[-1] - 1, groups=x.shape[-1]
-            )[..., : b - a]
+            y = F.conv1d(x[:, a:b].transpose(1, 2), self.weight, padding=self.weight.shape[-1] - 1, groups=x.shape[-1])[
+                ..., : b - a
+            ]
             results.append(F.silu(y).transpose(1, 2))
         return torch.cat(results, dim=1)
 
@@ -151,13 +150,9 @@ class GatedDelta(nn.Module):
         self.conv1d = CausalConv((2 * key + value) // tp, cfg.linear_conv_kernel)
         P.mark_sharded(self.conv1d.weight, splits=(key, key, value))
         self.A_log = P.mark_sharded(
-            nn.Parameter(
-                torch.rand((cfg.linear_value_heads or cfg.linear_heads) // tp).mul(15.99).add(0.01).log()
-            )
+            nn.Parameter(torch.rand((cfg.linear_value_heads or cfg.linear_heads) // tp).mul(15.99).add(0.01).log())
         )
-        self.dt_bias = P.mark_sharded(
-            nn.Parameter(torch.ones((cfg.linear_value_heads or cfg.linear_heads) // tp))
-        )
+        self.dt_bias = P.mark_sharded(nn.Parameter(torch.ones((cfg.linear_value_heads or cfg.linear_heads) // tp)))
         self.norm = GatedNorm(cfg.linear_head_dim, cfg.norm_eps)
         self.out_proj = P.RowLinear(size, cfg.width)
 
@@ -166,9 +161,7 @@ class GatedDelta(nn.Module):
         size = cfg.linear_heads * cfg.linear_head_dim // P.tp_size()
         h = (cfg.linear_value_heads or cfg.linear_heads) // P.tp_size()
         if cfg.qwen_fused_projections:
-            return self.in_proj_all(flat).split(
-                (2 * size + h * cfg.linear_head_dim, h * cfg.linear_head_dim, h, h), -1
-            )
+            return self.in_proj_all(flat).split((2 * size + h * cfg.linear_head_dim, h * cfg.linear_head_dim, h, h), -1)
         return self.in_proj_qkv(flat), self.in_proj_z(flat), self.in_proj_a(flat), self.in_proj_b(flat)
 
     def forward(self, x, plan, cache=None):
@@ -206,7 +199,9 @@ class GatedDelta(nn.Module):
             written = raw[:, size:].index_select(0, writers) * weight[:, -1]
             history = torch.cat((updates[:, size:], updates.new_zeros(1, updates.shape[1] - size)), dim=0)
             for j in range(cfg.linear_conv_kernel - 1):
-                written = written + history.index_select(0, plan.query_history[plan.query_write_start :, j]) * weight[:, j]
+                written = (
+                    written + history.index_select(0, plan.query_history[plan.query_write_start :, j]) * weight[:, j]
+                )
             qk, qv = F.silu(written).split((size, h * d), -1)
             k = torch.cat((k, qk.reshape(-1, hk, d).to(k.dtype)), dim=0)
             v = torch.cat((v, qv.reshape(-1, h, d).to(v.dtype)), dim=0)
@@ -232,8 +227,7 @@ class GatedDelta(nn.Module):
                 # FP32; the Python recurrence is the CPU oracle only.
                 from ops.cuda_gated_delta import chunk_gated_delta
 
-                y, state = chunk_gated_delta(q, k, v, g=g, beta=beta, cu_seqlens=plan.event_cu,
-                                             output_final_state=True)
+                y, state = chunk_gated_delta(q, k, v, g=g, beta=beta, cu_seqlens=plan.event_cu, output_final_state=True)
             else:
                 y, state = recurrent_delta(q, k, v, g, beta, plan.event_bounds, True)
             # Recurrent decode uses value-first state; only real C enters history.
@@ -337,12 +331,14 @@ class GatedAttention(nn.Module):
             pieces = [y[:first]]
             for row_start, row_stop, key_start, key_stop in blocks:
                 own = slice(s + row_start - first, s + row_stop - first)
-                pieces.append(K.attention(
-                    q[row_start:row_stop],
-                    torch.cat((k[key_start:key_stop], k[own])),
-                    torch.cat((v[key_start:key_stop], v[own])),
-                    fused=cfg.fused and not reference,
-                ))
+                pieces.append(
+                    K.attention(
+                        q[row_start:row_stop],
+                        torch.cat((k[key_start:key_stop], k[own])),
+                        torch.cat((v[key_start:key_stop], v[own])),
+                        fused=cfg.fused and not reference,
+                    )
+                )
             if blocks[-1][1] != n or any(a[1] != b[0] for a, b in zip(blocks, blocks[1:])):
                 raise ValueError("Bidirectional query blocks must tile the tail of the sequence")
             y = torch.cat(pieces)
@@ -383,9 +379,7 @@ def cast_for_training(model, device="cpu"):
     for name, module in model.named_modules():
         if getattr(module, "keep_fp32", False):
             keep.update({f"{name}.{key}": p.detach().clone() for key, p in module.named_parameters()})
-    rope_bands = {
-        name: b.detach().clone() for name, b in model.named_buffers() if name.endswith(".rope.bands")
-    }
+    rope_bands = {name: b.detach().clone() for name, b in model.named_buffers() if name.endswith(".rope.bands")}
     model.to(device=device, dtype=torch.bfloat16)
     for name, p in model.named_parameters():
         if name in keep:
@@ -471,6 +465,4 @@ def load_pretrained(model, path):
                 if value.shape != tensor.shape:
                     raise ValueError(f"Checkpoint shape mismatch: {key}")
                 tensor.copy_(value)
-    return dict(
-        **manifest, loaded_tensors=len(target), loaded_parameters=sum(x.numel() for x in target.values())
-    )
+    return dict(**manifest, loaded_tensors=len(target), loaded_parameters=sum(x.numel() for x in target.values()))

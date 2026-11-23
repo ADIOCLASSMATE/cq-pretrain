@@ -1,4 +1,5 @@
 """Failure, retention and full CPU optimizer restore tests."""
+
 import copy
 import json
 import multiprocessing as mp
@@ -12,14 +13,24 @@ from utils.checkpoint_catalog import SCHEMA, discover, durable_json, latest, pru
 
 
 def fixture(root, step, world=2, tp=1):
-    path = root/f'step_{step:07d}'
+    path = root / f"step_{step:07d}"
     path.mkdir()
     files = {}
     for name in shard_names(world, tp):
-        (path/name).write_bytes(b'complete shard')
-        files[name] = (path/name).stat().st_size
-    durable_json(path/'manifest.json', dict(schema=SCHEMA, step=step, world=world,
-        topology=dict(tp=tp, dp=world//tp), config={}, training_state={}, files=files))
+        (path / name).write_bytes(b"complete shard")
+        files[name] = (path / name).stat().st_size
+    durable_json(
+        path / "manifest.json",
+        dict(
+            schema=SCHEMA,
+            step=step,
+            world=world,
+            topology=dict(tp=tp, dp=world // tp),
+            config={},
+            training_state={},
+            files=files,
+        ),
+    )
     return path
 
 
@@ -28,38 +39,45 @@ def cpu_restore_worker(root, rank):
     import torch.distributed as dist
     import utils.checkpoint as checkpoint_io
     from scripts.validation.compare_data_restart import equal
-    dist.init_process_group('gloo', init_method='file://'+str(Path(root)/'gloo'), rank=rank, world_size=2)
+
+    dist.init_process_group("gloo", init_method="file://" + str(Path(root) / "gloo"), rank=rank, world_size=2)
     torch.manual_seed(17)
     model = torch.nn.Linear(3, 2)
-    inner = torch.optim.AdamW(model.parameters(), lr=.01)
+    inner = torch.optim.AdamW(model.parameters(), lr=0.01)
     optimizer = SimpleNamespace(optimizer=inner)
-    config = SimpleNamespace(to_dict=lambda:dict(width=3, visual_instruction_dropout_probability=0.))
+    config = SimpleNamespace(to_dict=lambda: dict(width=3, visual_instruction_dropout_probability=0.0))
     topology = dict(tp=1, dp=2, pp=1, cp=1, optimizer_instances=1)
-    fake_parallel = SimpleNamespace(get_tensor_model_parallel_rank=lambda:0,
-        get_data_parallel_group=lambda:dist.group.WORLD)
-    data = dict(documents=dict(cursor=31+rank), serial=9)
+    fake_parallel = SimpleNamespace(
+        get_tensor_model_parallel_rank=lambda: 0, get_data_parallel_group=lambda: dist.group.WORLD
+    )
+    data = dict(documents=dict(cursor=31 + rank), serial=9)
+
     def update():
         inner.zero_grad()
         value = model(torch.rand(4, 3)).square().sum()
         value.backward()
         inner.step()
         return value.detach().clone()
+
     update()
-    with patch.object(checkpoint_io.P, 'state', return_value=fake_parallel), \
-         patch.object(checkpoint_io.P, 'dp_rank', return_value=rank), \
-         patch.object(torch.cuda, 'get_rng_state', torch.get_rng_state), \
-         patch.object(torch.cuda, 'set_rng_state', torch.set_rng_state):
-        path = Path(root)/'step_0000001'
-        checkpoint_io.save(path, model, optimizer, 1, config, topology, {'schedule':'same'}, data)
+    with (
+        patch.object(checkpoint_io.P, "state", return_value=fake_parallel),
+        patch.object(checkpoint_io.P, "dp_rank", return_value=rank),
+        patch.object(torch.cuda, "get_rng_state", torch.get_rng_state),
+        patch.object(torch.cuda, "set_rng_state", torch.set_rng_state),
+    ):
+        path = Path(root) / "step_0000001"
+        checkpoint_io.save(path, model, optimizer, 1, config, topology, {"schedule": "same"}, data)
         expected_loss = update()
         expected_model = copy.deepcopy(model.state_dict())
         expected_optimizer = copy.deepcopy(inner.state_dict())
         with torch.no_grad():
-            for p in model.parameters():p.fill_(999)
+            for p in model.parameters():
+                p.fill_(999)
         inner.state.clear()
         torch.manual_seed(999)
         restored = {}
-        step = checkpoint_io.load(path, model, optimizer, config, topology, {'schedule':'same'}, restored)
+        step = checkpoint_io.load(path, model, optimizer, config, topology, {"schedule": "same"}, restored)
         assert step == 1 and restored == data
         equal(update(), expected_loss)
         equal(model.state_dict(), expected_model)
@@ -70,26 +88,28 @@ def cpu_restore_worker(root, rank):
 class CheckpointRestartTests(unittest.TestCase):
     def test_resume_requires_the_same_source_and_objective(self):
         from utils.checkpoint import check_resume_contract
-        config=dict(visual_instruction_dropout_probability=0.)
-        state=dict(data=dict(adapter_sha256='release-adapter'),seed=42)
-        manifest=dict(config=config,training_state=state)
-        check_resume_contract(manifest,config,state)
-        with self.assertRaisesRegex(ValueError,'checkpoint'):
-            check_resume_contract(manifest,config,dict(state,data=dict(adapter_sha256='other')))
-        with self.assertRaisesRegex(ValueError,'configuration'):
-            check_resume_contract(manifest,dict(config,visual_instruction_dropout_probability=.1),state)
+
+        config = dict(visual_instruction_dropout_probability=0.0)
+        state = dict(data=dict(adapter_sha256="release-adapter"), seed=42)
+        manifest = dict(config=config, training_state=state)
+        check_resume_contract(manifest, config, state)
+        with self.assertRaisesRegex(ValueError, "checkpoint"):
+            check_resume_contract(manifest, config, dict(state, data=dict(adapter_sha256="other")))
+        with self.assertRaisesRegex(ValueError, "configuration"):
+            check_resume_contract(manifest, dict(config, visual_instruction_dropout_probability=0.1), state)
 
     def test_old_formats_are_rejected_before_loading_weights(self):
         import utils.checkpoint as checkpoint_io
-        for schema in (3, 4, 5, 6, 'cq_eval_snapshot_v1'):
+
+        for schema in (3, 4, 5, 6, "cq_eval_snapshot_v1"):
             with self.subTest(schema=schema), tempfile.TemporaryDirectory() as temporary:
                 path = fixture(Path(temporary), 1)
-                manifest = json.loads((path/'manifest.json').read_text())
-                manifest['schema'] = schema
-                durable_json(path/'manifest.json', manifest)
-                with self.assertRaisesRegex(ValueError, 'schema'):
+                manifest = json.loads((path / "manifest.json").read_text())
+                manifest["schema"] = schema
+                durable_json(path / "manifest.json", manifest)
+                with self.assertRaisesRegex(ValueError, "schema"):
                     checkpoint_io.load(path, None, None, None, None)
-                with self.assertRaisesRegex(ValueError, 'schema'):
+                with self.assertRaisesRegex(ValueError, "schema"):
                     checkpoint_io.initialize_model(path, None, None)
 
     def test_incomplete_missing_and_truncated_fallback(self):
@@ -97,12 +117,12 @@ class CheckpointRestartTests(unittest.TestCase):
             root = Path(temporary)
             first = fixture(root, 1)
             second = fixture(root, 2)
-            (second/'rank_00001.pt').unlink()
+            (second / "rank_00001.pt").unlink()
             third = fixture(root, 3)
-            (third/'model_tp_000.pt').write_bytes(b'bad')
-            partial = root/'step_0000004'
+            (third / "model_tp_000.pt").write_bytes(b"bad")
+            partial = root / "step_0000004"
             partial.mkdir()
-            (partial/'rank_00000.pt.tmp').write_bytes(b'interrupted')
+            (partial / "rank_00000.pt.tmp").write_bytes(b"interrupted")
             self.assertEqual(latest(root)[0], str(first))
             self.assertEqual(len(latest(root)[1]), 3)
             remove_incomplete(root)
@@ -113,36 +133,41 @@ class CheckpointRestartTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             path = fixture(root, 1)
-            (path/'rank_00001.pt').unlink()
-            with self.assertRaisesRegex(RuntimeError, 'refusing to restart'):
+            (path / "rank_00001.pt").unlink()
+            with self.assertRaisesRegex(RuntimeError, "refusing to restart"):
                 latest(root)
 
     def test_retention_commit_before_delete(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for step in range(1, 4):fixture(root, step)
-            partial = root/'step_0000004'
+            for step in range(1, 4):
+                fixture(root, step)
+            partial = root / "step_0000004"
             partial.mkdir()
-            (partial/'model_tp_000.pt.tmp').write_bytes(b'partial')
+            (partial / "model_tp_000.pt.tmp").write_bytes(b"partial")
             self.assertEqual(len(discover(root)[0]), 3)
             remove_incomplete(root)
             fixture(root, 4)
             prune(root, 3)
-            self.assertEqual([m['step'] for _,m in discover(root)[0]], [4,3,2])
+            self.assertEqual([m["step"] for _, m in discover(root)[0]], [4, 3, 2])
             self.assertEqual(len(list(root.iterdir())), 3)
 
     def test_distributed_model_optimizer_rng_cursor_resume(self):
-        context = mp.get_context('spawn')
+        context = mp.get_context("spawn")
         with tempfile.TemporaryDirectory() as temporary:
-            workers = [context.Process(target=cpu_restore_worker,args=(temporary,rank)) for rank in range(2)]
-            for worker in workers:worker.start()
+            workers = [context.Process(target=cpu_restore_worker, args=(temporary, rank)) for rank in range(2)]
+            for worker in workers:
+                worker.start()
             for worker in workers:
                 worker.join(40)
-                if worker.is_alive():worker.kill();worker.join()
-                self.assertEqual(worker.exitcode,0)
+                if worker.is_alive():
+                    worker.kill()
+                    worker.join()
+                self.assertEqual(worker.exitcode, 0)
 
 
-if __name__ == '__main__':unittest.main()
+if __name__ == "__main__":
+    unittest.main()
 
 
 def test_resume_accepts_new_activation_scheduling_only():
@@ -150,19 +175,33 @@ def test_resume_accepts_new_activation_scheduling_only():
     from configs.config import tiny_config
     from data.stream import resume_signature
     from utils.checkpoint import check_resume_contract
+
     saved = tiny_config(checkpoint_backbone=True, checkpoint_dit=True, generation_token_budget=8192).to_dict()
     state = dict(seed=42)
     manifest = dict(config=saved, training_state=state)
-    lighter = tiny_config(checkpoint_backbone=False, checkpoint_backbone_layers=2, keep_attention_activations=1,
-                          checkpoint_dit=False, checkpoint_dit_layers=1, generation_token_budget=4096, ce_chunk=8)
+    lighter = tiny_config(
+        checkpoint_backbone=False,
+        checkpoint_backbone_layers=2,
+        keep_attention_activations=1,
+        checkpoint_dit=False,
+        checkpoint_dit_layers=1,
+        generation_token_budget=4096,
+        ce_chunk=8,
+    )
     check_resume_contract(manifest, lighter.to_dict(), state)
-    for changed in (dict(rf=2), dict(timestep_shift=3.0), dict(visual_uncond_probability=.2), dict(width=48)):
-        with pytest.raises(ValueError, match='configuration differs'):
+    for changed in (dict(rf=2), dict(timestep_shift=3.0), dict(visual_uncond_probability=0.2), dict(width=48)):
+        with pytest.raises(ValueError, match="configuration differs"):
             check_resume_contract(manifest, tiny_config(**changed).to_dict(), state)
-    signature = dict(seed=42, generation=dict(renderer='wan', token_budget=8192, rf=1),
-                     packing=dict(preserve_documents=True, generation_microbatch_images=0))
-    other = dict(signature, generation=dict(signature['generation'], token_budget=4096),
-                 packing=dict(signature['packing'], generation_microbatch_images=8))
+    signature = dict(
+        seed=42,
+        generation=dict(renderer="wan", token_budget=8192, rf=1),
+        packing=dict(preserve_documents=True, generation_microbatch_images=0),
+    )
+    other = dict(
+        signature,
+        generation=dict(signature["generation"], token_budget=4096),
+        packing=dict(signature["packing"], generation_microbatch_images=8),
+    )
     assert resume_signature(other) == resume_signature(signature)
     assert resume_signature(dict(signature, seed=43)) != resume_signature(signature)
-    assert signature['generation']['token_budget'] == 8192  # the recorded signature is untouched
+    assert signature["generation"]["token_budget"] == 8192  # the recorded signature is untouched

@@ -4,6 +4,7 @@ TE keeps amax history and fuses the cast where it can, so it should beat the
 naive "separate amax pass" measurement. This is the number the decision to
 invest in FP8 should rest on.
 """
+
 import argparse
 import json
 import time
@@ -40,8 +41,7 @@ def main():
     from transformer_engine.common.recipe import DelayedScaling, Format
 
     print("TE", getattr(__import__("transformer_engine"), "__version__", "?"))
-    recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16,
-                            amax_compute_algo="max")
+    recipe = DelayedScaling(fp8_format=Format.HYBRID, amax_history_len=16, amax_compute_algo="max")
     rows = []
     for name, M, K, N in SHAPES:
         x = torch.randn(M, K, device="cuda", dtype=torch.bfloat16, requires_grad=True)
@@ -69,34 +69,46 @@ def main():
         except Exception as exc:
             print(f"  {name}: FP8 path failed: {type(exc).__name__}: {str(exc)[:80]}")
             t_te_fp8, ok = float("nan"), False
-        rows.append(dict(name=name, M=M, K=K, N=N, torch_bf16_ms=t_ref,
-                         te_bf16_ms=t_te_bf16, te_fp8_ms=t_te_fp8,
-                         gain_vs_torch_bf16=t_ref / t_te_fp8 if ok else None,
-                         gain_vs_te_bf16=t_te_bf16 / t_te_fp8 if ok else None))
+        rows.append(
+            dict(
+                name=name,
+                M=M,
+                K=K,
+                N=N,
+                torch_bf16_ms=t_ref,
+                te_bf16_ms=t_te_bf16,
+                te_fp8_ms=t_te_fp8,
+                gain_vs_torch_bf16=t_ref / t_te_fp8 if ok else None,
+                gain_vs_te_bf16=t_te_bf16 / t_te_fp8 if ok else None,
+            )
+        )
 
-    print(f"\n{'shape':24s} {'torch bf16':>11s} {'te bf16':>9s} {'te fp8':>9s} "
-          f"{'vs torch':>9s} {'vs te':>8s}")
+    print(f"\n{'shape':24s} {'torch bf16':>11s} {'te bf16':>9s} {'te fp8':>9s} {'vs torch':>9s} {'vs te':>8s}")
     for r in rows:
         g1 = f"{r['gain_vs_torch_bf16']:.2f}x" if r["gain_vs_torch_bf16"] else "n/a"
         g2 = f"{r['gain_vs_te_bf16']:.2f}x" if r["gain_vs_te_bf16"] else "n/a"
-        print(f"{r['name']:24s} {r['torch_bf16_ms']:11.3f} {r['te_bf16_ms']:9.3f} "
-              f"{r['te_fp8_ms']:9.3f} {g1:>9s} {g2:>8s}")
+        print(
+            f"{r['name']:24s} {r['torch_bf16_ms']:11.3f} {r['te_bf16_ms']:9.3f} {r['te_fp8_ms']:9.3f} {g1:>9s} {g2:>8s}"
+        )
 
     good = [r for r in rows if r["gain_vs_torch_bf16"]]
-    weighted = (sum(r["torch_bf16_ms"] for r in good) /
-                sum(r["te_fp8_ms"] for r in good)) if good else None
-    summary = dict(device=torch.cuda.get_device_name(0), shapes=rows,
-                   weighted_gain_vs_torch_bf16=weighted,
-                   note=("Forward+backward through TE's own FP8 Linear with delayed scaling, "
-                         "which is how FP8 would actually be adopted. Compared against the "
-                         "torch BF16 Linear the model uses today. GEMM was 41.8% of kernel "
-                         "time in the all-on profile."))
+    weighted = (sum(r["torch_bf16_ms"] for r in good) / sum(r["te_fp8_ms"] for r in good)) if good else None
+    summary = dict(
+        device=torch.cuda.get_device_name(0),
+        shapes=rows,
+        weighted_gain_vs_torch_bf16=weighted,
+        note=(
+            "Forward+backward through TE's own FP8 Linear with delayed scaling, "
+            "which is how FP8 would actually be adopted. Compared against the "
+            "torch BF16 Linear the model uses today. GEMM was 41.8% of kernel "
+            "time in the all-on profile."
+        ),
+    )
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(summary, indent=2))
     if weighted:
         print(f"\n  weighted TE FP8 vs torch BF16: {weighted:.2f}x")
-        print(f"  implied step-level bound if every GEMM converted: "
-              f"{1 / (1 - 0.418 * (1 - 1 / weighted)):.3f}x")
+        print(f"  implied step-level bound if every GEMM converted: {1 / (1 - 0.418 * (1 - 1 / weighted)):.3f}x")
 
 
 if __name__ == "__main__":

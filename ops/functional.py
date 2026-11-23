@@ -13,9 +13,7 @@ _COMPILE_MODULATION = os.environ.get("PRETRAIN_COMPILE_MODULATION", "0") == "1"
 
 
 def modulated_norm_reference(hidden, scale, shift, eps=1e-6, upcast=False):
-    normalized = F.layer_norm(hidden.float() if upcast else hidden, (hidden.shape[-1],), eps=eps).to(
-        hidden.dtype
-    )
+    normalized = F.layer_norm(hidden.float() if upcast else hidden, (hidden.shape[-1],), eps=eps).to(hidden.dtype)
     return normalized * (1 + scale) + shift
 
 
@@ -100,10 +98,7 @@ def attention(q, k, v, mask=None, valid_rows=None, fused=True, scale=None):
             # would materialize 4x the K and V activations here (8 query heads
             # over 2 KV heads), and SDPA accepts the expanded stride.
             b, h, t, d = key.shape
-            key, value = (
-                x[:, :, None].expand(b, h, repeat, t, d).reshape(b, h * repeat, t, d)
-                for x in (key, value)
-            )
+            key, value = (x[:, :, None].expand(b, h, repeat, t, d).reshape(b, h * repeat, t, d) for x in (key, value))
         else:
             # Explicit repeat in the CPU numerical reference only.
             key, value = key.repeat_interleave(repeat, 1), value.repeat_interleave(repeat, 1)
@@ -111,9 +106,7 @@ def attention(q, k, v, mask=None, valid_rows=None, fused=True, scale=None):
     # Inverting allocates another full [1,1,2S,S] bool (128 MB at S=8192) on
     # every call, so reuse the per-batch inverse the CPU planner cached.
     allow = None if mask is None else _allow_mask(mask)
-    result = F.scaled_dot_product_attention(
-        query, key, value, attn_mask=allow, dropout_p=0.0, scale=scale
-    )
+    result = F.scaled_dot_product_attention(query, key, value, attn_mask=allow, dropout_p=0.0, scale=scale)
     result = result.permute(2, 0, 1, 3).flatten(-2).contiguous()
     if valid_rows is not None:
         result = result * valid_rows.transpose(0, 1).unsqueeze(-1).to(result.dtype)

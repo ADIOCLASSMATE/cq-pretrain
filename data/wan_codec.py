@@ -28,19 +28,12 @@ class WanVideoCodec:
                 vae = AutoencoderKLWan()
             vae.load_state_dict(state, strict=True, assign=True)
         else:
-            vae = AutoencoderKLWan.from_pretrained(
-                path, local_files_only=True, torch_dtype=dtype
-            )
+            vae = AutoencoderKLWan.from_pretrained(path, local_files_only=True, torch_dtype=dtype)
         return cls(vae.to(device=device, dtype=dtype))
 
     @torch.no_grad()
     def encode(self, rgb):
-        if (
-            rgb.ndim != 4
-            or rgb.shape[0] != 3
-            or (rgb.shape[1] - 1) % 4
-            or any(x % 16 for x in rgb.shape[2:])
-        ):
+        if rgb.ndim != 4 or rgb.shape[0] != 3 or (rgb.shape[1] - 1) % 4 or any(x % 16 for x in rgb.shape[2:]):
             raise ValueError("Wan RGB must be [3,4k+1,H,W] with H/W divisible by 16")
         parameter = next(self.vae.parameters())
         # Native Wan uses the posterior mean, not a fresh posterior sample.
@@ -54,7 +47,7 @@ class WanVideoCodec:
         parameter = next(self.vae.parameters())
         videos = []
         for start in range(0, len(latents), chunk):
-            raw = torch.stack([z.float() for z in latents[start:start + chunk]])
+            raw = torch.stack([z.float() for z in latents[start : start + chunk]])
             raw = raw * self.std.to(raw) + self.mean.to(raw)
             with torch.autocast(parameter.device.type, enabled=False):
                 videos.extend(self.vae.decode(raw.to(parameter)).sample.float().clamp(-1, 1).unbind(0))
@@ -68,10 +61,5 @@ class WanVideoCodec:
             raw = z.float()
             raw = raw * self.std.to(raw) + self.mean.to(raw)
             with torch.autocast(parameter.device.type, enabled=False):
-                videos.append(
-                    self.vae.decode(raw[None].to(parameter))
-                    .sample[0]
-                    .float()
-                    .clamp(-1, 1)
-                )
+                videos.append(self.vae.decode(raw[None].to(parameter)).sample[0].float().clamp(-1, 1))
         return videos

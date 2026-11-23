@@ -10,8 +10,11 @@ from ops.gated_delta_layout import build_delta_plan, rope_tables
 
 
 def uses_null_token(batch, cfg):
-    return (getattr(cfg, "null_condition", "masked") == "token"
-            and batch.generation_unconditional is not None and bool(batch.generation_unconditional.any()))
+    return (
+        getattr(cfg, "null_condition", "masked") == "token"
+        and batch.generation_unconditional is not None
+        and bool(batch.generation_unconditional.any())
+    )
 
 
 def content_view(batch, cfg):
@@ -24,12 +27,18 @@ def content_view(batch, cfg):
     # Use a padding slot when possible. A completely occupied pack gets one
     # internal backbone slot; the data pack, labels and all real indices stay intact.
     anchor = batch.ids.shape[1] - int(batch.segments[0, -1] < 0)
+
     def append(tensor, value):
         return torch.cat((tensor[:, :anchor], torch.full_like(tensor[:, :1], value)), dim=1)
-    return replace(batch, ids=append(batch.ids, cfg.null_token_id),
-                   segments=append(batch.segments, int(batch.segments.max()) + 1),
-                   sigma=append(batch.sigma, 0), row_col=append(batch.row_col, 0),
-                   image_queries=append(batch.image_queries, False))
+
+    return replace(
+        batch,
+        ids=append(batch.ids, cfg.null_token_id),
+        segments=append(batch.segments, int(batch.segments.max()) + 1),
+        sigma=append(batch.sigma, 0),
+        row_col=append(batch.row_col, 0),
+        image_queries=append(batch.image_queries, False),
+    )
 
 
 def attach_cq_predicate(batch, plan, valid, unconditional=None):
@@ -85,10 +94,7 @@ def build_plan(batch, cfg):
     if len(set(targets)) != len(targets) or any(i < 0 or i >= len(spans) for i in targets):
         raise ValueError("Generation occurrence indices must be distinct and in range")
     grids = batch.vision.grid_thw if spans else ()
-    counts = [
-        (math.prod(g) // 4 if cfg.visual_query_mode == "native" else cfg.image_condition_queries)
-        for g in grids
-    ]
+    counts = [(math.prod(g) // 4 if cfg.visual_query_mode == "native" else cfg.image_condition_queries) for g in grids]
     maxq = max((counts[i] for i in targets), default=0)
     conditions = torch.full((len(spans), maxq), -1, dtype=torch.long)
     offset = s
@@ -101,7 +107,7 @@ def build_plan(batch, cfg):
     outputs = []
     unconditional = torch.zeros(len(text) + offset - s, dtype=torch.bool)
     read_sigma = torch.empty(len(unconditional), dtype=batch.sigma.dtype)
-    read_sigma[:len(text)] = batch.sigma[0, text]
+    read_sigma[: len(text)] = batch.sigma[0, text]
     c = batch.row_col.float()
     bidirectional = getattr(cfg, "query_interaction", "none") == "bidirectional"
     null_at_opener = getattr(cfg, "null_condition", "masked") == "bos"
@@ -134,7 +140,7 @@ def build_plan(batch, cfg):
             read_position = batch.generation_instruction_starts[i]
             if not 0 <= read_position < span[0] or batch.segments[0, read_position] != batch.segments[0, span[0]]:
                 raise ValueError("Instruction cutoff must precede the target in the same document")
-            if batch.image_queries[0, read_position:span[0]].any():
+            if batch.image_queries[0, read_position : span[0]].any():
                 raise ValueError("An instruction cutoff cannot discard an intervening visual")
         read_sigma[rows] = batch.sigma[0, read_position]
         query_position = int(span[0])
@@ -176,21 +182,26 @@ def build_plan(batch, cfg):
         outputs.append(conditions[i, :n])
     qpos = torch.cat((text, *positions))
     qrope = torch.cat((c[:, text], *ropes), dim=1)
-    image = torch.cat(
-        (torch.zeros(len(text), dtype=torch.bool), torch.ones(len(qpos) - len(text), dtype=torch.bool))
-    )[None]
+    image = torch.cat((torch.zeros(len(text), dtype=torch.bool), torch.ones(len(qpos) - len(text), dtype=torch.bool)))[
+        None
+    ]
     # Block rows are served by their own [prefix ; block] attention and GDN
     # sequence. In the shared C kernels they read nothing and cost nothing.
     hidden_from_content = unconditional | block_rows
     mask, valid = document_cq_mask(batch, qpos, hidden_from_content, read_sigma)
     plan = MainlinePlan(
-        query_positions=qpos, query_image=image, query_rope=qrope,
-        output_positions=torch.cat((text, *outputs)), condition_indices=conditions,
-        cq_mask=mask, cq_valid=valid,
+        query_positions=qpos,
+        query_image=image,
+        query_rope=qrope,
+        output_positions=torch.cat((text, *outputs)),
+        condition_indices=conditions,
+        cq_mask=mask,
+        cq_valid=valid,
         output_size=offset,
         query_unconditional=unconditional,
         query_read_sigma=read_sigma,
-        query_blocks=tuple(blocks), null_anchor=null_anchor,
+        query_blocks=tuple(blocks),
+        null_anchor=null_anchor,
     )
     attach_cq_predicate(batch, plan, valid, hidden_from_content)
     return finalize_plan(batch, cfg, plan)

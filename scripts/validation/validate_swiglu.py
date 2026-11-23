@@ -4,6 +4,7 @@ The reference is the exact code the fused path replaces: chunk the packed
 projection and compute silu(gate)*up. Both run on the same strided layout the
 model actually produces, so a kernel that mishandles strides fails here.
 """
+
 import argparse
 import json
 from pathlib import Path
@@ -50,8 +51,10 @@ def main():
         passed = all(v <= a.tol for v in e.values()) and strided
         ok &= passed
         cases.append(dict(tokens=tokens, ffn=ffn, strided_input=strided, errors=e, passed=passed))
-        print(f"  swiglu [{tokens},1,{2*ffn}] strided={strided} "
-              f"output={e['output']:.2e} dx={e['dx']:.2e} -> {'PASS' if passed else 'FAIL'}")
+        print(
+            f"  swiglu [{tokens},1,{2 * ffn}] strided={strided} "
+            f"output={e['output']:.2e} dx={e['dx']:.2e} -> {'PASS' if passed else 'FAIL'}"
+        )
 
     # The model runs this inside torch.utils.checkpoint(use_reentrant=True).
     # Recompute replays the compiled graph under a fresh autograd context; a
@@ -73,30 +76,39 @@ def main():
     e = dict(output=relerr(yf, yr), dx=relerr(xf.grad, xr.grad))
     passed = all(v <= a.tol for v in e.values())
     ok &= passed
-    cases.append(dict(tokens=4096, ffn=6144, reentrant_checkpoint=True,
-                      errors=e, passed=passed))
-    print(f"  swiglu under reentrant checkpoint: output={e['output']:.2e} "
-          f"dx={e['dx']:.2e} -> {'PASS' if passed else 'FAIL'}")
+    cases.append(dict(tokens=4096, ffn=6144, reentrant_checkpoint=True, errors=e, passed=passed))
+    print(
+        f"  swiglu under reentrant checkpoint: output={e['output']:.2e} "
+        f"dx={e['dx']:.2e} -> {'PASS' if passed else 'FAIL'}"
+    )
 
     # Microbenchmark at the production shape, forward+backward.
     def timed(fn, x):
         for _ in range(3):
-            y = fn(x); (y * y).sum().backward(); x.grad = None
+            y = fn(x)
+            (y * y).sum().backward()
+            x.grad = None
         torch.cuda.synchronize()
         s, e2 = torch.cuda.Event(True), torch.cuda.Event(True)
         s.record()
         for _ in range(10):
-            y = fn(x); (y * y).sum().backward(); x.grad = None
-        e2.record(); torch.cuda.synchronize()
+            y = fn(x)
+            (y * y).sum().backward()
+            x.grad = None
+        e2.record()
+        torch.cuda.synchronize()
         return s.elapsed_time(e2) / 10
 
     x = torch.randn(16382, 1, 12288, device="cuda", dtype=torch.bfloat16).requires_grad_()
     tr, tf = timed(reference, x), timed(cuda_fused.swiglu, x)
-    print(f"  fwd+bwd [16382,1,12288]: reference {tr:.3f} ms  fused {tf:.3f} ms -> {tr/tf:.2f}x")
+    print(f"  fwd+bwd [16382,1,12288]: reference {tr:.3f} ms  fused {tf:.3f} ms -> {tr / tf:.2f}x")
 
     a.output.parent.mkdir(parents=True, exist_ok=True)
-    a.output.write_text(json.dumps(dict(passed=bool(ok), tolerance=a.tol, cases=cases,
-                                        reference_ms=tr, fused_ms=tf, speedup=tr / tf), indent=2))
+    a.output.write_text(
+        json.dumps(
+            dict(passed=bool(ok), tolerance=a.tol, cases=cases, reference_ms=tr, fused_ms=tf, speedup=tr / tf), indent=2
+        )
+    )
     print("FUSED SWIGLU GATE " + ("PASSED" if ok else "FAILED"))
     if not ok:
         raise SystemExit(1)

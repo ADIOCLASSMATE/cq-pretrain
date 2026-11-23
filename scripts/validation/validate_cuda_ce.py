@@ -51,8 +51,15 @@ def against_fp64(rows, width, vocab, chunk, direct, tol):
         dhidden=relative(hidden.grad, reference_hidden.grad),
         dweight=relative(gradient, reference_weight.grad),
     )
-    case = dict(rows=rows, width=width, vocab=vocab, chunk=chunk, direct=direct,
-                errors=errors, passed=max(errors.values()) <= tol)
+    case = dict(
+        rows=rows,
+        width=width,
+        vocab=vocab,
+        chunk=chunk,
+        direct=direct,
+        errors=errors,
+        passed=max(errors.values()) <= tol,
+    )
     if direct:
         # MCore adds main_grad itself; a second contribution would double it.
         case["grad_added_to_main_grad"] = bool(weight.grad_added_to_main_grad)
@@ -68,13 +75,22 @@ def against_baseline(rows, width, vocab, chunk, direct, tol):
         hidden, weight, targets = build(rows, width, vocab, direct, seed=9)
         loss = implementation(hidden, weight, targets, chunk)
         loss.backward()
-        outputs.append((float(loss), hidden.grad.detach(),
-                        (weight.main_grad if direct else weight.grad).detach()))
+        outputs.append((float(loss), hidden.grad.detach(), (weight.main_grad if direct else weight.grad).detach()))
     (old_loss, old_dh, old_dw), (new_loss, new_dh, new_dw) = outputs
-    errors = dict(loss=abs(new_loss - old_loss) / max(1e-8, abs(old_loss)),
-                  dhidden=relative(new_dh, old_dh), dweight=relative(new_dw, old_dw))
-    return dict(rows=rows, width=width, vocab=vocab, chunk=chunk, direct=direct,
-                errors=errors, passed=max(errors.values()) <= tol)
+    errors = dict(
+        loss=abs(new_loss - old_loss) / max(1e-8, abs(old_loss)),
+        dhidden=relative(new_dh, old_dh),
+        dweight=relative(new_dw, old_dw),
+    )
+    return dict(
+        rows=rows,
+        width=width,
+        vocab=vocab,
+        chunk=chunk,
+        direct=direct,
+        errors=errors,
+        passed=max(errors.values()) <= tol,
+    )
 
 
 def dispatch_rules(vocab=512, width=64, rows=8):
@@ -121,25 +137,36 @@ def main():
         for direct in (False, True):
             case = against_fp64(rows, width, vocab, chunk, direct, args.tol)
             fp64.append(case)
-            print(f"  fp64     rows={rows:5d} vocab={vocab:6d} direct={int(direct)} "
-                  f"loss={case['errors']['loss']:.2e} dh={case['errors']['dhidden']:.2e} "
-                  f"dw={case['errors']['dweight']:.2e} -> {'PASS' if case['passed'] else 'FAIL'}", flush=True)
+            print(
+                f"  fp64     rows={rows:5d} vocab={vocab:6d} direct={int(direct)} "
+                f"loss={case['errors']['loss']:.2e} dh={case['errors']['dhidden']:.2e} "
+                f"dw={case['errors']['dweight']:.2e} -> {'PASS' if case['passed'] else 'FAIL'}",
+                flush=True,
+            )
     for rows, width, vocab, chunk in ((2048, 2048, 248320, 1024), (4096, 2048, 248320, 1024)):
         for direct in (False, True):
             case = against_baseline(rows, width, vocab, chunk, direct, args.tol)
             baseline.append(case)
-            print(f"  vs-old   rows={rows:5d} vocab={vocab:6d} direct={int(direct)} "
-                  f"loss={case['errors']['loss']:.2e} dh={case['errors']['dhidden']:.2e} "
-                  f"dw={case['errors']['dweight']:.2e} -> {'PASS' if case['passed'] else 'FAIL'}", flush=True)
+            print(
+                f"  vs-old   rows={rows:5d} vocab={vocab:6d} direct={int(direct)} "
+                f"loss={case['errors']['loss']:.2e} dh={case['errors']['dhidden']:.2e} "
+                f"dw={case['errors']['dweight']:.2e} -> {'PASS' if case['passed'] else 'FAIL'}",
+                flush=True,
+            )
             torch.cuda.empty_cache()
 
     rules = dispatch_rules()
     for name, value in rules.items():
         print(f"  dispatch {name:32s} {value}", flush=True)
 
-    result = dict(passed=all(c["passed"] for c in fp64 + baseline) and all(rules.values()),
-                  device=torch.cuda.get_device_name(0), tolerance=args.tol,
-                  fp64_cases=fp64, baseline_cases=baseline, dispatch_rules=rules)
+    result = dict(
+        passed=all(c["passed"] for c in fp64 + baseline) and all(rules.values()),
+        device=torch.cuda.get_device_name(0),
+        tolerance=args.tol,
+        fp64_cases=fp64,
+        baseline_cases=baseline,
+        dispatch_rules=rules,
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2))
     print(json.dumps({k: result[k] for k in ("passed", "device", "tolerance")}, indent=2), flush=True)

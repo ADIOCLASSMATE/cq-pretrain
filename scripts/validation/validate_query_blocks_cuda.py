@@ -7,6 +7,7 @@ sequences, FlexAttention for content rows plus dense block attention) with the
 FP64 CPU reference. It also times each layer with and without the interaction.
 No distributed init is required.
 """
+
 import argparse
 import copy
 import json
@@ -41,31 +42,45 @@ def layout(side=14, null=(False, False, True)):
         for kind, length in elements:
             if kind == "t":
                 for _ in range(length):
-                    segments.append(segment); sigma.append(position); rope.append((cursor,) * 3)
+                    segments.append(segment)
+                    sigma.append(position)
+                    rope.append((cursor,) * 3)
                     if position % 3 == 0:
                         text.append(position)
-                    position += 1; cursor += 1
+                    position += 1
+                    cursor += 1
             else:
                 spans.append(list(range(position, position + length)))
                 openers.append(start + 1)
                 for local in range(length):
-                    segments.append(segment); sigma.append(position - local)
+                    segments.append(segment)
+                    sigma.append(position - local)
                     rope.append((cursor, cursor + local // side, cursor + local % side))
                     position += 1
                 cursor += side
     s = position
     empty = torch.empty(0)
-    return Batch(torch.zeros(1, s, dtype=torch.long), empty, torch.tensor(spans), torch.tensor(text),
-                 torch.zeros(1, s, dtype=torch.bool), torch.tensor(sigma)[None], torch.tensor(segments)[None],
-                 torch.tensor(rope).float().T[:, :, None].contiguous(), empty, empty,
-                 vision=SimpleNamespace(grid_thw=(grid,) * len(spans)),
-                 generation_image_indices=torch.arange(len(spans)),
-                 generation_unconditional=torch.tensor(null),
-                 generation_null_positions=torch.tensor(openers))
+    return Batch(
+        torch.zeros(1, s, dtype=torch.long),
+        empty,
+        torch.tensor(spans),
+        torch.tensor(text),
+        torch.zeros(1, s, dtype=torch.bool),
+        torch.tensor(sigma)[None],
+        torch.tensor(segments)[None],
+        torch.tensor(rope).float().T[:, :, None].contiguous(),
+        empty,
+        empty,
+        vision=SimpleNamespace(grid_thw=(grid,) * len(spans)),
+        generation_image_indices=torch.arange(len(spans)),
+        generation_unconditional=torch.tensor(null),
+        generation_null_positions=torch.tensor(openers),
+    )
 
 
 def timed(function, repeats=5):
-    function(); torch.cuda.synchronize()
+    function()
+    torch.cuda.synchronize()
     begin = time.perf_counter()
     for _ in range(repeats):
         function()
@@ -111,12 +126,21 @@ def main():
             u = torch.randn_like(y)
             (y[block_rows] * u[block_rows]).sum().backward()
             (yr[block_rows] * u[block_rows].cpu().double()).sum().backward()
-            errors = dict(block_output=relerr(y[block_rows], yr[block_rows]), all_output=relerr(y, yr),
-                          dx=relerr(x.grad, xr.grad))
-            report["cases"].append(dict(layer=name, null=null, rows=rows, content=s,
-                                        blocks=[list(b) for b in plan.query_blocks],
-                                        events=len(plan.delta_plan.event_q), **errors,
-                                        passed=all(v <= args.tol for v in errors.values())))
+            errors = dict(
+                block_output=relerr(y[block_rows], yr[block_rows]), all_output=relerr(y, yr), dx=relerr(x.grad, xr.grad)
+            )
+            report["cases"].append(
+                dict(
+                    layer=name,
+                    null=null,
+                    rows=rows,
+                    content=s,
+                    blocks=[list(b) for b in plan.query_blocks],
+                    events=len(plan.delta_plan.event_q),
+                    **errors,
+                    passed=all(v <= args.tol for v in errors.values()),
+                )
+            )
     # Cost of the interaction on one layer, forward + backward, same hidden rows.
     for interaction in ("none", "bidirectional"):
         cfg = replace(base, query_interaction=interaction)
@@ -128,12 +152,16 @@ def main():
         x = torch.randn(rows, 1, cfg.width, device=device, dtype=torch.bfloat16, requires_grad=True)
         rope = (on_device.rope_cos.to(x.dtype), on_device.rope_sin.to(x.dtype))
         gdn = GatedDelta(cfg).to(device=device, dtype=torch.bfloat16)
-        gdn.A_log.data = gdn.A_log.data.float(); gdn.norm.weight.data = gdn.norm.weight.data.float()
+        gdn.A_log.data = gdn.A_log.data.float()
+        gdn.norm.weight.data = gdn.norm.weight.data.float()
         attention = GatedAttention(cfg).to(device=device, dtype=torch.bfloat16)
         report["timing"][interaction] = dict(
-            rows=rows, content=s, events=len(plan.delta_plan.event_q),
+            rows=rows,
+            content=s,
+            events=len(plan.delta_plan.event_q),
             gdn_ms=1e3 * timed(lambda: gdn(x, on_device.delta_plan).float().sum().backward()),
-            attention_ms=1e3 * timed(lambda: attention(x, rope, on_device, s).float().sum().backward()))
+            attention_ms=1e3 * timed(lambda: attention(x, rope, on_device, s).float().sum().backward()),
+        )
     report["passed"] = all(case["passed"] for case in report["cases"])
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

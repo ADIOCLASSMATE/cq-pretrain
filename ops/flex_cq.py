@@ -56,8 +56,12 @@ def tile_options(head_dim, capability):
         return None
     back = min(entry["block_m"], entry["block_n"])
     options = {
-        "BLOCK_M": entry["block_m"], "BLOCK_N": entry["block_n"],
-        "BLOCK_M1": back, "BLOCK_N1": back, "BLOCK_M2": back, "BLOCK_N2": back,
+        "BLOCK_M": entry["block_m"],
+        "BLOCK_N": entry["block_n"],
+        "BLOCK_M1": back,
+        "BLOCK_N1": back,
+        "BLOCK_M2": back,
+        "BLOCK_N2": back,
     }
     # Fewer pipeline stages is what makes the larger tile fit Ada's shared
     # memory at head_dim=256; it is part of the recorded answer, not a default.
@@ -86,8 +90,7 @@ def usable(q, predicate, mask):
     # The predicate must describe exactly the rows/keys of the dense mask it
     # replaces; otherwise fall back rather than silently attend over the wrong
     # extent.
-    if mask is not None and tuple(mask.shape[-2:]) != (len(predicate.row_sigma),
-                                                       len(predicate.key_sigma)):
+    if mask is not None and tuple(mask.shape[-2:]) != (len(predicate.row_sigma), len(predicate.key_sigma)):
         return False
     if q.shape[0] != len(predicate.row_sigma):
         return False
@@ -132,8 +135,7 @@ def block_mask(predicate, rows, keys, device):
         # key 0 so the kernel has a defined softmax; it is zeroed afterwards.
         return value | (row_invalid[q_idx] & (kv_idx == 0))
 
-    mask = create_block_mask(mask_mod, None, None, rows, keys,
-                             device=str(device), BLOCK_SIZE=(128, 128), _compile=True)
+    mask = create_block_mask(mask_mod, None, None, rows, keys, device=str(device), BLOCK_SIZE=(128, 128), _compile=True)
     predicate.block_mask = mask
     return mask
 
@@ -155,7 +157,9 @@ def attention(q, k, v, predicate, valid_rows, scale=None):
         v = torch.nn.functional.pad(v, (0, 0, 0, 0, 0, 0, 0, padded_keys - keys))
     query, key, value = (t.permute(1, 2, 0, 3) for t in (q, k, v))
     result = _compiled()(
-        query.contiguous(), key.contiguous(), value.contiguous(),
+        query.contiguous(),
+        key.contiguous(),
+        value.contiguous(),
         block_mask=block_mask(predicate, padded_rows, padded_keys, q.device),
         enable_gqa=q.shape[2] != k.shape[2],
         scale=q.shape[-1] ** -0.5 if scale is None else scale,

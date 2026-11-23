@@ -70,7 +70,13 @@ def main():
                         "for this GPU/head size; see configs/flex_tiles.json"
                     )
                 out = attention_module.attend(
-                    q, k, v, plan.cq_mask, plan.cq_valid, plan.cq_plan, True,
+                    q,
+                    k,
+                    v,
+                    plan.cq_mask,
+                    plan.cq_valid,
+                    plan.cq_plan,
+                    True,
                     predicate if use_flex else None,
                 )
             finally:
@@ -84,11 +90,15 @@ def main():
         for name, x, y in zip(("dq", "dk", "dv"), flex_grads, dense_grads):
             errors[name] = relative(x, y)
         passed = took and all(v <= a.tol for v in errors.values())
-        cases.append(dict(length=length, images=images, rows=rows, keys=keys,
-                          used_flex=took, errors=errors, passed=passed))
-        print(f"  len={length} images={images} rows={rows} flex={took} "
-              + " ".join(f"{k}={v:.2e}" for k, v in errors.items())
-              + f" -> {'PASS' if passed else 'FAIL'}", flush=True)
+        cases.append(
+            dict(length=length, images=images, rows=rows, keys=keys, used_flex=took, errors=errors, passed=passed)
+        )
+        print(
+            f"  len={length} images={images} rows={rows} flex={took} "
+            + " ".join(f"{k}={v:.2e}" for k, v in errors.items())
+            + f" -> {'PASS' if passed else 'FAIL'}",
+            flush=True,
+        )
 
     major, minor = torch.cuda.get_device_capability()
     result = dict(

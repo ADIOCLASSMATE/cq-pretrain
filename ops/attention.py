@@ -22,15 +22,9 @@ def tiled_attention(q, k, v, mask, valid_rows, plan, fused=True, scale=None):
     pieces = []
     for index, (start, end, key_end) in enumerate(plan.tiles):
         key_start = plan.key_starts[index] if plan.key_starts else 0
-        tile_mask = (
-            plan.tile_masks[index]
-            if plan.tile_masks
-            else mask[:, :, start:end, key_start:key_end].contiguous()
-        )
+        tile_mask = plan.tile_masks[index] if plan.tile_masks else mask[:, :, start:end, key_start:key_end].contiguous()
         valid = valid_rows[:, start:end] if valid_rows is not None else None
         pieces.append(
-            K.attention(
-                q[start:end], k[key_start:key_end], v[key_start:key_end], tile_mask, valid, fused, scale
-            )
+            K.attention(q[start:end], k[key_start:key_end], v[key_start:key_end], tile_mask, valid, fused, scale)
         )
     return torch.cat(pieces, dim=0)

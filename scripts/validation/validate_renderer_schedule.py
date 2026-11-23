@@ -46,9 +46,7 @@ def make_batch(cfg, micro):
     batch.noise = torch.randn(cfg.rf * len(batch.latents), channels, generator=generator)
     batch.times = torch.linspace(0.2, 0.8, cfg.rf * n)
     half = cfg.wan_freq_dim // 2
-    phase = (batch.times * 1000).double()[:, None] * 10000 ** (
-        -torch.arange(half, dtype=torch.float64) / half
-    )
+    phase = (batch.times * 1000).double()[:, None] * 10000 ** (-torch.arange(half, dtype=torch.float64) / half)
     layout.time_features = torch.cat((phase.cos(), phase.sin()), -1).float()
     batch.generation = layout
     return batch.to("cuda")
@@ -73,7 +71,6 @@ def main():
         dit_ffn=256,
         dit_layers=2,
         latent_channels=16,
-
         checkpoint_backbone=True,
         checkpoint_dit=True,
         qwen_fused_projections=True,
@@ -152,9 +149,7 @@ def main():
                     cq = captured[0]
                 finish_parameter_gathers(wrapped)
                 if staged:
-                    backward_deferred_renderer(
-                        model, batch, losses, 0.5, wrapped, image_factor=cfg.image_weight * 0.3
-                    )
+                    backward_deferred_renderer(model, batch, losses, 0.5, wrapped, image_factor=cfg.image_weight * 0.3)
                 else:
                     (losses["loss"] * 0.5).backward()
                 if visits != [True]:
@@ -166,9 +161,7 @@ def main():
         buckets.finish()
         P.finish_grad_sync(wrapped)
         gradients = {
-            name: p.main_grad.detach().cpu().clone()
-            for name, p in model.named_parameters()
-            if p.requires_grad
+            name: p.main_grad.detach().cpu().clone() for name, p in model.named_parameters() if p.requires_grad
         }
         return values, cq_gradients, gradients, backbone_visits
 
@@ -177,9 +170,7 @@ def main():
         cfg.checkpoint_dit = recompute
         expected = accumulate(False)
         actual = accumulate(True)
-        outputs = {
-            f"{i}/{k}": error(actual[0][i][k], expected[0][i][k]) for i in range(2) for k in expected[0][i]
-        }
+        outputs = {f"{i}/{k}": error(actual[0][i][k], expected[0][i][k]) for i in range(2) for k in expected[0][i]}
         cq = {str(i): error(a, b) for i, (a, b) in enumerate(zip(actual[1], expected[1]))}
         gradients = {name: error(value, expected[2][name]) for name, value in actual[2].items()}
         passed = all(e["relative"] < 0.03 or e["max_abs"] < 1e-4 for e in outputs.values()) and all(

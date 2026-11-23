@@ -58,8 +58,7 @@ class _FusedLinearCE(torch.autograd.Function):
         ctx.chunk = chunk
         ctx.main_grad = (
             getattr(weight, "main_grad", None)
-            if getattr(weight, "_ce_direct_accumulation", False)
-            and hasattr(weight, "grad_added_to_main_grad")
+            if getattr(weight, "_ce_direct_accumulation", False) and hasattr(weight, "grad_added_to_main_grad")
             else None
         )
         if ctx.main_grad is not None and ctx.main_grad.dtype != torch.float32:

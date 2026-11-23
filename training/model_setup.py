@@ -26,9 +26,7 @@ def initialize(args, cfg):
         torch.use_deterministic_algorithms(True)
     complete_pretrained = bool(cfg.text_assets) and not args.random_init
     skip_initialization = bool(args.resume or args.init_checkpoint) or complete_pretrained
-    P.initialize(
-        args.tp, cfg, optimizer_instances=args.optimizer_instances, initialize_weights=not skip_initialization
-    )
+    P.initialize(args.tp, cfg, optimizer_instances=args.optimizer_instances, initialize_weights=not skip_initialization)
     torch.manual_seed(args.seed)
     DEV.manual_seed_all(args.seed)
     rank, world = dist.get_rank(), dist.get_world_size()
@@ -114,9 +112,7 @@ def build_model(args, cfg, run):
         construction = nullcontext()
     with construction:
         model = cast_for_training(JointModel(cfg))
-    startup = dict(
-        construct_seconds=time.perf_counter() - begin, skipped_random_initialization=skip_initialization
-    )
+    startup = dict(construct_seconds=time.perf_counter() - begin, skipped_random_initialization=skip_initialization)
     loaded = None
     if not args.resume and not args.init_checkpoint and not args.random_init:
         if cfg.text_assets:

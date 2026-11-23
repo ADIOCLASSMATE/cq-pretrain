@@ -5,6 +5,7 @@ preserves exactly what the reference path computed, including each document
 staying independent in the convolution (no token may read across a document
 boundary) and every parameter gradient.
 """
+
 import argparse
 import json
 from pathlib import Path
@@ -30,9 +31,7 @@ def reference_conv(x, weight, bounds):
     """The loop this replaces: an independent causal conv per packed document."""
     results = []
     for a, b in zip(bounds, bounds[1:]):
-        y = F.conv1d(
-            x[:, a:b].transpose(1, 2), weight, padding=weight.shape[-1] - 1, groups=x.shape[-1]
-        )[..., : b - a]
+        y = F.conv1d(x[:, a:b].transpose(1, 2), weight, padding=weight.shape[-1] - 1, groups=x.shape[-1])[..., : b - a]
         results.append(F.silu(y).transpose(1, 2))
     return torch.cat(results, dim=1)
 
@@ -74,8 +73,7 @@ def main():
         u = torch.randn_like(y1)
         (y1.float() * u.float()).sum().backward()
         (y2.float() * u.float()).sum().backward()
-        errs = dict(output=relerr(y1, y2), dx=relerr(x1.grad, x2.grad),
-                    dweight=relerr(w1.grad, w2.grad))
+        errs = dict(output=relerr(y1, y2), dx=relerr(x1.grad, x2.grad), dweight=relerr(w1.grad, w2.grad))
 
         # Causality / document isolation: perturbing a token must never change
         # any output at or before it, nor any output in another document.
@@ -83,32 +81,42 @@ def main():
             base = fused.causal_conv1d(x, w, cu)
             doc0_end = int(bounds[1])
             probe = x.clone()
-            probe[:, doc0_end:] += 3.0           # disturb every later document
+            probe[:, doc0_end:] += 3.0  # disturb every later document
             after = fused.causal_conv1d(probe, w, cu)
             cross_doc = float((after[:, :doc0_end] - base[:, :doc0_end]).abs().max())
             probe = x.clone()
             t = doc0_end // 2
-            probe[:, t] += 3.0                    # disturb one token
+            probe[:, t] += 3.0  # disturb one token
             after = fused.causal_conv1d(probe, w, cu)
             backward_leak = float((after[:, :t] - base[:, :t]).abs().max())
             forward_effect = float((after[:, t] - base[:, t]).abs().max())
-        isolation = dict(cross_document_leak=cross_doc, acausal_leak=backward_leak,
-                         own_token_effect=forward_effect)
-        cases.append(dict(op="causal_conv1d", length=length, documents=len(bounds) - 1,
-                          errors=errs, isolation=isolation,
-                          passed=(max(errs.values()) <= a.tol and cross_doc == 0.0
-                                  and backward_leak == 0.0 and forward_effect > 0)))
+        isolation = dict(cross_document_leak=cross_doc, acausal_leak=backward_leak, own_token_effect=forward_effect)
+        cases.append(
+            dict(
+                op="causal_conv1d",
+                length=length,
+                documents=len(bounds) - 1,
+                errors=errs,
+                isolation=isolation,
+                passed=(
+                    max(errs.values()) <= a.tol and cross_doc == 0.0 and backward_leak == 0.0 and forward_effect > 0
+                ),
+            )
+        )
 
-    result = dict(passed=all(c["passed"] for c in cases),
-                  device=torch.cuda.get_device_name(0), tolerance=a.tol, cases=cases)
+    result = dict(
+        passed=all(c["passed"] for c in cases), device=torch.cuda.get_device_name(0), tolerance=a.tol, cases=cases
+    )
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(result, indent=2))
     for c in cases:
         extra = ""
         if "isolation" in c:
             i = c["isolation"]
-            extra = (f" cross_doc={i['cross_document_leak']:.1e} acausal={i['acausal_leak']:.1e}"
-                     f" own={i['own_token_effect']:.2e}")
+            extra = (
+                f" cross_doc={i['cross_document_leak']:.1e} acausal={i['acausal_leak']:.1e}"
+                f" own={i['own_token_effect']:.2e}"
+            )
         errs = " ".join(f"{k}={v:.2e}" for k, v in c["errors"].items())
         print(f"  {c['op']:14s} {errs}{extra} -> {'PASS' if c['passed'] else 'FAIL'}")
     if not result["passed"]:

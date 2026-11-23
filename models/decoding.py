@@ -61,15 +61,11 @@ def attention_step(layer, x, rope, cache):
     q, gate = layer.q_proj(x).reshape(2, 1, cfg.heads // P.tp_size(), 2 * cfg.head_dim).chunk(2, -1)
     q = layer.q_norm(q, cfg.fused)
     k, v = (
-        layer.kv_proj(x[:1]).chunk(2, -1)
-        if cfg.qwen_fused_projections
-        else (layer.k_proj(x[:1]), layer.v_proj(x[:1]))
+        layer.kv_proj(x[:1]).chunk(2, -1) if cfg.qwen_fused_projections else (layer.k_proj(x[:1]), layer.v_proj(x[:1]))
     )
     k = layer.k_norm(k.reshape(1, 1, cfg.kv_heads // P.tp_size(), cfg.head_dim), cfg.fused)
     q = torch.cat((K.rotary(q[..., :dim].contiguous(), *rope, cfg.fused), q[..., dim:]), -1)
-    k = torch.cat(
-        (K.rotary(k[..., :dim].contiguous(), rope[0][:1], rope[1][:1], cfg.fused), k[..., dim:]), -1
-    )
+    k = torch.cat((K.rotary(k[..., :dim].contiguous(), rope[0][:1], rope[1][:1], cfg.fused), k[..., dim:]), -1)
     n = cache["length"]
     cache["k"][n : n + 1].copy_(k)
     cache["v"][n : n + 1].copy_(v.reshape_as(k))
@@ -103,9 +99,7 @@ class CQDecoder:
         delta = plan.delta_plan
         writes = delta.event_write.clone()
         writes[writes == len(delta.content_order) - 1] = len(delta.content_order)
-        local = replace(batch, mainline=replace(plan, delta_plan=replace(delta, event_write=writes))).to(
-            device
-        )
+        local = replace(batch, mainline=replace(plan, delta_plan=replace(delta, event_write=writes))).to(device)
         output = backbone(model, local, vision_features=vision_features, cache=self.layers)
         self.hidden = output.index_select(0, local.mainline.output_positions)
         positions = plan.query_rope + torch.arange(max_new_tokens + 1)[None, :, None]

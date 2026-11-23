@@ -12,7 +12,7 @@ def backbone(model, batch, reference=False, vision_features=None, cache=None):
         raise ValueError("Batch must be prepared with a CQ plan")
     ids = batch.ids
     if plan.null_anchor >= 0:
-        ids = torch.cat((ids[:, :plan.null_anchor], ids.new_full((b, 1), cfg.null_token_id)), dim=1)
+        ids = torch.cat((ids[:, : plan.null_anchor], ids.new_full((b, 1), cfg.null_token_id)), dim=1)
         s = ids.shape[1]
     content = model.embedding(ids).reshape(-1, cfg.width)
     if len(batch.image_indices):
@@ -32,9 +32,8 @@ def backbone(model, batch, reference=False, vision_features=None, cache=None):
     for index, layer in enumerate(model.layers):
         recompute = cfg.checkpoint_backbone or index >= cfg.layers - cfg.checkpoint_backbone_layers
         if (
-            (index + 1) % cfg.full_attention_interval == 0
-            and index // cfg.full_attention_interval < cfg.keep_attention_activations
-        ):
+            index + 1
+        ) % cfg.full_attention_interval == 0 and index // cfg.full_attention_interval < cfg.keep_attention_activations:
             recompute = False
         if cache is not None:
             hidden = layer(hidden, rope, plan, s, reference, cache[index])

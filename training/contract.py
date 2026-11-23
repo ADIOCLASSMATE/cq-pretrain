@@ -85,9 +85,7 @@ def training_state(args, cfg, ema, assets, data):
         )
     from data.cache import encoder_identity
 
-    state["wan_assets"] = dict(
-        generator=encoder_identity(cfg.wan_assets), vae=encoder_identity(cfg.wan_vae_assets)
-    )
+    state["wan_assets"] = dict(generator=encoder_identity(cfg.wan_assets), vae=encoder_identity(cfg.wan_vae_assets))
     state["wan_adapter_sha256"] = sha256_of("models/generator_wan21.py")
     state["backbone_adapter_sha256"] = sha256_of(*BACKBONE_SOURCES)
     state["vision_assets"] = assets.vision

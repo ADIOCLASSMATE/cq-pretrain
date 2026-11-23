@@ -135,18 +135,19 @@ class DataConfig:
     vision_max_pixels: int = 1048576
 
     def wan_objective_policy(self):
-        policy = dict(visual_uncond_probability=self.visual_uncond_probability,
-                      objective_policy="wan_occurrence_prefix_v1")
+        policy = dict(
+            visual_uncond_probability=self.visual_uncond_probability, objective_policy="wan_occurrence_prefix_v1"
+        )
         if self.rf != 1:
-            policy['rf'] = self.rf
+            policy["rf"] = self.rf
         if self.timestep_shift != 1.0:
-            policy['timestep_shift'] = self.timestep_shift
+            policy["timestep_shift"] = self.timestep_shift
         # Defaults are omitted so cursors written before these axes existed resume.
-        for name, default in (('query_interaction', 'none'), ('null_condition', 'masked')):
+        for name, default in (("query_interaction", "none"), ("null_condition", "masked")):
             if getattr(self, name, default) != default:
                 policy[name] = getattr(self, name)
         if self.visual_instruction_dropout_probability:
-            policy['visual_instruction_dropout_probability'] = self.visual_instruction_dropout_probability
+            policy["visual_instruction_dropout_probability"] = self.visual_instruction_dropout_probability
         return policy
 
 
@@ -166,7 +167,7 @@ class RunConfig(ModelConfig, DataConfig, LossConfig):
             raise ValueError("Generation microbatch limits must be nonnegative")
         if type(self.rf) is not int or self.rf < 1:
             raise ValueError("rf must be a positive integer")
-        if not 0 < self.timestep_shift < float('inf'):
+        if not 0 < self.timestep_shift < float("inf"):
             raise ValueError("timestep_shift must be finite and positive")
         if not 0 <= self.visual_uncond_probability <= 1:
             raise ValueError("Unconditional probability must be between 0 and 1")

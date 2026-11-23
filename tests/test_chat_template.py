@@ -1,156 +1,183 @@
 """Chat-template construction, supervision masking and token accounting."""
+
 import numpy as np
 
 import data.chat as chat
 
 
 def ids(spans):
-    return [(s['kind'], s.get('text'), s.get('supervised'), s.get('synthetic')) for s in spans]
+    return [(s["kind"], s.get("text"), s.get("supervised"), s.get("synthetic")) for s in spans]
 
 
 def texts(spans):
-    return ''.join(s['text'] for s in spans if s['kind'] == 'text')
+    return "".join(s["text"] for s in spans if s["kind"] == "text")
 
 
-def caption_row(direction, body='a red bicycle', sample_id='abc'):
-    picture = dict(kind='image', text=None, image_index=0, role=None, turn=None)
-    text = dict(kind='text', text=body, image_index=None, role=None, turn=None)
-    segments = [text, picture] if direction == 'T2I' else [picture, text]
-    return dict(sample_id=sample_id, format='caption', segments=segments)
+def caption_row(direction, body="a red bicycle", sample_id="abc"):
+    picture = dict(kind="image", text=None, image_index=0, role=None, turn=None)
+    text = dict(kind="text", text=body, image_index=None, role=None, turn=None)
+    segments = [text, picture] if direction == "T2I" else [picture, text]
+    return dict(sample_id=sample_id, format="caption", segments=segments)
 
 
 def test_t2i_puts_caption_in_user_turn_and_image_in_assistant():
-    spans, direction, templated = chat.build(caption_row('T2I'))
+    spans, direction, templated = chat.build(caption_row("T2I"))
     assert templated
-    assert direction == 'T2I'
+    assert direction == "T2I"
     assert texts(spans[-2:]) == chat.TURN_END
-    assert spans[-3]['kind'] == 'image'
+    assert spans[-3]["kind"] == "image"
     rendered = texts(spans)
-    assert rendered.startswith('user\n')
-    assert 'a red bicycle' in rendered
+    assert rendered.startswith("user\n")
+    assert "a red bicycle" in rendered
     # No thinking prefix: the base checkpoint has no <think> token.
-    assert '<think>' not in rendered
-    assert rendered.index('a red bicycle') < rendered.index(chat.ROLE_ASSISTANT)
+    assert "<think>" not in rendered
+    assert rendered.index("a red bicycle") < rendered.index(chat.ROLE_ASSISTANT)
 
 
 def test_i2t_puts_image_in_user_turn_and_caption_in_assistant():
-    spans, direction, templated = chat.build(caption_row('I2T'))
+    spans, direction, templated = chat.build(caption_row("I2T"))
     assert templated
-    assert direction == 'I2T'
-    assert spans[1]['kind'] == 'image'
+    assert direction == "I2T"
+    assert spans[1]["kind"] == "image"
     rendered = texts(spans)
-    assert '<think>' not in rendered
-    assert rendered.index(chat.ROLE_ASSISTANT) < rendered.index('a red bicycle')
+    assert "<think>" not in rendered
+    assert rendered.index(chat.ROLE_ASSISTANT) < rendered.index("a red bicycle")
 
 
 def test_only_corpus_text_is_supervised_and_counted():
-    spans, _, _ = chat.build(caption_row('T2I'))
-    supervised = [s['text'] for s in spans if s['kind'] == 'text' and s['supervised']]
-    counted = [s['text'] for s in spans if s['kind'] == 'text' and not s['synthetic']]
+    spans, _, _ = chat.build(caption_row("T2I"))
+    supervised = [s["text"] for s in spans if s["kind"] == "text" and s["supervised"]]
+    counted = [s["text"] for s in spans if s["kind"] == "text" and not s["synthetic"]]
     # The caption and every message terminator are learned.
-    assert 'a red bicycle' in supervised
-    assert supervised == ['a red bicycle', chat.IM_END, chat.IM_END]
+    assert "a red bicycle" in supervised
+    assert supervised == ["a red bicycle", chat.IM_END, chat.IM_END]
     # Role headers, instructions and the thinking prefix are never learned.
-    assert not any(t.startswith('user') or t.startswith(chat.IM_START) for t in supervised)
+    assert not any(t.startswith("user") or t.startswith(chat.IM_START) for t in supervised)
     # Only real corpus text may perturb the published token audit.
-    assert counted == ['a red bicycle']
+    assert counted == ["a red bicycle"]
 
 
 def test_chat_end_markers_and_body_newlines_are_the_only_supervised_spans():
-    body = 'first line\nsecond line\n'
-    messages = [dict(kind='text', role=role, turn=i, text=value)
-                for i, (role, value) in enumerate([('user', body), ('assistant', 'reply')])]
-    rows = [caption_row('T2I', body), caption_row('I2T', body),
-            dict(sample_id='conversation', format='conversation', segments=messages),
-            dict(sample_id='causal', format='causal_sequence', segments=messages)]
+    body = "first line\nsecond line\n"
+    messages = [
+        dict(kind="text", role=role, turn=i, text=value)
+        for i, (role, value) in enumerate([("user", body), ("assistant", "reply")])
+    ]
+    rows = [
+        caption_row("T2I", body),
+        caption_row("I2T", body),
+        dict(sample_id="conversation", format="conversation", segments=messages),
+        dict(sample_id="causal", format="causal_sequence", segments=messages),
+    ]
     for row in rows:
         spans, _, _ = chat.build(row)
-        supervised = [s['text'] for s in spans if s['kind'] == 'text' and s['supervised']]
+        supervised = [s["text"] for s in spans if s["kind"] == "text" and s["supervised"]]
         assert supervised.count(chat.IM_END) == 2
         assert [t for t in supervised if t != chat.IM_END] == (
-            [body] if row['format'] == 'caption' else [body, 'reply'])
+            [body] if row["format"] == "caption" else [body, "reply"]
+        )
         assert texts(spans).count(chat.TURN_END) == 2
 
 
 def test_instruction_is_deterministic_and_varied():
-    first = chat.build(caption_row('T2I', sample_id='sample-one'))[0]
-    again = chat.build(caption_row('T2I', sample_id='sample-one'))[0]
-    assert texts(first) == texts(again), 'resume must rebuild identical text'
-    seen = {texts(chat.build(caption_row('T2I', sample_id=f'id-{i}'))[0]).split('user\n')[1].split('a red')[0]
-            for i in range(400)}
+    first = chat.build(caption_row("T2I", sample_id="sample-one"))[0]
+    again = chat.build(caption_row("T2I", sample_id="sample-one"))[0]
+    assert texts(first) == texts(again), "resume must rebuild identical text"
+    seen = {
+        texts(chat.build(caption_row("T2I", sample_id=f"id-{i}"))[0]).split("user\n")[1].split("a red")[0]
+        for i in range(400)
+    }
     assert len(seen) == len(chat.T2I_INSTRUCTIONS)
 
 
 def test_conversation_turns_are_separated():
-    row = dict(sample_id='c', format='conversation', segments=[
-        dict(kind='image', text=None, image_index=0, role='user', turn=0),
-        dict(kind='text', text='What is this?', image_index=None, role='user', turn=0),
-        dict(kind='text', text='A cat.', image_index=None, role='assistant', turn=1)])
+    row = dict(
+        sample_id="c",
+        format="conversation",
+        segments=[
+            dict(kind="image", text=None, image_index=0, role="user", turn=0),
+            dict(kind="text", text="What is this?", image_index=None, role="user", turn=0),
+            dict(kind="text", text="A cat.", image_index=None, role="assistant", turn=1),
+        ],
+    )
     spans, _, templated = chat.build(row)
     assert templated
     rendered = texts(spans)
     # Without the template these two turns were concatenated with no separator.
-    assert 'What is this?' + chat.TURN_END in rendered
-    assert rendered.index('What is this?') < rendered.index(chat.IM_START + chat.ROLE_ASSISTANT)
-    assert rendered.index(chat.ROLE_ASSISTANT) < rendered.index('A cat.')
-    supervised = [s['text'] for s in spans if s['kind'] == 'text' and s['supervised']]
-    assert 'What is this?' in supervised, 'pretraining supervises the user turn too'
-    assert 'A cat.' in supervised
+    assert "What is this?" + chat.TURN_END in rendered
+    assert rendered.index("What is this?") < rendered.index(chat.IM_START + chat.ROLE_ASSISTANT)
+    assert rendered.index(chat.ROLE_ASSISTANT) < rendered.index("A cat.")
+    supervised = [s["text"] for s in spans if s["kind"] == "text" and s["supervised"]]
+    assert "What is this?" in supervised, "pretraining supervises the user turn too"
+    assert "A cat." in supervised
 
 
 def test_conversations_preserve_system_and_tool_roles_and_explicit_text_masks():
-    segments = [dict(kind='text', role=role, turn=i, text=role, supervised=flag)
-                for i, (role, flag) in enumerate([('system', False), ('tool', True), ('assistant', None)])]
-    for fmt in ('conversation', 'causal_sequence'):
-        spans, _, _ = chat.build(dict(sample_id='roles', format=fmt, segments=segments))
-        assert texts(spans) == ('system\nsystem' + chat.TURN_END +
-                                chat.IM_START + 'tool\ntool' + chat.TURN_END +
-                                chat.IM_START + 'assistant\nassistant' + chat.TURN_END)
-        assert [s['text'] for s in spans if s['supervised'] and not s['synthetic']] == ['tool', 'assistant']
+    segments = [
+        dict(kind="text", role=role, turn=i, text=role, supervised=flag)
+        for i, (role, flag) in enumerate([("system", False), ("tool", True), ("assistant", None)])
+    ]
+    for fmt in ("conversation", "causal_sequence"):
+        spans, _, _ = chat.build(dict(sample_id="roles", format=fmt, segments=segments))
+        assert texts(spans) == (
+            "system\nsystem"
+            + chat.TURN_END
+            + chat.IM_START
+            + "tool\ntool"
+            + chat.TURN_END
+            + chat.IM_START
+            + "assistant\nassistant"
+            + chat.TURN_END
+        )
+        assert [s["text"] for s in spans if s["supervised"] and not s["synthetic"]] == ["tool", "assistant"]
 
 
 def test_multi_turn_alternation_opens_each_message_once():
     segments = []
     for turn in range(4):
-        role = 'user' if turn % 2 == 0 else 'assistant'
-        segments.append(dict(kind='text', text=f'msg{turn}', image_index=None, role=role, turn=turn))
-    spans, _, _ = chat.build(dict(sample_id='m', format='text_conversation', segments=segments))
+        role = "user" if turn % 2 == 0 else "assistant"
+        segments.append(dict(kind="text", text=f"msg{turn}", image_index=None, role=role, turn=turn))
+    spans, _, _ = chat.build(dict(sample_id="m", format="text_conversation", segments=segments))
     rendered = texts(spans)
     assert rendered.count(chat.TURN_END) == 4
     # Three explicit openers; the packer's document BOS supplies the first.
     assert rendered.count(chat.IM_START) == 3
-    assert '<think>' not in rendered
+    assert "<think>" not in rendered
 
 
 def test_interleaved_documents_keep_natural_form():
-    segments = [dict(kind='text', text='A', image_index=None, role=None, turn=None),
-                dict(kind='image', text=None, image_index=0, role=None, turn=None),
-                dict(kind='text', text='B', image_index=None, role=None, turn=None)]
-    spans, direction, templated = chat.build(dict(sample_id='i', format='interleaved', segments=segments))
+    segments = [
+        dict(kind="text", text="A", image_index=None, role=None, turn=None),
+        dict(kind="image", text=None, image_index=0, role=None, turn=None),
+        dict(kind="text", text="B", image_index=None, role=None, turn=None),
+    ]
+    spans, direction, templated = chat.build(dict(sample_id="i", format="interleaved", segments=segments))
     assert direction is None
-    assert not templated, 'natural documents must not be opened as a conversation'
-    assert texts(spans) == 'AB', 'natural documents receive no chat scaffolding'
-    assert all(s['supervised'] for s in spans if s['kind'] == 'text')
+    assert not templated, "natural documents must not be opened as a conversation"
+    assert texts(spans) == "AB", "natural documents receive no chat scaffolding"
+    assert all(s["supervised"] for s in spans if s["kind"] == "text")
     assert chat.IM_START not in texts(spans)
 
 
 def test_corpus_text_defaults_and_release_veto_apply_to_each_format():
     for flag, expected in [(None, True), (False, False), (True, True)]:
-        for fmt in ('caption', 'conversation', 'causal_sequence', 'interleaved'):
-            row = caption_row('T2I')
-            row['format'] = fmt
-            row['segments'][0].update(supervised=flag, role='user', turn=0)
-            row['segments'][1].update(role='assistant', turn=1)
+        for fmt in ("caption", "conversation", "causal_sequence", "interleaved"):
+            row = caption_row("T2I")
+            row["format"] = fmt
+            row["segments"][0].update(supervised=flag, role="user", turn=0)
+            row["segments"][1].update(role="assistant", turn=1)
             spans, _, _ = chat.build(row)
-            body, = [s for s in spans if s.get('text') == 'a red bicycle']
-            assert body['supervised'] is expected and not body['synthetic']
+            (body,) = [s for s in spans if s.get("text") == "a red bicycle"]
+            assert body["supervised"] is expected and not body["synthetic"]
 
 
 def test_empty_corpus_spans_are_dropped():
-    segments = [dict(kind='text', text='', image_index=None, role=None, turn=None),
-                dict(kind='image', text=None, image_index=0, role=None, turn=None)]
-    spans, _, _ = chat.build(dict(sample_id='e', format='interleaved', segments=segments))
-    assert [s['kind'] for s in spans] == ['image']
+    segments = [
+        dict(kind="text", text="", image_index=None, role=None, turn=None),
+        dict(kind="image", text=None, image_index=0, role=None, turn=None),
+    ]
+    spans, _, _ = chat.build(dict(sample_id="e", format="interleaved", segments=segments))
+    assert [s["kind"] for s in spans] == ["image"]
 
 
 from pathlib import Path
@@ -164,6 +191,7 @@ from data.packing import Packer
 
 class Documents:
     """Minimal document source exposing the packer's stream contract."""
+
     images_preprocessed = False
 
     def __init__(self, docs):
@@ -189,9 +217,13 @@ TOKENS = dict(bos=1, eos=2, boi=3, eoi=4, image=5, text_mask=6)
 
 
 def document(ident, ids, templated, supervised=True):
-    return dict(id=ident, format='x', direction=None, templated=templated,
-                elements=[dict(type='text', input_ids=np.asarray(ids, np.int32),
-                               supervised=supervised)])
+    return dict(
+        id=ident,
+        format="x",
+        direction=None,
+        templated=templated,
+        elements=[dict(type="text", input_ids=np.asarray(ids, np.int32), supervised=supervised)],
+    )
 
 
 def pack(docs, length=32):
@@ -202,29 +234,26 @@ def pack(docs, length=32):
 
 class OpenerContract(unittest.TestCase):
     def test_templated_document_opens_with_im_start(self):
-        batch, _ = pack([document('a', [10, 11, 12], templated=True)])
-        self.assertEqual(batch.ids[0, 0].item(), TOKENS['bos'])
+        batch, _ = pack([document("a", [10, 11, 12], templated=True)])
+        self.assertEqual(batch.ids[0, 0].item(), TOKENS["bos"])
         self.assertEqual(batch.ids[0, 1:4].tolist(), [10, 11, 12])
 
     def test_natural_document_has_no_opener(self):
-        batch, _ = pack([document('a', [10, 11, 12], templated=False)])
+        batch, _ = pack([document("a", [10, 11, 12], templated=False)])
         # The interleaved document must begin at its own first token.
         self.assertEqual(batch.ids[0, :3].tolist(), [10, 11, 12])
-        self.assertEqual(batch.ids[0, 3].item(), TOKENS['eos'])
+        self.assertEqual(batch.ids[0, 3].item(), TOKENS["eos"])
 
     def test_mixed_pack_opens_only_the_templated_document(self):
-        batch, receipt = pack([document('a', [10, 11], templated=False),
-                               document('b', [20, 21], templated=True)])
-        self.assertTrue(all(d['completed'] for d in receipt['documents']))
+        batch, receipt = pack([document("a", [10, 11], templated=False), document("b", [20, 21], templated=True)])
+        self.assertTrue(all(d["completed"] for d in receipt["documents"]))
         # natural: 10 11 EOS, then templated: BOS 20 21 EOS
-        self.assertEqual(batch.ids[0, :7].tolist(),
-                         [10, 11, TOKENS['eos'], TOKENS['bos'], 20, 21, TOKENS['eos']])
+        self.assertEqual(batch.ids[0, :7].tolist(), [10, 11, TOKENS["eos"], TOKENS["bos"], 20, 21, TOKENS["eos"]])
 
     def test_unsupervised_spans_are_excluded_from_the_loss_index(self):
-        batch, _ = pack([document('a', [10, 11, 12], templated=False, supervised=False)])
+        batch, _ = pack([document("a", [10, 11, 12], templated=False, supervised=False)])
         body = set(range(3))
-        self.assertFalse(body & set(batch.text_indices.tolist()),
-                         'scaffolding must never be supervised')
+        self.assertFalse(body & set(batch.text_indices.tolist()), "scaffolding must never be supervised")
         # The document terminator is still learned.
         self.assertIn(3, batch.text_indices.tolist())
 
@@ -237,6 +266,7 @@ class QueryPruning(unittest.TestCase):
         from configs.config import tiny_config
         from data.batch import fake_batch
         from data.batch_layout import build_plan
+
         cfg = tiny_config()
         batch = fake_batch(cfg, 64, 1, 1)
         if supervised is not None:
@@ -245,21 +275,20 @@ class QueryPruning(unittest.TestCase):
 
     def test_queries_cover_exactly_the_supervised_positions(self):
         import torch
+
         plan, batch, cfg = self.plan_for(None)
         full = len(plan.query_positions)
         every = batch.text_indices
         # Withhold a third of the positions, as chat scaffolding does.
         keep = every[torch.arange(len(every)) % 3 != 0]
         plan2, batch2, _ = self.plan_for(keep)
-        self.assertLess(len(plan2.query_positions), full,
-                        'unsupervised positions must not receive a query')
+        self.assertLess(len(plan2.query_positions), full, "unsupervised positions must not receive a query")
         image = batch2.image_queries[0]
         text_q = plan2.query_positions[~image[plan2.query_positions]]
-        self.assertEqual(set(text_q.tolist()), set(keep.tolist()),
-                         'text queries must equal the supervised positions')
+        self.assertEqual(set(text_q.tolist()), set(keep.tolist()), "text queries must equal the supervised positions")
 
     def test_empty_supervision_keeps_a_live_graph(self):
         import torch
+
         plan, _, _ = self.plan_for(torch.empty(0, dtype=torch.long))
-        self.assertTrue(len(plan.query_positions) > 0,
-                        'a fully unsupervised pack still needs a DDP-safe graph')
+        self.assertTrue(len(plan.query_positions) > 0, "a fully unsupervised pack still needs a DDP-safe graph")

@@ -129,11 +129,11 @@ def cq_mask_vectors(batch, query_positions, valid, query_unconditional=None, que
     return CQPredicate(
         key_sigma=sigma.to(torch.int32),
         key_segment=segments.to(torch.int32),
-        row_sigma=torch.cat((sigma, sigma[query_positions] if query_read_sigma is None else query_read_sigma)).to(torch.int32),
-        row_segment=torch.cat((segments, segments[query_positions])).to(torch.int32),
-        row_is_query=torch.cat(
-            (torch.zeros(s, dtype=torch.bool), torch.ones(nq, dtype=torch.bool))
+        row_sigma=torch.cat((sigma, sigma[query_positions] if query_read_sigma is None else query_read_sigma)).to(
+            torch.int32
         ),
+        row_segment=torch.cat((segments, segments[query_positions])).to(torch.int32),
+        row_is_query=torch.cat((torch.zeros(s, dtype=torch.bool), torch.ones(nq, dtype=torch.bool))),
         row_unconditional=row_unconditional,
         row_invalid=~valid[0],
         content_length=s,
@@ -155,10 +155,7 @@ class CQPredicate:
     block_mask: object = None  # device BlockMask, cached per batch across layers
 
     def _map(self, fn):
-        values = {
-            f.name: (fn(v) if isinstance(v := getattr(self, f.name), torch.Tensor) else v)
-            for f in fields(self)
-        }
+        values = {f.name: (fn(v) if isinstance(v := getattr(self, f.name), torch.Tensor) else v) for f in fields(self)}
         values["block_mask"] = None
         return CQPredicate(**values)
 
@@ -170,9 +167,7 @@ class CQPredicate:
 
     def allowed(self, q_idx, kv_idx):
         """Reference evaluation of the predicate; used by the equivalence test."""
-        same = (self.row_segment[q_idx] == self.key_segment[kv_idx]) & (
-            self.row_segment[q_idx] >= 0
-        )
+        same = (self.row_segment[q_idx] == self.key_segment[kv_idx]) & (self.row_segment[q_idx] >= 0)
         strict = self.key_sigma[kv_idx] < self.row_sigma[q_idx]
         loose = self.key_sigma[kv_idx] <= self.row_sigma[q_idx]
         ok = torch.where(self.row_is_query[q_idx], strict, loose)

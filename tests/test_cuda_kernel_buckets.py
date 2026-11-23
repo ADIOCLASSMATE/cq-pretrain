@@ -5,6 +5,7 @@ FLA's l2norm and gated-norm kernels are compiled and autotuned per row count
 spent ~270 s per step compiling. These tests pin the row counts that reach the
 kernels and the values that come back.
 """
+
 from unittest.mock import patch
 
 import pytest

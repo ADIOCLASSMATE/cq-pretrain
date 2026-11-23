@@ -77,9 +77,7 @@ class Persistence:
             source_sha256=record["source_sha256"],
             dependencies=record["dependencies"],
             runtime={key: record[key] for key in ("torch", "stack", "cuda")},
-            assets={
-                key: state[key] for key in ("qwen35_assets", "vision_assets", "wan_assets") if key in state
-            },
+            assets={key: state[key] for key in ("qwen35_assets", "vision_assets", "wan_assets") if key in state},
             inference_inputs={
                 key: state.get("data", {}).get(key) for key in ("tokenizer", "latent_encoder", "vae_dtype")
             },

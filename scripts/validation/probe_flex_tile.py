@@ -32,8 +32,7 @@ def main():
     p.add_argument("--iters", type=int, default=6)
     a = p.parse_args()
 
-    report = dict(block_m=a.block_m, block_n=a.block_n,
-                  num_stages=a.num_stages, num_warps=a.num_warps, ok=False)
+    report = dict(block_m=a.block_m, block_n=a.block_n, num_stages=a.num_stages, num_warps=a.num_warps, ok=False)
     try:
         # Compile in-process: the subprocess worker pool is what wedges after a
         # failed kernel, and this probe is already isolated.
@@ -51,14 +50,15 @@ def main():
         # A CQ-shaped layout: two documents, an image block with tied sigma,
         # query rows reading strictly before their own sigma.
         segments = torch.zeros(s, dtype=torch.int32, device=dev)
-        segments[s // 2:] = 1
+        segments[s // 2 :] = 1
         sigma = torch.arange(s, dtype=torch.int32, device=dev)
         sigma[100:356] = 100  # tied image block -> bidirectional inside it
         qpos = torch.linspace(1, s - 1, nq).long().to(dev)
         row_sigma = torch.cat((sigma, sigma[qpos]))
         row_segment = torch.cat((segments, segments[qpos]))
-        row_is_query = torch.cat((torch.zeros(s, dtype=torch.bool, device=dev),
-                                  torch.ones(nq, dtype=torch.bool, device=dev)))
+        row_is_query = torch.cat(
+            (torch.zeros(s, dtype=torch.bool, device=dev), torch.ones(nq, dtype=torch.bool, device=dev))
+        )
 
         def mask_mod(b, h, q_idx, kv_idx):
             same = (row_segment[q_idx] == segments[kv_idx]) & (row_segment[q_idx] >= 0)
@@ -66,14 +66,16 @@ def main():
             loose = sigma[kv_idx] <= row_sigma[q_idx]
             return same & torch.where(row_is_query[q_idx], strict, loose)
 
-        block_mask = create_block_mask(mask_mod, None, None, rows, s, device=dev,
-                                       BLOCK_SIZE=(128, 128), _compile=True)
+        block_mask = create_block_mask(mask_mod, None, None, rows, s, device=dev, BLOCK_SIZE=(128, 128), _compile=True)
 
         back = min(a.block_m, a.block_n)
         options = {
-            "BLOCK_M": a.block_m, "BLOCK_N": a.block_n,
-            "BLOCK_M1": back, "BLOCK_N1": back,
-            "BLOCK_M2": back, "BLOCK_N2": back,
+            "BLOCK_M": a.block_m,
+            "BLOCK_N": a.block_n,
+            "BLOCK_M1": back,
+            "BLOCK_N1": back,
+            "BLOCK_M2": back,
+            "BLOCK_N2": back,
         }
         if a.num_stages:
             options["num_stages"] = a.num_stages
@@ -87,9 +89,8 @@ def main():
         q, k, v = (t.requires_grad_() for t in (q, k, v))
 
         begin = time.perf_counter()
-        out = compiled(q, k, v, block_mask=block_mask, enable_gqa=True,
-                       kernel_options=options)
-        out.sum().backward()          # force the backward kernel to compile too
+        out = compiled(q, k, v, block_mask=block_mask, enable_gqa=True, kernel_options=options)
+        out.sum().backward()  # force the backward kernel to compile too
         torch.cuda.synchronize()
         report["compile_seconds"] = time.perf_counter() - begin
 
@@ -99,8 +100,7 @@ def main():
         allowed = mask_mod(None, None, qi, ki)
         repeat = a.heads // a.kv_heads
         kd, vd = (t.detach().repeat_interleave(repeat, 1) for t in (k, v))
-        ref = F.scaled_dot_product_attention(q.detach(), kd, vd,
-                                             attn_mask=allowed[None, None])
+        ref = F.scaled_dot_product_attention(q.detach(), kd, vd, attn_mask=allowed[None, None])
         err = (out.detach().float() - ref.float()).norm() / ref.float().norm().clamp_min(1e-8)
         report["relative_error"] = float(err)
 
@@ -115,10 +115,9 @@ def main():
             return (time.perf_counter() - t0) / a.iters * 1e3
 
         report["flex_fwd_ms"] = timed(
-            lambda: compiled(q, k, v, block_mask=block_mask, enable_gqa=True,
-                             kernel_options=options))
-        report["dense_fwd_ms"] = timed(
-            lambda: F.scaled_dot_product_attention(q, kd, vd, attn_mask=allowed[None, None]))
+            lambda: compiled(q, k, v, block_mask=block_mask, enable_gqa=True, kernel_options=options)
+        )
+        report["dense_fwd_ms"] = timed(lambda: F.scaled_dot_product_attention(q, kd, vd, attn_mask=allowed[None, None]))
         report["speedup_fwd"] = report["dense_fwd_ms"] / max(report["flex_fwd_ms"], 1e-9)
 
         def timed_bwd(make):
@@ -135,10 +134,11 @@ def main():
         kgr = kg.repeat_interleave(repeat, 1)
         vgr = vg.repeat_interleave(repeat, 1)
         report["flex_fwdbwd_ms"] = timed_bwd(
-            lambda: compiled(q, k, v, block_mask=block_mask, enable_gqa=True,
-                             kernel_options=options))
+            lambda: compiled(q, k, v, block_mask=block_mask, enable_gqa=True, kernel_options=options)
+        )
         report["dense_fwdbwd_ms"] = timed_bwd(
-            lambda: F.scaled_dot_product_attention(q, kgr, vgr, attn_mask=allowed[None, None]))
+            lambda: F.scaled_dot_product_attention(q, kgr, vgr, attn_mask=allowed[None, None])
+        )
         report["speedup_fwdbwd"] = report["dense_fwdbwd_ms"] / max(report["flex_fwdbwd_ms"], 1e-9)
         report["ok"] = report["relative_error"] < 2e-2
     except Exception as error:  # noqa: BLE001 - the point is to report any failure

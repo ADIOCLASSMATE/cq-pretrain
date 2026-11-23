@@ -67,8 +67,15 @@ def main():
                     raise SystemExit("No recorded FlexAttention tile for this GPU/head size")
                 with torch.no_grad():
                     return attention_module.attend(
-                        q, kv_pair[0], kv_pair[1], plan.cq_mask, plan.cq_valid,
-                        plan.cq_plan, True, predicate if use_flex else None)
+                        q,
+                        kv_pair[0],
+                        kv_pair[1],
+                        plan.cq_mask,
+                        plan.cq_valid,
+                        plan.cq_plan,
+                        True,
+                        predicate if use_flex else None,
+                    )
             finally:
                 flex_cq._ENABLED = previous
 
@@ -79,7 +86,7 @@ def main():
         flex_moved = run((k2, v2), True)
 
         s = predicate.content_length
-        uncond_rows = (s + unconditional.nonzero().flatten().to(dev))
+        uncond_rows = s + unconditional.nonzero().flatten().to(dev)
         drift = float((flex_moved[uncond_rows] - flex_out[uncond_rows]).abs().max())
         agree = float((flex_out[uncond_rows].float() - dense_out[uncond_rows].float()).abs().max())
         # Conditional rows must react, otherwise the probe proves nothing.
@@ -88,17 +95,25 @@ def main():
         sensitivity = float((flex_moved[other] - flex_out[other]).abs().max())
 
         passed = drift == 0.0 and sensitivity > 1e-3
-        cases.append(dict(length=length, images=images,
-                          unconditional_rows=int(unconditional.sum()),
-                          unconditional_drift=drift,
-                          flex_vs_dense_on_unconditional=agree,
-                          conditional_sensitivity=sensitivity, passed=passed))
-        print(f"  len={length} img={images} uncond_rows={int(unconditional.sum())} "
-              f"drift={drift:.3e} (must be 0) vs_dense={agree:.3e} "
-              f"cond_sensitivity={sensitivity:.3e} -> {'PASS' if passed else 'FAIL'}", flush=True)
+        cases.append(
+            dict(
+                length=length,
+                images=images,
+                unconditional_rows=int(unconditional.sum()),
+                unconditional_drift=drift,
+                flex_vs_dense_on_unconditional=agree,
+                conditional_sensitivity=sensitivity,
+                passed=passed,
+            )
+        )
+        print(
+            f"  len={length} img={images} uncond_rows={int(unconditional.sum())} "
+            f"drift={drift:.3e} (must be 0) vs_dense={agree:.3e} "
+            f"cond_sensitivity={sensitivity:.3e} -> {'PASS' if passed else 'FAIL'}",
+            flush=True,
+        )
 
-    result = dict(passed=all(c["passed"] for c in cases), cases=cases,
-                  device=torch.cuda.get_device_name(0))
+    result = dict(passed=all(c["passed"] for c in cases), cases=cases, device=torch.cuda.get_device_name(0))
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(result, indent=2))
     if not result["passed"]:

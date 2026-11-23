@@ -11,6 +11,7 @@ import torch.distributed as dist
 import distributed.megatron as parallel
 from ops.functional import fused_wgrad
 
+
 def logits_and_probabilities(hidden, weight, targets, group, rank, size):
     logits = torch.nn.functional.linear(hidden, weight).float()
     maxima = logits.max(-1).values
@@ -49,8 +50,7 @@ class _LinearCE(torch.autograd.Function):
         ctx.chunk, ctx.group, ctx.rank, ctx.size = chunk, group, rank, size
         ctx.main_grad = (
             getattr(weight, "main_grad", None)
-            if getattr(weight, "_ce_direct_accumulation", False)
-            and hasattr(weight, "grad_added_to_main_grad")
+            if getattr(weight, "_ce_direct_accumulation", False) and hasattr(weight, "grad_added_to_main_grad")
             else None
         )
         if ctx.main_grad is not None and ctx.main_grad.dtype != torch.float32:

@@ -72,9 +72,7 @@ def build_delta_plan(batch, plan, cfg):
     if not docs:
         docs[0] = [(0, 0)]  # zero-loss EOF graph
     query_by_doc = {}
-    unconditional = (
-        plan.query_unconditional.tolist() if plan.query_unconditional is not None else [False] * nq
-    )
+    unconditional = plan.query_unconditional.tolist() if plan.query_unconditional is not None else [False] * nq
     read_sigmas = plan.query_read_sigma.tolist() if plan.query_read_sigma is not None else None
     blocks = getattr(plan, "query_blocks", ())
     in_block = set()
@@ -200,9 +198,7 @@ def build_delta_plan(batch, plan, cfg):
         long(out_events),
         long(out_hidden),
         long(qsource),
-        long([[nc if i < 0 else i for i in row] for row in qhistory]).reshape(
-            len(qsource), cfg.linear_conv_kernel - 1
-        ),
+        long([[nc if i < 0 else i for i in row] for row in qhistory]).reshape(len(qsource), cfg.linear_conv_kernel - 1),
         torch.tensor(cb, dtype=torch.int32),
         long(eb),
         tuple(cb),
