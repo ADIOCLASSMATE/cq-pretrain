@@ -1,0 +1,100 @@
+{
+  "date": "2026-11-23",
+  "question": "Which lines issue the ~375K device dispatches per step that leave the 910B idle one third of every step?",
+  "job": "cq-npu-attr-1123",
+  "run_dir": ".runs/bench-attribution-20261123T184423Z",
+  "source_commit": "e923031",
+  "configuration": {
+    "cards": 16,
+    "node_count": 1,
+    "packs_per_card": 8,
+    "global_batch": 128,
+    "sequence_length": 8192,
+    "recompute": "backbone 24/24, DiT 30/30, keep_attention_activations 6",
+    "loader": "--data-workers 8 --image-workers 12 --image-prefetch 48 --data-prefetch 24"
+  },
+
+  "method": {
+    "census": "ops/census.py, a TorchDispatchMode that attributes every aten dispatch to the source line that issued it; counts only, no timing, because a host-bound step is paid for per launch. Rank 0, 2 measured steps.",
+    "stacked_profile": "torch_npu.profiler Level1 with with_stack=True; attributes DEVICE time, a different unit from the census, so the two cross-check rather than restate each other.",
+    "caveats": [
+      "TorchDispatchMode is thread-local. The census sees the main thread and the autograd engine (which propagates TLS); dispatches issued on data-prefetch threads are not counted. Those are CPU-side and already measured as data_wait (~0.01 s).",
+      "written_on_this_line vs issued_beneath_it separates a dispatch the line makes itself from one a library or the autograd engine makes under it. Without that split, backward work falsely attributes to the .backward() line.",
+      "with_stack inflates the step (free time in this run's step_trace is not comparable to the unprofiled run); the idle fraction stays the one measured in npu_910b_operator_profile_20261123.json."
+    ]
+  },
+
+  "census": {
+    "dispatches_per_step": 375314,
+    "device_kernel_launches_per_step_unprofiled": 351027,
+    "device_to_host_syncs_per_step": 228,
+    "by_file_per_step": [
+      {"file": "<engine> (autograd backward)", "dispatches": 139202, "share": 0.371},
+      {"file": "models/generator_wan21.py", "dispatches": 110816, "share": 0.295},
+      {"file": "models/vision_encoder.py", "dispatches": 34584, "share": 0.092},
+      {"file": "distributed/megatron.py", "dispatches": 20564, "share": 0.055},
+      {"file": "models/backbone_qwen35.py", "dispatches": 19120, "share": 0.051},
+      {"file": "ops/npu_gated_delta.py", "dispatches": 10832, "share": 0.029},
+      {"file": "ops/functional.py", "dispatches": 6188, "share": 0.016},
+      {"file": "training/trainer.py", "dispatches": 3350, "share": 0.009}
+    ],
+    "top_sites_per_step": [
+      {"site": "models/generator_wan21.py:91", "dispatches": 29880, "written": 29880, "what": "packed_attention per-visual loop: b, c = (t[:, ka:kb].transpose(1, 2) ...)"},
+      {"site": "models/generator_wan21.py:55", "dispatches": 12240, "written": 10200, "what": "Wan RMSNorm, written as an eager elementwise chain"},
+      {"site": "models/generator_wan21.py:87", "dispatches": 9960, "written": 9960, "what": "packed_attention loop: query = q[:, qa:qb]"},
+      {"site": "models/generator_wan21.py:92", "dispatches": 9960, "written": 9960, "what": "packed_attention loop: one SDPA call per visual"},
+      {"site": "models/generator_wan21.py:93", "dispatches": 9960, "written": 9960, "what": "packed_attention loop: transpose + reshape_as back"},
+      {"site": "models/generator_wan21.py:101", "dispatches": 8160, "written": 8160, "what": "DiT rotary, eager stack/flatten rather than a vendor rotary kernel"},
+      {"site": "models/vision_encoder.py:72-75,78", "dispatches": 27864, "written": 27864, "what": "VisionAttention per-image loop, one SDPA call per image"},
+      {"site": "distributed/megatron.py:176,223", "dispatches": 20564, "written": 0, "what": "Column/RowLinear forward; dispatches issued inside MCore beneath them"}
+    ],
+    "top_operators_per_step": [
+      {"operator": "aten.view.default", "dispatches": 49305, "share": 0.131},
+      {"operator": "aten.transpose.int", "dispatches": 46716, "share": 0.124},
+      {"operator": "aten.slice.Tensor", "dispatches": 44612, "share": 0.119},
+      {"operator": "aten.add.Tensor", "dispatches": 26431, "share": 0.070},
+      {"operator": "aten._to_copy.default", "dispatches": 24883, "share": 0.066},
+      {"operator": "aten.mul.Tensor", "dispatches": 24558, "share": 0.065},
+      {"operator": "aten.slice_backward.default", "dispatches": 17020, "share": 0.045}
+    ],
+    "device_to_host_syncs": [
+      {"site": "training/trainer.py:165", "per_step": 223, "what": "optimizer.step(); gradient clipping reads scalars inside MCore"},
+      {"site": "training/trainer.py:189,193,197 and :166", "per_step": 5, "what": "step-time, memory and finiteness reductions, once each"}
+    ]
+  },
+
+  "stacked_profile_cross_check": {
+    "note": "Launch count and device time, attributed to the innermost repository frame. The signature of a launch-bound site is a large n with near-zero device time.",
+    "rows": [
+      {"site": "models/generator_wan21.py:92 packed_attention", "launches": 139440, "device_self_seconds": 1.07},
+      {"site": "models/generator_wan21.py:91 <genexpr>", "launches": 92160, "device_self_seconds": 0.00},
+      {"site": "models/generator_wan21.py:55 RMSNorm.forward", "launches": 62400, "device_self_seconds": 0.22},
+      {"site": "models/vision_encoder.py:72 forward", "launches": 61344, "device_self_seconds": 3.01},
+      {"site": "distributed/megatron.py:176 forward", "launches": 46381, "device_self_seconds": 2.24},
+      {"site": "models/generator_wan21.py:93 packed_attention", "launches": 46080, "device_self_seconds": 0.00},
+      {"site": "models/generator_wan21.py:87 packed_attention", "launches": 30720, "device_self_seconds": 0.00},
+      {"site": "models/generator_wan21.py:101 rotary", "launches": 27600, "device_self_seconds": 0.41}
+    ]
+  },
+
+  "finding": "The dominant attributable cost is one Python loop. models/generator_wan21.py packed_attention has a batched fast path (lines 68-83) that issues a single SDPA over all visuals, but it is reachable only when _uniform() finds every packed segment the same length. Native-resolution packing gives visuals different sizes on essentially every pack, so training always falls into the per-visual loop at lines 86-94: roughly 9,960 iterations per step, each issuing a slice, two slices with transposes, an SDPA and a transpose+reshape. That loop plus the DiT rotary and the eager Wan RMSNorm is 29.5% of all dispatches, and the autograd engine's 37.1% is largely its mirror (aten.slice_backward alone is 17,020 per step). models/vision_encoder.py VisionAttention repeats the same per-image loop pattern for another 9.2%.",
+
+  "corrections_to_earlier_claims": [
+    "Earlier today I reported ~5,193 device-to-host syncs per step from the profiler's aten::_local_scalar_dense count. That number counts scalar reads on CPU tensors in the data pipeline too, which do not stall the device. The census measures 228 per step on the compute thread, 223 of them inside optimizer.step(). Syncs are not a significant cost.",
+    "Earlier I reported from phase timing that backward was 68% of the step and ~95% of it real gradient computation. The operator profile replaced that: a third of the step is device idle. This census explains the idle."
+  ],
+
+  "candidates_not_yet_tried": [
+    {"change": "varlen attention for packed_attention instead of the per-visual loop", "dispatches_removed_per_step": "about 64,700 directly, plus a large share of the engine's slice_backward", "status": "untested"},
+    {"change": "varlen attention for VisionAttention", "dispatches_removed_per_step": "about 27,900", "status": "untested"},
+    {"change": "route generator_wan21.RMSNorm through ops.fused.rms_norm at TP1, where it is exactly rms_norm", "dispatches_removed_per_step": "about 18,400", "status": "untested"},
+    {"change": "route the DiT rotary through the vendor rotary kernel the backbone already uses", "dispatches_removed_per_step": "about 11,200", "status": "untested"},
+    {"change": "TorchAIR pointwise fusion", "note": "blocked by torch/utils/_triton.py has_triton() reading a None compute capability on NPU; reaches only modulated_norm and gated_add, about 9% of launches, so it cannot address the idle third", "status": "blocked, low value"}
+  ],
+
+  "not_measured": [
+    "Whether the same dispatch count exists on L40S. The same Python issues it, but the two backends take different fused paths, so it must be measured rather than assumed. The census runs on both backends.",
+    "Multi-node Ascend: every number here is 16 cards on one node against 32 L40S cards on four, so the per-card advantage still mixes 'faster card' with 'no inter-node allreduce'.",
+    "Whether removing these dispatches converts into wall-clock time at the rate the idle fraction suggests."
+  ]
+}
