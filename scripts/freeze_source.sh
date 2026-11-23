@@ -19,7 +19,7 @@ fi
 mkdir -p "${DEST}"
 git -C "${ROOT}" archive HEAD | tar -x -C "${DEST}"
 # Weights, wheels and the venv are large, immutable and shared; link them.
-for shared in .venv-cuda .assets .deps; do
+for shared in .venv-cuda .venv-core17 .assets .deps .python; do
   [[ -e "${ROOT}/${shared}" ]] && ln -s "${ROOT}/${shared}" "${DEST}/${shared}"
 done
 git -C "${ROOT}" rev-parse HEAD >"${DEST}/SOURCE_COMMIT"
