@@ -19,6 +19,9 @@ import torch
 
 import ops.audit as audit
 
+# Lets a run fall back to the per-segment loop, which is also the oracle, so
+# the two backends can be A/B-ed through the same switch.
+_VARLEN = os.environ.get("PRETRAIN_NPU_VARLEN", "1") == "1"
 LAYOUT = os.environ.get("PRETRAIN_ATTENTION_LAYOUT", "SBH")
 if LAYOUT not in ("SBH", "BNSD"):
     raise ValueError("PRETRAIN_ATTENTION_LAYOUT must be SBH or BNSD")
@@ -33,6 +36,11 @@ def attend(q, k, v, mask, valid_rows, plan, scale=None):
             result = result * valid_rows.transpose(0, 1).unsqueeze(-1).to(result.dtype)
         return result
     return attention(q, k, v, mask, valid_rows, scale)
+
+
+def varlen_available(q):
+    """True when the TND kernel should run instead of the per-segment loop."""
+    return _VARLEN and q.device.type == "npu" and not torch.are_deterministic_algorithms_enabled()
 
 
 def varlen(q, k, v, cu_q, cu_k, scale=None):

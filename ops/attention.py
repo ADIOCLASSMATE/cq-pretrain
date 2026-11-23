@@ -30,7 +30,10 @@ def varlen(q, k, v, cu_q, cu_k, fused=True, scale=None):
     if fused and accel.IS_NPU and q.device.type == "npu":
         from ops import npu_attention
 
-        return npu_attention.varlen(q, k, v, cu_q, cu_k, scale)
+        if npu_attention.varlen_available(q):
+            return npu_attention.varlen(q, k, v, cu_q, cu_k, scale)
+        audit.record("varlen_attention", "npu_per_segment")
+        return varlen_reference(q, k, v, cu_q, cu_k, scale)
     if q.device.type == "cuda":
         from ops import cuda_attention
 
