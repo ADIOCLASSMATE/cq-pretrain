@@ -65,7 +65,7 @@ run() {
   for ((r = 0; r < RANKS; r++)); do
     OMP_NUM_THREADS="${OMP:-4}" "${PYTHON}" -m scripts.validation.bench_loader_host \
       --label "${name}" --rank "${r}" --world "${WORLD}" --packs "${PACKS}" \
-      --torch-threads "${threads}" --output "${dir}/rank_${r}.json" \
+      --torch-threads "${threads}" --report "${dir}/rank_${r}.json" \
       "${COMMON[@]}" "$@" >"${dir}/rank_${r}.log" 2>&1 &
     pids+=($!)
   done
@@ -92,6 +92,18 @@ print(f"  torch_threads     = {rows[0]['settings']['torch_threads']}"
 PY
   echo "=== ${name} done ==="
 }
+
+echo "=== smoke: one rank, 2 packs, before fanning out to ${RANKS} ==="
+OMP_NUM_THREADS="${OMP:-4}" "${PYTHON}" -m scripts.validation.bench_loader_host \
+  --label smoke --rank 0 --world "${WORLD}" --packs 2 --warmup-packs 1 \
+  --report "${BENCH_ROOT}/smoke.json" "${COMMON[@]}" --data-workers 2 --image-workers 4 \
+  >"${BENCH_ROOT}/smoke.log" 2>&1
+if [[ $? -ne 0 ]]; then
+  echo "SMOKE FAILED -- not spending the allocation on 16 ranks of the same error."
+  tail -25 "${BENCH_ROOT}/smoke.log"
+  exit 1
+fi
+echo "  smoke ok: $(cat "${BENCH_ROOT}/smoke.json" | tr -d '\n' | cut -c1-160)"
 
 # A step at 8 packs per card must produce 8 packs in the compute time. Measured
 # Ascend compute after varlen is ~29 s, so the target is >= 0.28 packs/s/rank.

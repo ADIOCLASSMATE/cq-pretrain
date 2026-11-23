@@ -71,7 +71,9 @@ def main():
     parser.add_argument("--world", type=int, default=32)
     parser.add_argument("--torch-threads", type=int, default=0, help="torch.set_num_threads; 0 leaves the default")
     parser.add_argument("--label", default="run")
-    parser.add_argument("--output", type=Path)
+    # Not --output: the training parser owns that one, and parse_known_args here
+    # would swallow it and leave the real parser without a required argument.
+    parser.add_argument("--report", type=Path, help="Where to write this rank's JSON report")
     known, rest = parser.parse_known_args()
 
     import torch
@@ -135,9 +137,9 @@ def main():
     )
     docs.close()
     print(json.dumps(report), flush=True)
-    if known.output:
-        known.output.parent.mkdir(parents=True, exist_ok=True)
-        known.output.write_text(json.dumps(report, indent=2) + "\n")
+    if known.report:
+        known.report.parent.mkdir(parents=True, exist_ok=True)
+        known.report.write_text(json.dumps(report, indent=2) + "\n")
 
 
 if __name__ == "__main__":
