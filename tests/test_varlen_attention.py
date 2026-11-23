@@ -164,7 +164,7 @@ class VisionAttentionTests(unittest.TestCase):
     """The vision tower call site: one segment per image, [T, heads, dim]."""
 
     def test_the_tower_attention_matches_its_per_image_loop(self):
-        from models.vision_encoder import VisionAttention
+        from models.vision_encoder import VisionAttention, rotary
 
         torch.manual_seed(3)
         cfg = dict(hidden_size=64, num_heads=4)
@@ -172,15 +172,16 @@ class VisionAttentionTests(unittest.TestCase):
         total = sum(lengths)
         attention = VisionAttention(cfg).double()
         heads, dim = attention.heads, attention.dim
-        # An identity rotation, so this compares the two ways of attending only.
         layout = SimpleNamespace(
             lengths=lengths,
             ends=ends(lengths),
-            cos=torch.ones(total, dim, dtype=torch.float64),
-            sin=torch.zeros(total, dim, dtype=torch.float64),
+            cos=torch.randn(total, dim, dtype=torch.float64),
+            sin=torch.randn(total, dim, dtype=torch.float64),
         )
         x = torch.randn(total, 64, dtype=torch.float64)
         q, k, v = attention.qkv(x).reshape(total, 3, heads, dim).unbind(1)
+        # The same rotation the module applies; only the attending differs.
+        q, k = rotary(q, layout.cos, layout.sin), rotary(k, layout.cos, layout.sin)
         expected = attention.proj(loop(q, k, v, layout.ends, layout.ends).reshape(total, -1))
         torch.testing.assert_close(attention(x, layout, True), expected, rtol=0, atol=1e-12)
 
