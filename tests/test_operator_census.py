@@ -114,7 +114,7 @@ class InstallationTests(unittest.TestCase):
 
     def test_an_uninstallable_mode_does_not_stop_training(self):
         counter = census.OperatorCensus()
-        broken = lambda: (_ for _ in ()).throw(ImportError("no dispatch mode"))  # noqa: E731
+        broken = lambda: (_ for _ in ()).throw(ImportError("no dispatch mode"))
         original = census._mode_class
         census._mode_class = broken
         try:

@@ -21,11 +21,11 @@ the host and therefore drains the launch queue, which costs far more on a
 host-bound step than its own duration suggests.
 """
 
+import json
+import sys
 from collections import Counter
 from contextlib import nullcontext
-import json
 from pathlib import Path
-import sys
 
 ROOT = str(Path(__file__).resolve().parents[1])
 
@@ -36,7 +36,7 @@ SYNC_OPS = ("_local_scalar_dense", "item", "nonzero", "_assert_async", "equal", 
 def _name(func):
     """`aten.empty_strided.default` rather than the full OpOverload repr."""
     text = str(func)
-    return text[6:] if text.startswith("aten::") else text
+    return text.removeprefix("aten::")
 
 
 class OperatorCensus:
