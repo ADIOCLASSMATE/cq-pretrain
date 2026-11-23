@@ -32,7 +32,10 @@ def loop(q, k, v, cu_q, cu_k):
 
 def tensors(lengths_q, lengths_k, heads=2, dim=16, seed=0):
     torch.manual_seed(seed)
-    make = lambda total: torch.randn(total, heads, dim, dtype=torch.float64)  # noqa: E731
+
+    def make(total):
+        return torch.randn(total, heads, dim, dtype=torch.float64)
+
     return make(sum(lengths_q)), make(sum(lengths_k)), make(sum(lengths_k))
 
 

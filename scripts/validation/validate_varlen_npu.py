@@ -37,8 +37,11 @@ def ends(lengths):
 
 def inputs(lengths_q, lengths_k, heads, dim, seed):
     generator = torch.Generator().manual_seed(seed)
-    shape = lambda total: torch.randn(total, heads, dim, generator=generator, dtype=torch.float64)  # noqa: E731
-    return shape(sum(lengths_q)), shape(sum(lengths_k)), shape(sum(lengths_k))
+
+    def make(total):
+        return torch.randn(total, heads, dim, generator=generator, dtype=torch.float64)
+
+    return make(sum(lengths_q)), make(sum(lengths_k)), make(sum(lengths_k))
 
 
 def run_case(case, device, dtype):
@@ -115,7 +118,9 @@ def main():
     parser.add_argument("--config", default="configs/qwen35_2b_wan.yaml")
     parser.add_argument("--vision-assets", help="Pinned vision assets, when the config does not name them")
     parser.add_argument("--tolerance", type=float, default=1.25, help="Allowed ratio of varlen error to loop error")
-    parser.add_argument("--floor", type=float, default=0.02, help="Error below which the ratio is not meaningful")
+    # The loop's own BF16 error against the FP64 oracle is about 0.004 on these
+    # shapes, so this floor is a real bar rather than somewhere to hide.
+    parser.add_argument("--floor", type=float, default=0.006, help="Error below which the ratio is not meaningful")
     args = parser.parse_args()
 
     import distributed.accel as accel
