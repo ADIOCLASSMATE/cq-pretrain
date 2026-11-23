@@ -151,239 +151,361 @@ class Packer:
                     offset=self.offset, serial=self.serial,packing=self.packing_contract.copy())
 
     def next(self):
-        began=time.perf_counter()
-        s, cfg, t = self.length, self.cfg, self.tokens
-        ids = np.full(s, t['eos'], np.int64)
-        segment = np.full(s, -1, np.int64)
-        sigma = np.arange(s, dtype=np.int64)
-        rope = np.zeros((3, s, 1), np.float32)
-        image_queries = np.zeros(s, bool)
-        text_indices, image_indices, pixels, records = [], [], [], []
-        generation_image_indices=[]
-        generation_unconditional=[]
-        instruction_starts, instruction_dropped = [], []
-        null_positions = []
-        instruction_dropout_eligible_images = 0
-        vision_pixels,vision_grids=[],[]
-        visual_features,visual_latents,visual_cache_keys=[],[],[]
-        position, seg, body_count = 0, 0, 0
-        generation_tokens=0
-        current_record = None
-        while position < s:
+        """Fill one pack with whole documents (or one window of a long one), in stream order."""
+        began = time.perf_counter()
+        pack = _Pack(self.length, self.tokens)
+        while pack.position < pack.capacity:
             doc = self.documents.peek()
-            if doc is None:
+            if doc is None or not self._admit(doc, pack):
                 break
-            signature=getattr(self.documents,'signature',{})
-            seed,epoch=signature.get('seed',0),signature.get('epoch',0)
-            image_permissions={index:generation_target(doc,element)
-                for index,element in enumerate(doc['elements']) if element['type']=='image'}
-            continued=bool(self.element or self.offset)
-            if not self.prepared_images:self.documents.prefetch_images(doc, self.element)
-            if cfg.preserve_documents and self.element==0 and self.offset==0:
-                needed=self.document_extent(doc)
-                if needed>s:
-                    if cfg.long_document_policy=='error':
-                        raise ValueError(f'Document {doc["id"]} exceeds {s} tokens; preserving its full context needs a longer sequence')
-                    # Explicit long-document windows start at an empty pack.
-                    if position:break
-                elif position and s-position<needed:
-                    break
-                else:self.stats['atomic_documents']+=1
-            # Empty text elements are legal in real interleaved documents.
-            # Look through them before reserving a BOS: the next actual element
-            # may be an image that cannot fit in the remaining pack space.
-            while self.element<len(doc['elements']):
-                first=doc['elements'][self.element]
-                if first['type']!='text' or self.offset<len(first['input_ids']):break
-                self.element+=1;self.offset=0
-            first = doc['elements'][self.element] if self.element < len(doc['elements']) else None
-            if first and first['type']=='image' and self.max_images and len(pixels)>=self.max_images:break
-            if first and first['type']=='image':
-                _,_,grid=self.prepare_image(doc)
-                needed=(len(first['video_sequence']['ids'])+1 if 'video_sequence' in first else math.prod(grid)//4+3)
-            else:
-                needed = 2
-            if position and s - position < needed:
-                break
-            # A continuation receives a fresh unlabelled opener; its body tokens
-            # are consumed exactly once and no preceding document is visible.
-            # Natural interleaved documents are plain text, not conversations,
-            # so they open directly at their first element with no <|im_start|>.
-            start = position
-            templated = doc.get('templated', True)
-            rope_cursor = 0
-            if templated:
-                ids[position], segment[position] = t['bos'], seg
-                position += 1; rope_cursor = 1
-            current_record = dict(id=doc['id'], element=self.element, offset=self.offset,
-                                  body_tokens=0, body_spans=[], images=0, completed=False,
-                                  format=doc.get('format'),direction=doc.get('direction'))
-            current_record.update({k:doc[k] for k in ('training_view','typed_conditions') if k in doc})
-            if cfg.preserve_documents:
-                current_record['window_continuation']=continued
-                current_record['window_reason']='backbone_length' if (
-                    continued or (self.document_size is not None and self.document_size[1]>s)) else None
-                if current_record['window_reason']:self.stats['long_document_windows']+=1
-            records.append(current_record)
-            # Boundaries and meaningful history are local to this document/window.
-            # BOS, role headers and closings alone do not make a new CFG category.
-            instruction_start = -1
-            has_history = False
-            # A window can start inside a text block. Its next span alone
-            # does not establish a new instruction boundary.
-            in_text_block = continued
-            while self.element < len(doc['elements']) and position < s:
-                e = doc['elements'][self.element]
-                if e['type'] == 'text':
-                    available = len(e['input_ids']) - self.offset
-                    take = min(available, s - position)
-                    if take:
-                        if e.get('context_text', True):
-                            if self.offset == 0 and (not in_text_block or e.get('instruction_start')):
-                                instruction_start = position if has_history else start
-                            in_text_block = True
-                            has_history = True
-                        current_record['body_spans'].append((position,take))
-                        ids[position:position+take] = e['input_ids'][self.offset:self.offset+take]
-                        segment[position:position+take] = seg
-                        rope[:, position:position+take, 0] = np.arange(rope_cursor, rope_cursor+take)
-                        # Fabricated chat scaffolding is fed as input but never
-                        # supervised: the model must not learn to emit our wrappers.
-                        if e.get('supervised', True):
-                            text_indices.extend(range(position, position+take))
-                        position += take; rope_cursor += take; self.offset += take
-                        body_count += take; current_record['body_tokens'] += take
-                    if self.offset == len(e['input_ids']):
-                        self.element += 1; self.offset = 0
-                elif e['type'] == 'image':
-                    from data.sequence import image_sequence
-                    target,processed,grid=self.prepare_image(doc)
-                    sequence=e.get('video_sequence') or image_sequence(grid,t)
-                    size=len(sequence['ids'])
-                    if position+size>s or (self.max_images and len(pixels)>=self.max_images):break
-                    generate_image=image_permissions[self.element]
-                    unconditional=e.get('non_cfg')
-                    if unconditional is None:unconditional=doc.get('non_cfg')
-                    explicit_condition = unconditional is not None
-                    if unconditional is None:
-                        unconditional = not has_history or sample_objective(
-                            f'{doc["id"]}:{self.element}',cfg.visual_uncond_probability,seed,epoch,'visual-uncond-v1')
-                    elif type(unconditional) is not bool:
-                        raise ValueError('non_cfg must be a boolean when specified')
-                    generation_unconditional.append(generate_image and unconditional)
-                    instruction_starts.append(instruction_start if generate_image else -1)
-                    # The opener is the same token, position and state in every
-                    # templated document, so reading it alone carries no content.
-                    null_positions.append(start + 1 if templated and generate_image else -1)
-                    eligible = generate_image and instruction_start > start and not (explicit_condition or unconditional)
-                    instruction_dropout_eligible_images += int(eligible)
-                    instruction_dropped.append(eligible and sample_objective(
-                        f'{doc["id"]}:{self.element}', cfg.visual_instruction_dropout_probability,
-                        seed, epoch, 'visual-instruction-drop-v1'))
-                    # A later target cannot drop across this image, even when
-                    # both images and multiple text spans belong to one turn.
-                    has_history, instruction_start = True, -1
-                    in_text_block = False
-                    stop=position+size;indices=position+sequence['visual']
-                    ids[position:stop]=sequence['ids'];segment[position:stop]=seg
-                    sigma[position:stop]=sequence['sigma']+position
-                    rope[:,position:stop]=sequence['positions']+rope_cursor
-                    image_queries[indices]=True;image_indices.append(indices)
-                    text_indices.extend((position+sequence['text_indices']).tolist())
-                    if generate_image:
-                        generation_image_indices.append(len(pixels))
-                        shape=target.shape if target.ndim==4 else (1,*target.shape)
-                        generation_tokens+=((shape[0]-1)//4+1)*(shape[1]//16)*(shape[2]//16)
-                    pixels.append(target);vision_pixels.append(processed);vision_grids.append(grid)
-                    visual_features.append(e.get('cached_features'));visual_latents.append(e.get('cached_latent'))
-                    visual_cache_keys.append(e.get('cache_keys',(None,None)))
-                    rope_cursor+=int(sequence['positions'].max())+1;position=stop
-                    self.element+=1;current_record['images']+=1
-                    self.pending_image=None;self.prepared_images.pop((doc['id'],self.element-1),None)
-                else:
-                    raise ValueError(f'Unsupported corpus element: {e["type"]}')
-            if self.element == len(doc['elements']) and position < s:
-                ids[position], segment[position] = t['eos'], seg
-                rope[:, position, 0] = rope_cursor
-                text_indices.append(position); position += 1
-                current_record['completed'] = True
-                self.documents.advance(); self.element = self.offset = 0
-                self.document_size=None
-                self.prepared_images.clear()
-                seg += 1
-            else:
-                if position == start + (1 if templated else 0):
-                    raise RuntimeError('Packer made no progress')
+            start, templated = self._open_document(doc, pack)
+            if not self._write_document(doc, pack, start, templated):
                 break  # Keep image atomic / continue a long document next pack.
-        if not records:
+        if not pack.records:
             return None
+        return self._finish(pack, began)
+
+    def _admit(self, doc, pack):
+        """Whether `doc` (or its continuation) starts in this pack."""
+        s, cfg = pack.capacity, self.cfg
+        # Decided before empty text elements are skipped below.
+        continued = pack.continued = bool(self.element or self.offset)
+        if not self.prepared_images:
+            self.documents.prefetch_images(doc, self.element)
+        if cfg.preserve_documents and not continued:
+            needed = self.document_extent(doc)
+            if needed > s:
+                if cfg.long_document_policy == 'error':
+                    raise ValueError(
+                        f'Document {doc["id"]} exceeds {s} tokens; '
+                        'preserving its full context needs a longer sequence')
+                # Explicit long-document windows start at an empty pack.
+                if pack.position:
+                    return False
+            elif pack.position and s - pack.position < needed:
+                return False
+            else:
+                self.stats['atomic_documents'] += 1
+        # Empty text elements are legal in real interleaved documents. Look
+        # through them before reserving a BOS: the next actual element may be
+        # an image that cannot fit in the remaining pack space.
+        elements = doc['elements']
+        while self.element < len(elements):
+            first = elements[self.element]
+            if first['type'] != 'text' or self.offset < len(first['input_ids']):
+                break
+            self.element += 1
+            self.offset = 0
+        first = elements[self.element] if self.element < len(elements) else None
+        if first and first['type'] == 'image':
+            if self.max_images and len(pack.pixels) >= self.max_images:
+                return False
+            _, _, grid = self.prepare_image(doc)
+            if 'video_sequence' in first:
+                needed = len(first['video_sequence']['ids']) + 1
+            else:
+                needed = math.prod(grid) // 4 + 3
+        else:
+            needed = 2
+        return not (pack.position and s - pack.position < needed)
+
+    def _open_document(self, doc, pack):
+        """Write the opener and the receipt record. Returns (start, templated).
+
+        A continuation receives a fresh unlabelled opener; its body tokens are
+        consumed exactly once and no preceding document is visible. Natural
+        interleaved documents are plain text, not conversations, so they open
+        directly at their first element with no <|im_start|>.
+        """
+        continued = pack.continued
+        start = pack.position
+        templated = doc.get('templated', True)
+        pack.rope_cursor = 0
+        if templated:
+            pack.ids[pack.position] = self.tokens['bos']
+            pack.segment[pack.position] = pack.seg
+            pack.position += 1
+            pack.rope_cursor = 1
+        record = dict(id=doc['id'], element=self.element, offset=self.offset,
+                      body_tokens=0, body_spans=[], images=0, completed=False,
+                      format=doc.get('format'), direction=doc.get('direction'))
+        record.update({k: doc[k] for k in ('training_view', 'typed_conditions') if k in doc})
+        if self.cfg.preserve_documents:
+            record['window_continuation'] = continued
+            long_document = self.document_size is not None and self.document_size[1] > pack.capacity
+            record['window_reason'] = 'backbone_length' if continued or long_document else None
+            if record['window_reason']:
+                self.stats['long_document_windows'] += 1
+        pack.records.append(record)
+        pack.record = record
+        # Boundaries and meaningful history are local to this document/window.
+        # BOS, role headers and closings alone do not make a new CFG category.
+        pack.instruction_start = -1
+        pack.has_history = False
+        # A window can start inside a text block. Its next span alone does not
+        # establish a new instruction boundary.
+        pack.in_text_block = continued
+        return start, templated
+
+    def _write_document(self, doc, pack, start, templated):
+        """Write elements until the document ends or the pack is full.
+
+        Returns True when the document completed and the next one may follow.
+        """
+        signature = getattr(self.documents, 'signature', {})
+        draws = (signature.get('seed', 0), signature.get('epoch', 0))
+        permissions = {index: generation_target(doc, element)
+                       for index, element in enumerate(doc['elements']) if element['type'] == 'image'}
+        while self.element < len(doc['elements']) and pack.position < pack.capacity:
+            e = doc['elements'][self.element]
+            if e['type'] == 'text':
+                self._write_text(e, pack, start)
+            elif e['type'] == 'image':
+                if not self._write_image(doc, e, pack, start, templated, permissions, draws):
+                    break
+            else:
+                raise ValueError(f'Unsupported corpus element: {e["type"]}')
+        if self.element == len(doc['elements']) and pack.position < pack.capacity:
+            self._close_document(pack)
+            return True
+        if pack.position == start + (1 if templated else 0):
+            raise RuntimeError('Packer made no progress')
+        return False
+
+    def _write_text(self, e, pack, start):
+        take = min(len(e['input_ids']) - self.offset, pack.capacity - pack.position)
+        if take:
+            position = pack.position
+            if e.get('context_text', True):
+                if self.offset == 0 and (not pack.in_text_block or e.get('instruction_start')):
+                    pack.instruction_start = position if pack.has_history else start
+                pack.in_text_block = True
+                pack.has_history = True
+            pack.record['body_spans'].append((position, take))
+            pack.ids[position:position + take] = e['input_ids'][self.offset:self.offset + take]
+            pack.segment[position:position + take] = pack.seg
+            pack.rope[:, position:position + take, 0] = np.arange(pack.rope_cursor, pack.rope_cursor + take)
+            # Fabricated chat scaffolding is fed as input but never supervised:
+            # the model must not learn to emit our wrappers.
+            if e.get('supervised', True):
+                pack.text_indices.extend(range(position, position + take))
+            pack.position += take
+            pack.rope_cursor += take
+            self.offset += take
+            pack.body_count += take
+            pack.record['body_tokens'] += take
+        if self.offset == len(e['input_ids']):
+            self.element += 1
+            self.offset = 0
+
+    def _write_image(self, doc, e, pack, start, templated, permissions, draws):
+        """Write one atomic visual. Returns False when it does not fit this pack."""
+        from data.sequence import image_sequence
+
+        target, processed, grid = self.prepare_image(doc)
+        sequence = e.get('video_sequence') or image_sequence(grid, self.tokens)
+        size = len(sequence['ids'])
+        if pack.position + size > pack.capacity or (self.max_images and len(pack.pixels) >= self.max_images):
+            return False
+        self._record_conditioning(doc, e, pack, start, templated, permissions[self.element], draws)
+        position, stop = pack.position, pack.position + size
+        indices = position + sequence['visual']
+        pack.ids[position:stop] = sequence['ids']
+        pack.segment[position:stop] = pack.seg
+        pack.sigma[position:stop] = sequence['sigma'] + position
+        pack.rope[:, position:stop] = sequence['positions'] + pack.rope_cursor
+        pack.image_queries[indices] = True
+        pack.image_indices.append(indices)
+        pack.text_indices.extend((position + sequence['text_indices']).tolist())
+        if permissions[self.element]:
+            pack.generation_image_indices.append(len(pack.pixels))
+            shape = target.shape if target.ndim == 4 else (1, *target.shape)
+            pack.generation_tokens += ((shape[0] - 1) // 4 + 1) * (shape[1] // 16) * (shape[2] // 16)
+        pack.pixels.append(target)
+        pack.vision_pixels.append(processed)
+        pack.vision_grids.append(grid)
+        pack.visual_features.append(e.get('cached_features'))
+        pack.visual_latents.append(e.get('cached_latent'))
+        pack.visual_cache_keys.append(e.get('cache_keys', (None, None)))
+        pack.rope_cursor += int(sequence['positions'].max()) + 1
+        pack.position = stop
+        self.element += 1
+        pack.record['images'] += 1
+        self.pending_image = None
+        self.prepared_images.pop((doc['id'], self.element - 1), None)
+        return True
+
+    def _record_conditioning(self, doc, e, pack, start, templated, generate_image, draws):
+        """Null-condition and instruction-dropout choices for one visual occurrence."""
+        cfg = self.cfg
+        seed, epoch = draws
+        occurrence = f'{doc["id"]}:{self.element}'
+        unconditional = e.get('non_cfg')
+        if unconditional is None:
+            unconditional = doc.get('non_cfg')
+        explicit_condition = unconditional is not None
+        if unconditional is None:
+            unconditional = not pack.has_history or sample_objective(
+                occurrence, cfg.visual_uncond_probability, seed, epoch, 'visual-uncond-v1')
+        elif type(unconditional) is not bool:
+            raise ValueError('non_cfg must be a boolean when specified')
+        pack.generation_unconditional.append(generate_image and unconditional)
+        pack.instruction_starts.append(pack.instruction_start if generate_image else -1)
+        # The opener is the same token, position and state in every templated
+        # document, so reading it alone carries no content.
+        pack.null_positions.append(start + 1 if templated and generate_image else -1)
+        eligible = (generate_image and pack.instruction_start > start
+                    and not (explicit_condition or unconditional))
+        pack.instruction_dropout_eligible_images += int(eligible)
+        pack.instruction_dropped.append(eligible and sample_objective(
+            occurrence, cfg.visual_instruction_dropout_probability, seed, epoch, 'visual-instruction-drop-v1'))
+        # A later target cannot drop across this image, even when both images
+        # and multiple text spans belong to one turn.
+        pack.has_history, pack.instruction_start = True, -1
+        pack.in_text_block = False
+
+    def _close_document(self, pack):
+        position = pack.position
+        pack.ids[position] = self.tokens['eos']
+        pack.segment[position] = pack.seg
+        pack.rope[:, position, 0] = pack.rope_cursor
+        pack.text_indices.append(position)
+        pack.position += 1
+        pack.record['completed'] = True
+        self.documents.advance()
+        self.element = self.offset = 0
+        self.document_size = None
+        self.prepared_images.clear()
+        pack.seg += 1
+
+    def _finish(self, pack, began):
+        """Trim to the physical width, build the batch and plan, and write the receipt."""
+        cfg = self.cfg
         # Do not create the obsolete dense [2S,S] mask. The exact compact plan
         # owns masks for only the branches actually evaluated by this method.
-        n_images = len(pixels)
-        used = padded_pack_length(position, s, self.padding_multiple)
-        if used < s:
-            ids,segment,sigma=ids[:used],segment[:used],sigma[:used]
-            rope,image_queries=rope[:,:used],image_queries[:used]
-        indices=np.full((n_images,max(map(len,image_indices),default=0)),-1,np.int64)
-        for i,span in enumerate(image_indices):indices[i,:len(span)]=span
-        batch = Batch(ids=torch.from_numpy(ids[None]),
-            generation_image_indices=torch.tensor(generation_image_indices,dtype=torch.long),
+        used = padded_pack_length(pack.position, pack.capacity, self.padding_multiple)
+        ids, segment, sigma = pack.ids[:used], pack.segment[:used], pack.sigma[:used]
+        rope, image_queries = pack.rope[:, :used], pack.image_queries[:used]
+        indices = np.full((len(pack.pixels), max(map(len, pack.image_indices), default=0)), -1, np.int64)
+        for i, span in enumerate(pack.image_indices):
+            indices[i, :len(span)] = span
+        batch = Batch(
+            ids=torch.from_numpy(ids[None]),
+            generation_image_indices=torch.tensor(pack.generation_image_indices, dtype=torch.long),
             latents=torch.empty(0, cfg.latent_channels * 4),
             image_indices=torch.from_numpy(indices),
-            text_indices=torch.tensor(text_indices, dtype=torch.long), image_queries=torch.from_numpy(image_queries[None]),
-            sigma=torch.from_numpy(sigma[None]), segments=torch.from_numpy(segment[None]), row_col=torch.from_numpy(rope),
-            noise=torch.empty(0), times=torch.empty(0))
-        batch.generation_unconditional=torch.tensor(generation_unconditional,dtype=torch.bool)
-        batch.generation_instruction_starts = torch.tensor(instruction_starts, dtype=torch.long)
-        batch.generation_instruction_dropped = torch.tensor(instruction_dropped, dtype=torch.bool)
-        batch.generation_null_positions = torch.tensor(null_positions, dtype=torch.long)
-        if generation_image_indices:
-            from data.generation import WanGenerationInputs
-            queries=[math.prod(vision_grids[i])//4 if cfg.visual_query_mode=='native' else cfg.image_condition_queries for i in generation_image_indices]
-            batch.generation=WanGenerationInputs.prepare([pixels[i] for i in generation_image_indices],queries,cfg.dit_width//cfg.dit_heads,
-                cfg.generation_token_budget,cfg.generation_microbatch_images,
-                cached_latents=[visual_latents[i] for i in generation_image_indices],rf=cfg.rf)
-            batch.generation.cache_keys=tuple(visual_cache_keys[i][1] for i in generation_image_indices)
-        if vision_pixels:
-            from data.vision import VisionInputs
-            batch.vision=VisionInputs.prepare(torch.cat(vision_pixels),vision_grids,
-                torch.from_numpy(np.concatenate(image_indices)),self.processor.config)
-        if batch.vision is not None:
-            batch.vision.cache_keys=tuple(x[0] for x in visual_cache_keys)
-            if any(x is not None for x in visual_features):
-                cached=[];online_pixels=[];online_grids=[];online_indices=[];offset=0
-                for features,processed,grid in zip(visual_features,vision_pixels,vision_grids):
-                    count=math.prod(grid)//4
-                    if features is None:
-                        features=torch.zeros(count,cfg.width)
-                        online_pixels.append(processed);online_grids.append(grid);online_indices.append(torch.arange(offset,offset+count))
-                    if features.shape!=(count,cfg.width):raise ValueError('Cached visual feature shape differs')
-                    cached.append(features);offset+=count
-                batch.vision.features=torch.cat(cached)
-                if online_pixels:batch.vision.online=VisionInputs.prepare(torch.cat(online_pixels),online_grids,torch.cat(online_indices),self.processor.config)
-                # Cached inputs still carry all grids/indices for CQ planning,
-                # but raw patches are not transferred for them.
-                batch.vision.pixel_values=torch.empty(0)
-        plan_begin=time.perf_counter()
+            text_indices=torch.tensor(pack.text_indices, dtype=torch.long),
+            image_queries=torch.from_numpy(image_queries[None]),
+            sigma=torch.from_numpy(sigma[None]),
+            segments=torch.from_numpy(segment[None]),
+            row_col=torch.from_numpy(rope),
+            noise=torch.empty(0),
+            times=torch.empty(0))
+        batch.generation_unconditional = torch.tensor(pack.generation_unconditional, dtype=torch.bool)
+        batch.generation_instruction_starts = torch.tensor(pack.instruction_starts, dtype=torch.long)
+        batch.generation_instruction_dropped = torch.tensor(pack.instruction_dropped, dtype=torch.bool)
+        batch.generation_null_positions = torch.tensor(pack.null_positions, dtype=torch.long)
+        if pack.generation_image_indices:
+            self._attach_generation(batch, pack)
+        if pack.vision_pixels:
+            self._attach_vision(batch, pack)
+        plan_begin = time.perf_counter()
         batch.mainline = build_plan(batch, cfg)
-        self.stats['plan_seconds']+=time.perf_counter()-plan_begin
-        pin_begin=time.perf_counter()
-        if self.pin_device is not None:batch=batch.pin_memory(self.pin_device)
-        self.stats['pin_seconds']+=time.perf_counter()-pin_begin
-        self.stats['batches']+=1
-        self.stats['pack_seconds']+=time.perf_counter()-began
+        self.stats['plan_seconds'] += time.perf_counter() - plan_begin
+        pin_begin = time.perf_counter()
+        if self.pin_device is not None:
+            batch = batch.pin_memory(self.pin_device)
+        self.stats['pin_seconds'] += time.perf_counter() - pin_begin
+        self.stats['batches'] += 1
+        self.stats['pack_seconds'] += time.perf_counter() - began
         self.serial += 1
-        receipt = dict(serial=self.serial, next_state=self.state_dict(), documents=records,
-                       body_tokens=body_count, occupied=position, physical_length=used, images=n_images,
-                       generation_images=batch.generation_image_count,
-                       condition_query_tokens=int(batch.mainline.query_image.sum()),
-                       unconditional_images=sum(generation_unconditional),
-                       instruction_dropped_images=sum(instruction_dropped),
-                       instruction_dropout_eligible_images=instruction_dropout_eligible_images,
-                       generation_tokens=generation_tokens,
-                       dit_microbatches=(batch.generation.dit_microbatch_count if batch.generation else 0),
-                       ids_sha256=hashlib.sha256(ids.tobytes()).hexdigest())
+        receipt = dict(
+            serial=self.serial,
+            next_state=self.state_dict(),
+            documents=pack.records,
+            body_tokens=pack.body_count,
+            occupied=pack.position,
+            physical_length=used,
+            images=len(pack.pixels),
+            generation_images=batch.generation_image_count,
+            condition_query_tokens=int(batch.mainline.query_image.sum()),
+            unconditional_images=sum(pack.generation_unconditional),
+            instruction_dropped_images=sum(pack.instruction_dropped),
+            instruction_dropout_eligible_images=pack.instruction_dropout_eligible_images,
+            generation_tokens=pack.generation_tokens,
+            dit_microbatches=(batch.generation.dit_microbatch_count if batch.generation else 0),
+            ids_sha256=hashlib.sha256(ids.tobytes()).hexdigest())
         return batch, receipt
+
+    def _attach_generation(self, batch, pack):
+        from data.generation import WanGenerationInputs
+
+        cfg = self.cfg
+        selected = pack.generation_image_indices
+        if cfg.visual_query_mode == 'native':
+            queries = [math.prod(pack.vision_grids[i]) // 4 for i in selected]
+        else:
+            queries = [cfg.image_condition_queries for _ in selected]
+        batch.generation = WanGenerationInputs.prepare(
+            [pack.pixels[i] for i in selected], queries, cfg.dit_width // cfg.dit_heads,
+            cfg.generation_token_budget, cfg.generation_microbatch_images,
+            cached_latents=[pack.visual_latents[i] for i in selected], rf=cfg.rf)
+        batch.generation.cache_keys = tuple(pack.visual_cache_keys[i][1] for i in selected)
+
+    def _attach_vision(self, batch, pack):
+        from data.vision import VisionInputs
+
+        cfg, config = self.cfg, self.processor.config
+        batch.vision = VisionInputs.prepare(
+            torch.cat(pack.vision_pixels), pack.vision_grids,
+            torch.from_numpy(np.concatenate(pack.image_indices)), config)
+        batch.vision.cache_keys = tuple(x[0] for x in pack.visual_cache_keys)
+        if not any(x is not None for x in pack.visual_features):
+            return
+        cached, online_pixels, online_grids, online_indices = [], [], [], []
+        offset = 0
+        for features, processed, grid in zip(pack.visual_features, pack.vision_pixels, pack.vision_grids,
+                                             strict=True):
+            count = math.prod(grid) // 4
+            if features is None:
+                features = torch.zeros(count, cfg.width)
+                online_pixels.append(processed)
+                online_grids.append(grid)
+                online_indices.append(torch.arange(offset, offset + count))
+            if features.shape != (count, cfg.width):
+                raise ValueError('Cached visual feature shape differs')
+            cached.append(features)
+            offset += count
+        batch.vision.features = torch.cat(cached)
+        if online_pixels:
+            batch.vision.online = VisionInputs.prepare(
+                torch.cat(online_pixels), online_grids, torch.cat(online_indices), config)
+        # Cached inputs still carry all grids/indices for CQ planning, but raw
+        # patches are not transferred for them.
+        batch.vision.pixel_values = torch.empty(0)
+
+
+class _Pack:
+    """Arrays and per-occurrence lists of one pack while it is being filled."""
+
+    def __init__(self, capacity, tokens):
+        self.capacity = capacity
+        self.ids = np.full(capacity, tokens['eos'], np.int64)
+        self.segment = np.full(capacity, -1, np.int64)
+        self.sigma = np.arange(capacity, dtype=np.int64)
+        self.rope = np.zeros((3, capacity, 1), np.float32)
+        self.image_queries = np.zeros(capacity, bool)
+        self.position = self.seg = self.body_count = self.generation_tokens = 0
+        self.rope_cursor = 0
+        self.records, self.record = [], None
+        self.text_indices, self.image_indices, self.pixels = [], [], []
+        self.vision_pixels, self.vision_grids = [], []
+        self.visual_features, self.visual_latents, self.visual_cache_keys = [], [], []
+        self.generation_image_indices, self.generation_unconditional = [], []
+        self.instruction_starts, self.instruction_dropped, self.null_positions = [], [], []
+        self.instruction_dropout_eligible_images = 0
+        self.instruction_start, self.has_history, self.in_text_block = -1, False, False
+        self.continued = False
 
 
 class ConsumedLoader:

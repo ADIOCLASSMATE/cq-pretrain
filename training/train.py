@@ -1,637 +1,130 @@
-"""Distributed pretraining with local online-tokenized DCVLM or synthetic controls."""
-import argparse
-from contextlib import nullcontext
+"""Distributed CQ + Wan pretraining on a published release or synthetic controls.
+
+The pieces live in their own modules:
+  options      command line, learning-rate schedule, loss scales
+  configure    config resolution from options, model YAML and data release
+  model_setup  process group, restart selection, model and optimizer
+  contract     the exact resume contract (training_state) and run.json
+  pipeline     per-epoch data loaders and DP-agreed microbatch groups
+  trainer      one optimizer update
+  persistence  restart checkpoints, evaluation snapshots, validation
+  metrics      step logs and summary.json
+"""
+
 import json
-import hashlib
-import math
-import os
-from pathlib import Path
-import socket
-import statistics
 import time
+from contextlib import nullcontext
+
 import torch
 import torch.distributed as dist
 
-from configs.config import RunConfig, tiny_config
-ROOT=Path(__file__).resolve().parents[1]
-
+import distributed.accel as accel
+import utils.checkpoint as checkpoint_io
 from data.batch import fake_batch
 import distributed.megatron as P
-import distributed.accel as accel
+from training import configure, contract, metrics, model_setup
+from training.options import data_loss_scales, learning_rate, parse_args  # noqa: F401  (public API)
+from training.persistence import Persistence
+from training.pipeline import DataPipeline
+from training.trainer import Trainer
+
 ACCEL = accel.accel_type()
 DEV = accel.device_module()
-import utils.checkpoint as checkpoint_io
-from training.loss import compose_losses
-from training.renderer_schedule import backward_deferred_renderer
 
 
-def parse_args(argv=None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config')
-    parser.add_argument('--vision-assets',help='Local pinned Qwen3.5 vision assets; training never downloads weights')
-    parser.add_argument('--text-assets',help='Local pinned Qwen3.5 language checkpoint and tokenizer')
-    parser.add_argument('--wan-assets',help='Local native Wan2.1 DiT checkpoint')
-    parser.add_argument('--wan-vae-assets',help='Local frozen Wan2.1 VAE checkpoint')
-    parser.add_argument('--random-init',action='store_true',help='Explicit architecture control; do not load pretrained language/vision weights')
-    parser.add_argument('--tiny', action='store_true')
-    parser.add_argument('--synthetic', action='store_true',
-                        help='Use fake_batch with the unchanged production model and CPU planners')
-    parser.add_argument('--image-condition-queries', type=int)
-    parser.add_argument('--visual-query-mode',choices=('native','fixed'))
-    parser.add_argument('--query-interaction',choices=('none','bidirectional'),
-                        help='Ablation: let the visual queries of one target read each other (model.query_interaction)')
-    parser.add_argument('--null-condition',choices=('masked','bos','token'),
-                        help='Ablation: what an unconditional visual query reads (model.null_condition)')
-    parser.add_argument('--tp', type=int, default=1)
-    parser.add_argument('--sequence-length', type=int, default=8192)
-    parser.add_argument('--images', type=int, default=2)
-    parser.add_argument('--micro-batch', type=int, default=1)
-    parser.add_argument('--global-batch', type=int)
-    parser.add_argument('--grad-accum', type=int, default=1)
-    parser.add_argument('--steps', type=int, default=12)
-    parser.add_argument('--total-steps', type=int, help='Stop at this absolute update count, including resume')
-    parser.add_argument('--data-epochs', type=int, default=1, help='Complete this many independently shuffled finite epochs')
-    parser.add_argument('--until-data-end',action='store_true',help='Traverse the remaining finite DCVLM epoch instead of a slot-based step budget')
-    parser.add_argument('--warmup', type=int, default=3)
-    parser.add_argument('--lr', type=float, default=1e-5)
-    parser.add_argument('--renderer-ema-decay',type=float,default=0.,
-                        help='FP32 distributed optimizer-shard renderer EMA; zero disables')
-    parser.add_argument('--min-lr', type=float, help='Cosine floor; defaults to one tenth of --lr')
-    parser.add_argument('--lr-decay-style', choices=('constant', 'cosine', 'wsd'), default='constant')
-    parser.add_argument('--lr-warmup-steps', type=int, default=0)
-    parser.add_argument('--lr-decay-steps', type=int, default=100000,
-                        help='Step at which the LR reaches min-lr (cosine and wsd)')
-    parser.add_argument('--lr-decay-start', type=int,
-                        help='wsd only: first step of the cosine decay; omit to stay stable. '
-                             'Both wsd decay settings may change on resume')
-    parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--init-checkpoint',type=Path,help='New-stage model-only initialization; fresh optimizer and data cursor')
-    parser.add_argument('--validation-suite',type=Path,help='Fixed local T2I/I2T qualitative suite')
-    parser.add_argument('--validate-every',type=int,default=0)
-    parser.add_argument('--validate-every-hours',type=float,default=0.,
-                        help='Also validate once this much wall time has passed since the last validation; '
-                             'the clock is stored beside the reports and survives restarts')
-    parser.add_argument('--validate-first',action='store_true')
-    parser.add_argument('--validate-final',action='store_true')
-    parser.add_argument('--output')
-    parser.add_argument('--save-every', type=int, default=0)
-    parser.add_argument('--checkpoint-dir', type=Path, help='Shared checkpoint root, independent of attempt logs')
-    parser.add_argument('--keep-checkpoints', type=int, default=3)
-    parser.add_argument('--eval-snapshot-every', type=int, default=1000,
-                        help='Save inference-only weights every N absolute updates; zero disables')
-    parser.add_argument('--eval-snapshot-dir', type=Path,
-                        help='Retained evaluation weights; defaults beside checkpoint-dir, or under output')
-    parser.add_argument('--save-first', action='store_true', help='Save after the first successful update')
-    parser.add_argument('--save-final', action='store_true', help='Save the last update on normal completion')
-    resume = parser.add_mutually_exclusive_group()
-    resume.add_argument('--resume')
-    resume.add_argument('--auto-resume', action='store_true', help='Resume the newest committed checkpoint in checkpoint-dir')
-    parser.add_argument('--validation-probes',action='store_true',help='Write model/Adam/master probes after each update; exclude this run from throughput estimates')
-    parser.add_argument('--profile', action='store_true')
-    parser.add_argument('--profile-ranks', default='0', help='Comma separated global ranks')
-    parser.add_argument('--bucket-size', type=int, default=40_000_000, help='DDP bucket elements')
-    parser.add_argument('--bf16-grad-reduce', action='store_true',
-                        help='Reduce gradients in BF16 instead of FP32: halves DP allreduce bytes and the '
-                             'resident main_grad buffer. Changes reduction numerics; validate loss parity.')
-    parser.add_argument('--no-param-overlap', action='store_true')
-    parser.add_argument('--phase-timing', action='store_true', help='Measure forward/backward/optimizer device time')
-    parser.add_argument('--log-all-ranks', action='store_true', help='Print successful step receipts on every rank')
-    parser.add_argument('--checkpoint-backbone-layers', type=int, default=0)
-    parser.add_argument('--checkpoint-dit-layers', type=int, default=0)
-    parser.add_argument('--keep-attention-activations',type=int,default=0)
-    parser.add_argument('--optimizer-instances', type=int, default=1,
-                        help='Replicated optimizer groups for hierarchical DP synchronization')
-    parser.add_argument('--optimizer-offload-fraction', type=float, default=0.,
-                        help='Fraction of Adam state/compute offloaded by upstream MCore (0 disables)')
-    parser.add_argument('--ce-chunk', type=int, help='Text output projection/CE chunk size')
-    parser.add_argument('--deterministic',action='store_true',help='Use deterministic kernels for exact restart validation')
-    recompute = parser.add_mutually_exclusive_group()
-    recompute.add_argument('--no-checkpoint', action='store_true')
-    recompute.add_argument('--checkpoint', action='store_true', help='Recompute backbone and DiT layers')
-    parser.add_argument('--split-reference', action='store_true')
-    parser.add_argument('--data-root', help='Published corpus, JSONL or mixed-source YAML; tokenize raw text online')
-    parser.add_argument('--data-mode', choices=('A','B'), default='A')
-    parser.add_argument('--allow-development-data', action='store_true')
-    parser.add_argument('--data-workers', type=int, default=2)
-    parser.add_argument('--data-prefetch', type=int, default=0, help='CPU packs ahead; zero selects GA+4 (minimum 4)')
-    parser.add_argument('--source-root', help='Optional local TAR pool relocation')
-    parser.add_argument('--tokenize-rows', type=int, default=32)
-    parser.add_argument('--shuffle-block-rows', type=int, default=4)
-    parser.add_argument('--image-workers', type=int, default=2)
-    parser.add_argument('--image-prefetch', type=int, default=16)
-    parser.add_argument('--device-prefetch', type=int, default=2, help='Prepared NPU batches ahead; zero is synchronous control')
-    parser.add_argument('--preserve-documents',action='store_true',help='Pack complete documents; budget DiT image/CQ pairs independently')
-    parser.add_argument('--long-document-policy',choices=('window','error'),help='Policy only for documents longer than the backbone context')
-    parser.add_argument('--dit-microbatch-tokens',type=int,help='Wan latent-token budget per chunk across all RF draws')
-    parser.add_argument('--dit-microbatch-images',type=int,help='Optional limit on image draws per DiT chunk; zero is unlimited')
-    parser.add_argument('--rf', type=int, help='Rectified-flow draws per generation target (data.rf, default 4)')
-    parser.add_argument('--timestep-shift', type=float, help='Wan shift applied to logit-normal training times (default 1)')
-    parser.add_argument('--max-images-per-pack', type=int, default=None, help='Legacy fragment packing only; defaults to zero for whole documents')
-    parser.add_argument('--pack-padding-multiple', type=int,
-                        help='Override automatic 2K/4K/8K pack widths with a multiple; zero keeps the full sequence length')
-    parser.add_argument('--latent-encoder', choices=('wan','fake'), default='wan')
-    parser.add_argument('--vae-dtype', choices=('float32','bfloat16'), default='float32')
-    preliminary,_=parser.parse_known_args(argv)
-    if preliminary.config and Path(preliminary.config).suffix in ('.yaml','.yml'):
-        import yaml
-        document=yaml.safe_load(Path(preliminary.config).read_text())
-        for key,value in document.get('environment',{}).items():os.environ.setdefault(key,str(value))
-        defaults=document.get('training',{})
-        destinations={a.dest for a in parser._actions}
-        if set(defaults)-destinations:parser.error(f'Unknown training settings: {set(defaults)-destinations}')
-        parser.set_defaults(**defaults)
-    data_root = preliminary.data_root or parser.get_default('data_root')
-    if data_root:
-        from data.sources import release_geometry
-        geometry = release_geometry(data_root)
-        parser.set_defaults(**{k:geometry[k] for k in ('sequence_length','shuffle_block_rows') if k in geometry})
-    args=parser.parse_args(argv)
-    if not args.output:parser.error('Set --output or training.output in the experiment config')
-    for key in ('validation_suite','init_checkpoint','checkpoint_dir','eval_snapshot_dir'):
-        if getattr(args,key) is not None:setattr(args,key,Path(getattr(args,key)))
-    if args.min_lr is None:args.min_lr=args.lr*.1
-    if not math.isfinite(args.lr) or args.lr<=0 or not math.isfinite(args.min_lr) or not 0<=args.min_lr<=args.lr:
-        parser.error('Require finite lr > 0 and 0 <= min-lr <= lr')
-    if not math.isfinite(args.renderer_ema_decay) or not 0<=args.renderer_ema_decay<1:
-        parser.error('Require finite 0 <= renderer-ema-decay < 1')
-    if args.lr_decay_style == 'wsd' and args.lr_decay_start is not None and not (
-            args.lr_warmup_steps <= args.lr_decay_start < args.lr_decay_steps):
-        parser.error('wsd requires lr-warmup-steps <= lr-decay-start < lr-decay-steps')
-    if args.lr_decay_start is not None and args.lr_decay_style != 'wsd':
-        parser.error('--lr-decay-start applies only to --lr-decay-style wsd')
-    if args.eval_snapshot_every < 0:
-        parser.error('Require eval-snapshot-every >= 0')
-    if not 0 <= args.optimizer_offload_fraction <= 1:
-        parser.error('Require optimizer-offload-fraction in [0, 1]')
-    return args
+def _restore(args, run, model, optimizer, cfg, state, ema, real_data):
+    """Load the selected restart checkpoint. Returns (start_step, saved data cursor)."""
+    resumed = {} if real_data else None
+    start_step = 0
+    if args.resume:
+        start_step = checkpoint_io.load(
+            args.resume, model, optimizer, cfg, run.topology, state, data_state_out=resumed, ema=ema
+        )
+    if run.rank == 0:
+        restored = []
+        if args.resume:
+            restored = ["model", "optimizer", "FP32 masters", "CPU/NPU RNG", "consumed data cursor"]
+            if ema is not None:
+                restored.append("renderer FP32 EMA and update counter")
+        print(json.dumps(dict(resume=dict(path=args.resume, step=start_step, restored=restored))), flush=True)
+    return start_step, resumed
 
 
-def learning_rate(step, args):
-    if step < args.lr_warmup_steps:
-        return args.lr * (step + 1) / args.lr_warmup_steps
-    if args.lr_decay_style == 'constant':
-        return args.lr
-    start = args.lr_warmup_steps
-    if args.lr_decay_style == 'wsd':
-        # Warmup, then a stable plateau, then cosine to min-lr. The decay can be
-        # scheduled later, on resume, once the stopping point is known.
-        start = getattr(args, 'lr_decay_start', None)
-        if start is None or step < start:
-            return args.lr
-    progress = min(1., max(0., (step - start) /
-        max(1, args.lr_decay_steps - start)))
-    return args.min_lr + .5 * (args.lr - args.min_lr) * (1 + math.cos(math.pi * progress))
+def _remaining_budget(args, start_step):
+    """Steps left under --total-steps. True when the budget was already met."""
+    if args.total_steps is None:
+        return False
+    if args.total_steps < 1:
+        raise ValueError("total_steps must be positive")
+    args.steps = max(0, args.total_steps - start_step)
+    if not args.steps:
+        return True
+    args.warmup = min(args.warmup, args.steps - 1)
+    return False
 
 
-def data_loss_scales(batch,global_text_tokens,global_generation_images,dp):
-    """Global target averages after DP reduction, independent of pack sizes.
-
-    Understanding-only images remain in the backbone but must not change the
-    renderer denominator. A replica with zero selected images contributes zero.
-    """
-    return (dp*batch.text_indices.numel()/max(1,global_text_tokens),
-            dp*batch.generation_image_count/max(1,global_generation_images))
+def _profiler(args, run, complete):
+    if not (args.profile and run.rank in run.profile_ranks and not complete):
+        return nullcontext(), False
+    profile = torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+        schedule=torch.profiler.schedule(wait=args.warmup, warmup=1, active=2, repeat=1),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(str(run.output / "profile" / f"rank{run.rank}")),
+        record_shapes=True,
+        profile_memory=True,
+        with_stack=False,
+    )
+    return profile, True
 
 
 def main():
     args = parse_args()
-    if args.save_every < 0 or args.keep_checkpoints < 1:
-        raise ValueError('Require save-every >= 0 and keep-checkpoints >= 1')
-    if args.data_epochs < 1 or (args.data_epochs > 1 and not args.until_data_end):
-        raise ValueError('Multiple data epochs require --until-data-end and a positive epoch count')
-    if args.until_data_end:
-        if not args.data_root:raise ValueError('--until-data-end requires a finite --data-root')
-        args.total_steps=None
-        args.steps=(1<<63)-1
-    budget=args.total_steps if args.total_steps is not None else args.steps
-    if budget <= args.warmup or args.warmup<0 or args.micro_batch < 1 or args.grad_accum < 1:
-        raise ValueError('Require steps > warmup and positive batch/accumulation sizes')
-    if args.config and args.tiny:raise ValueError('Select either an explicit model config or the tiny validation model')
-    args.random_init = args.random_init or args.tiny
-    cfg = (tiny_config(linear_heads=16,linear_head_dim=128) if args.tiny else
-           RunConfig.load(args.config or ROOT/'configs/qwen35_2b_wan.yaml'))
-    if args.vision_assets is not None:cfg.vision_assets=args.vision_assets
-    if args.text_assets is not None:cfg.text_assets=args.text_assets
-    if args.wan_assets is not None:cfg.wan_assets=args.wan_assets
-    if args.wan_vae_assets is not None:cfg.wan_vae_assets=args.wan_vae_assets
-    if args.image_condition_queries is not None: cfg.image_condition_queries=args.image_condition_queries
-    if args.visual_query_mode is not None:cfg.visual_query_mode=args.visual_query_mode
-    if args.query_interaction is not None:cfg.query_interaction=args.query_interaction
-    if args.null_condition is not None:cfg.null_condition=args.null_condition
-    if args.preserve_documents:cfg.preserve_documents=True
-    if args.long_document_policy is not None:cfg.long_document_policy=args.long_document_policy
-    if args.dit_microbatch_tokens is not None:cfg.generation_token_budget=args.dit_microbatch_tokens
-    if args.dit_microbatch_images is not None:cfg.generation_microbatch_images=args.dit_microbatch_images
-    if args.rf is not None:cfg.rf=args.rf
-    if args.timestep_shift is not None:cfg.timestep_shift=args.timestep_shift
-    if not cfg.preserve_documents and (args.dit_microbatch_tokens is not None or args.dit_microbatch_images is not None):
-        raise ValueError('DiT microbatch flags require --preserve-documents or the whole-document config')
-    if args.max_images_per_pack is None:args.max_images_per_pack=0 if cfg.preserve_documents else 4
-    if args.synthetic and args.data_root:
-        raise ValueError('--synthetic and --data-root are mutually exclusive')
-    if cfg.preserve_documents and ((not args.data_root and not args.synthetic) or args.max_images_per_pack):
-        raise ValueError('Whole-document training needs real data and max-images-per-pack=0; bound DiT separately')
-    if args.data_root:
-        from data.sources import open_catalog
-        from data.packing import token_contract
-        catalog = open_catalog(args.data_root, args.source_root, args.shuffle_block_rows)
-        membership = catalog.check(args.allow_development_data)
-        geometry = catalog.meta.get('training_geometry', {})
-        for name in ('vision_max_pixels', 'generation_max_pixels'):
-            if name in geometry:
-                setattr(cfg, name, geometry[name])
-        data_tokens = token_contract(catalog.path, cfg)
-        if args.micro_batch != 1:
-            raise ValueError('Real variable-layout adapter currently requires the requested microbatch=1')
-    if args.ce_chunk is not None:
-        cfg.ce_chunk = args.ce_chunk
-    cfg.keep_attention_activations=args.keep_attention_activations
-    if args.no_checkpoint:
-        cfg.checkpoint_backbone = cfg.checkpoint_dit = False
-    if args.checkpoint:
-        cfg.checkpoint_backbone = cfg.checkpoint_dit = True
-    if args.checkpoint_backbone_layers or args.checkpoint_dit_layers:
-        cfg.checkpoint_backbone = cfg.checkpoint_dit = False
-        cfg.checkpoint_backbone_layers = args.checkpoint_backbone_layers
-        cfg.checkpoint_dit_layers = args.checkpoint_dit_layers
-    cfg.validate(args.tp)
-    if cfg.visual_cache and args.random_init:
-        raise ValueError('Pretrained visual caches cannot be used with a randomly initialized encoder')
-    from utils.assets import asset_manifest
-    from models.backbone_qwen35 import cast_for_training, load_pretrained
-    text_manifest=asset_manifest(cfg.text_assets) if cfg.text_assets else None
-    from utils.assets import vision_config
-    if args.micro_batch!=1:raise ValueError('Native-resolution packing requires micro_batch=1')
-    vision_config(cfg.vision_assets)
-    if args.tiny and not args.vision_assets:
-        vision_manifest = dict(synthetic_tower=vision_config(cfg.vision_assets))
-    else:
-        vision_manifest = asset_manifest(cfg.vision_assets)
-    if args.deterministic:
-        os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
-        torch.use_deterministic_algorithms(True)
-    complete_pretrained = bool(cfg.text_assets) and not args.random_init
-    skip_initialization = bool(args.resume or args.init_checkpoint) or complete_pretrained
-    P.initialize(args.tp, cfg, optimizer_instances=args.optimizer_instances,
-                 initialize_weights=not skip_initialization)
-    from models.modeling_umm import JointModel
-    torch.manual_seed(args.seed)
-    DEV.manual_seed_all(args.seed)
-    rank, world = dist.get_rank(), dist.get_world_size()
-    profile_ranks={int(r) for r in args.profile_ranks.split(',')}
-    if args.profile and (not profile_ranks or min(profile_ranks)<0 or max(profile_ranks)>=world):
-        raise ValueError('Profile ranks must be a nonempty subset of the training world')
-    dp = P.dp_size()
-    if args.global_batch:
-        if args.global_batch % (dp * args.micro_batch):
-            raise ValueError('global_batch must be divisible by DP * micro_batch')
-        args.grad_accum = args.global_batch // (dp * args.micro_batch)
-    global_batch = args.micro_batch * dp * args.grad_accum
-    if args.data_prefetch==0:args.data_prefetch=max(4,args.grad_accum+4)
-    output = Path(args.output)
-    if rank == 0:
-        output.mkdir(parents=True, exist_ok=True)
-    dist.barrier()
-    checkpoint_root = args.checkpoint_dir or output
-    eval_snapshot_root = args.eval_snapshot_dir or (
-        args.checkpoint_dir.parent/'eval_snapshots' if args.checkpoint_dir else output/'eval_snapshots')
-    if args.eval_snapshot_every:
-        checkpoint_path, snapshot_path = checkpoint_root.resolve(), eval_snapshot_root.resolve()
-        if (snapshot_path == checkpoint_path or
-                (snapshot_path.is_relative_to(checkpoint_path) and
-                 snapshot_path.relative_to(checkpoint_path).parts[0].startswith('step_'))):
-            raise ValueError('Evaluation snapshots must be outside checkpoint step directories and their retention root')
-    if args.auto_resume:
-        from utils.checkpoint_catalog import latest, remove_incomplete, prune
-        selection = [None]
-        if rank == 0:
-            try:
-                path, rejected = latest(checkpoint_root)
-                remove_incomplete(checkpoint_root)
-                if path:prune(checkpoint_root, args.keep_checkpoints)
-                selection[0] = dict(path=path, skipped=rejected)
-            except Exception as error:
-                selection[0] = dict(error=str(error))
-        dist.broadcast_object_list(selection, src=0)
-        if 'error' in selection[0]:raise RuntimeError(selection[0]['error'])
-        args.resume = selection[0]['path']
-        skip_initialization = bool(args.resume or args.init_checkpoint) or complete_pretrained
-        if rank == 0:print(json.dumps(dict(checkpoint_selection=selection[0])), flush=True)
-    startup_begin = time.perf_counter()
-    if skip_initialization:
-        from transformers.initialization import no_init_weights
-        construction = no_init_weights()
-    else:
-        construction = nullcontext()
-    with construction:
-        model = cast_for_training(JointModel(cfg))
-    startup = dict(construct_seconds=time.perf_counter()-startup_begin,
-                   skipped_random_initialization=skip_initialization)
-    loaded_weights=None
-    if not args.resume and not args.init_checkpoint and not args.random_init:
-        if cfg.text_assets:loaded_weights=load_pretrained(model,cfg.text_assets)
-        else:model.patch_embed.load_pretrained(cfg.vision_assets)
-        loaded_weights=dict(backbone=loaded_weights,renderer=model.renderer.load_pretrained(cfg.wan_assets))
-    model = model.to(device=ACCEL).train()
-    if args.init_checkpoint and not args.resume:
-        loaded_weights=checkpoint_io.initialize_model(args.init_checkpoint,model,cfg)
-    if cfg.null_token_id is not None and not (args.resume or args.init_checkpoint):
-        # Initialize the extension row once, with the same private RNG in every arm.
-        first=getattr(model.embedding,'vocab_start_index',0)
-        local=cfg.null_token_id-first
-        if 0 <= local < model.embedding.weight.shape[0]:
-            generator=torch.Generator(device='cpu').manual_seed(args.seed)
-            value=torch.randn(cfg.width,generator=generator,dtype=torch.float32)*0.02
-            with torch.no_grad():
-                model.embedding.weight[local].copy_(value)
-        startup['initialized_null_token_id']=cfg.null_token_id
-    startup['weights_to_device_seconds'] = time.perf_counter()-startup_begin
-    if rank == 0:print(json.dumps(dict(startup=startup)),flush=True)
-    if args.data_root and args.data_mode == 'B':
-        model.patch_embed.requires_grad_(False)
-        model.renderer.requires_grad_(False)
-    # Count TP shards once and count replicated tensors once.
-    unique_parameters = [p for p in model.parameters()
-        if getattr(p, 'tensor_model_parallel', False) or P.state().get_tensor_model_parallel_rank() == 0]
-    count = torch.tensor([sum(p.numel() for p in unique_parameters),
-                          sum(p.numel() for p in unique_parameters if p.requires_grad)],
-                         device=ACCEL, dtype=torch.int64)
-    if args.tp > 1:
-        dist.all_reduce(count, group=P.state().get_tensor_model_parallel_group())
-    parameters,trainable_parameters = count.tolist()
-    wrapped, optimizer = P.make_optimizer(model, args.lr, bucket_size=args.bucket_size,
-        overlap_param_gather=not args.no_param_overlap,
-        optimizer_offload_fraction=args.optimizer_offload_fraction,
-        grad_reduce_in_fp32=not args.bf16_grad_reduce)
-    ema=None
-    if args.renderer_ema_decay:
-        if args.data_mode=='B':raise ValueError('EMA requires a trainable renderer')
-        from training.ema import RendererEMA
-        ema=RendererEMA(model,optimizer,wrapped,args.renderer_ema_decay)
-    frozen_in_buckets=[name for name,p in model.named_parameters()
-                       if not p.requires_grad and p in wrapped.param_to_bucket_group]
-    if frozen_in_buckets:raise RuntimeError(f'Frozen parameters entered gradient buckets: {frozen_in_buckets}')
-    training_scope=dict(freeze_vision=cfg.freeze_vision,freeze_vision_merger=cfg.freeze_vision_merger,
-                        frozen_parameters_in_gradient_buckets=len(frozen_in_buckets))
-    tower=model.patch_embed.visual
-    training_scope.update(vision_encoder_training=tower.blocks.training,
-                          vision_encoder_recompute=tower.recompute)
-    topology = dict(tp=args.tp, dp=dp, pp=1, cp=1, optimizer_instances=args.optimizer_instances)
-    training_state = {key: getattr(args, key) for key in ('lr', 'min_lr', 'lr_decay_style',
-        'lr_warmup_steps', 'lr_decay_steps', 'seed', 'sequence_length', 'images', 'micro_batch', 'grad_accum')}
-    if args.lr_decay_style == 'wsd':
-        # The tail of a WSD schedule is decided while training; it never
-        # changes steps already taken, so it is not part of the resume contract.
-        training_state.pop('lr_decay_steps')
-    training_state['renderer_schedule_sha256']=hashlib.sha256((Path(__file__).parent/'renderer_schedule.py').read_bytes()).hexdigest()
-    training_state['initialization_checkpoint']=str(args.init_checkpoint) if args.init_checkpoint else None
-    training_state['deterministic']=args.deterministic
-    training_state['optimizer_offload_fraction']=args.optimizer_offload_fraction
-    training_state['cuda_gdn_sha256']=hashlib.sha256((ROOT/'ops/cuda_gated_delta.py').read_bytes()).hexdigest()
-    training_state['grad_reduce_in_fp32']=not args.bf16_grad_reduce
-    from ops.functional import _COMPILE_MODULATION
-    training_state['kernel_options'] = dict(
-        compile_modulation=_COMPILE_MODULATION,
-        attention_tile=os.environ.get('PRETRAIN_ATTENTION_TILE','0'))
-    # A kernel switch that changes speed or numerics must be attributable from
-    # the run record alone, without recovering it from source hashes later.
-    import ops.cuda_fused as cuda_fused
-    training_state['kernel_options']['cuda_fused_norm']=(
-        cuda_fused._ENABLED)
-    training_state['kernel_options']['backend']=accel.BACKEND
-    training_state['kernel_options']['cuda_fused_swiglu']=(
-        cuda_fused._SWIGLU_ENABLED if accel.BACKEND=='cuda' else None)
-    training_state['kernel_options']['cuda_fused_ops']=(
-        cuda_fused._OPS_ENABLED)
-    training_state['kernel_options']['grad_reduce_in_fp32']=not args.bf16_grad_reduce
-    from ops import flex_cq as _flex
-    training_state['kernel_options']['flex_attention']=_flex._ENABLED
-    training_state['kernel_options']['flex_tiles']=(
-        _flex.tile_options(cfg.head_dim,'%d%d'%torch.cuda.get_device_capability())
-        if _flex._ENABLED and accel.BACKEND=='cuda' else None)
-    from ops import cuda_cross_entropy as _fused_ce
-    training_state['kernel_options']['cuda_fused_ce']=(
-        _fused_ce._ENABLED)
-    training_state['qwen35_assets']=text_manifest
-    if ema is not None:
-        training_state['renderer_ema']=dict(schema=ema.schema,module='renderer',decay=ema.decay,dtype='float32',
-            adapter_sha256=hashlib.sha256((Path(__file__).parent/'ema.py').read_bytes()).hexdigest())
-    from data.cache import encoder_identity
-    training_state['wan_assets']=dict(generator=encoder_identity(cfg.wan_assets),vae=encoder_identity(cfg.wan_vae_assets))
-    training_state['wan_adapter_sha256']=hashlib.sha256((ROOT/'models/generator_wan21.py').read_bytes()).hexdigest()
-    training_state['backbone_adapter_sha256']=hashlib.sha256(b''.join(
-        (ROOT/name).read_bytes() for name in
-        ('models/backbone_qwen35.py','ops/gated_delta_layout.py','models/cq_backbone.py',
-         'models/modeling_umm.py','data/batch_layout.py','models/cq_layout.py','ops/attention.py',
-         'ops/attention_layout.py','ops/flex_cq.py','ops/cuda_gated_delta.py','ops/cuda_fused.py',
-         'ops/cuda_cross_entropy.py','ops/cuda_compile.py',
-         'training/renderer_schedule.py','training/loss.py','ops/cross_entropy.py','ops/functional.py','distributed/megatron.py'))).hexdigest()
-    training_state['vision_assets']=vision_manifest
-    training_state['vision_adapter_sha256']=hashlib.sha256(
-        (ROOT/'models/vision_encoder.py').read_bytes()+(ROOT/'models/cq_backbone.py').read_bytes()).hexdigest()
-    resumed_data = {} if args.data_root else None
-    if args.data_root:
-        from data.tokenizer import tokenizer_metadata
-        online_tokenizer=tokenizer_metadata(cfg,catalog.meta['tokenizer'])
-        training_state['data'] = dict(snapshot=catalog.meta['identity'], membership=membership['identity'],
-            mode=args.data_mode, vae_dtype=args.vae_dtype, tokenizer=online_tokenizer,
-            tokenizer_counting_matches_corpus=online_tokenizer==catalog.meta['tokenizer'],
-            latent_encoder=args.latent_encoder if args.data_mode=='A' else None, max_images_per_pack=args.max_images_per_pack,
-            pack_padding_multiple=args.pack_padding_multiple)
-        if args.data_epochs > 1:
-            training_state['data']['epochs'] = args.data_epochs
-        adapter_files=sorted((ROOT/'data').glob('*.py'))
-        training_state['data']['adapter_sha256']=hashlib.sha256(b''.join(p.read_bytes() for p in adapter_files)).hexdigest()
-    start_step = checkpoint_io.load(args.resume, model, optimizer, cfg, topology, training_state,
-                                   data_state_out=resumed_data,ema=ema) if args.resume else 0
-    if rank == 0:
-        restored=['model','optimizer','FP32 masters','CPU/NPU RNG','consumed data cursor'] if args.resume else []
-        if args.resume and ema is not None:restored.append('renderer FP32 EMA and update counter')
-        print(json.dumps(dict(resume=dict(path=args.resume, step=start_step,
-            restored=restored))), flush=True)
-    budget_already_complete=False
-    if args.total_steps is not None:
-        if args.total_steps<1: raise ValueError('total_steps must be positive')
-        args.steps=max(0,args.total_steps-start_step)
-        budget_already_complete=not args.steps
-        if not budget_already_complete:args.warmup=min(args.warmup,args.steps-1)
+    cfg, data, assets = configure.resolve(args)
+    run = model_setup.initialize(args, cfg)
+    roots = model_setup.storage_roots(args, run.output)
+    model_setup.select_restart(args, run.rank, roots[0])
+    model, loaded, startup = model_setup.build_model(args, cfg, run)
+    parameters = model_setup.count_parameters(model, args.tp)
+    wrapped, optimizer, ema, scope = model_setup.build_optimizer(args, cfg, model)
+    state = contract.training_state(args, cfg, ema, assets, data)
+    start_step, resumed = _restore(args, run, model, optimizer, cfg, state, ema, data is not None)
+    complete = _remaining_budget(args, start_step)
+
     # Different DP replicas see different data. TP ranks must see identical data.
-    loader = preparer = ordered_buckets = None
-    if args.data_root and not budget_already_complete:
-        from data.stream import DocumentStream
-        from data.packing import Packer, ConsumedLoader
-        from data.codec import DevicePreparer
-        from data.device import DeviceLoader
-        from distributed.communication import OrderedGradientBuckets, OrderedParameterGathers, finish_parameter_gathers
-        # Spawned CPU workers must not autoload the NPU backend on import.
-        os.environ['TORCH_DEVICE_BACKEND_AUTOLOAD']='0'
-        with torch.random.fork_rng(devices=[DEV.current_device()],device_type=ACCEL):
-            preparer = DevicePreparer(cfg, device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
-                vae_dtype=getattr(torch,args.vae_dtype), encoder=args.latent_encoder if args.data_mode=='A' else None)
-
-        def open_epoch(epoch, cursor=None):
-            docs = DocumentStream(args.data_root, args.data_mode, P.dp_rank(), dp, args.seed, epoch=epoch,
-                workers=args.data_workers, prefetch=args.data_prefetch,
-                source_root=args.source_root, block_rows=args.shuffle_block_rows, tokenize_rows=args.tokenize_rows,
-                image_threads=args.image_workers, image_prefetch=args.image_prefetch,
-                state=cursor['documents'] if cursor else None,
-                allow_development=args.allow_development_data,cfg=cfg,sequence_length=args.sequence_length)
-            packer = Packer(docs, cfg, args.sequence_length, data_tokens, cursor or None,
-                            pin_device=f'{ACCEL}:{int(os.environ.get("LOCAL_RANK",0))}',
-                            max_images=args.max_images_per_pack,padding_multiple=args.pack_padding_multiple)
-            host = ConsumedLoader(packer, args.data_prefetch, cursor or None)
-            return docs, packer, DeviceLoader(host, preparer, args.device_prefetch)
-
-        data_epoch = resumed_data['documents']['signature']['epoch'] if resumed_data else 0
-        if not 0 <= data_epoch < args.data_epochs:
-            raise ValueError('Invalid saved data epoch')
-        docs, packer, loader = open_epoch(data_epoch, resumed_data)
-        ordered_buckets = OrderedGradientBuckets(wrapped)
-        ordered_gathers = OrderedParameterGathers(wrapped)
-        from data.runtime import empty_batch
-        padding_batch = empty_batch(cfg, data_tokens).to(ACCEL)
-    elif not budget_already_complete:
-        batch = fake_batch(cfg, args.sequence_length, args.micro_batch, args.images,
-                           seed=args.seed + P.dp_rank(), device=ACCEL)
-    environment = dict(torch=torch.__version__,
-        device=DEV.get_device_name(DEV.current_device()),
-        total_memory=DEV.get_device_properties(DEV.current_device()).total_memory,
-        world_size=world, topology=topology, model=cfg.to_dict(), parameters=parameters,
-        trainable_parameters=trainable_parameters,frozen_parameters=parameters-trainable_parameters,
-        training_scope=training_scope,
-        arguments={k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()}, global_batch=global_batch,
-        capacity_slots_per_update_upper_bound=global_batch*args.sequence_length,
-        training_backend=('Megatron Core / NCCL'),
-        attention_backend=('upstream flash-linear-attention GatedDeltaNet + PyTorch SDPA'),
-        measured_on=accel.accel_type(), cuda=torch.version.cuda, synthetic=not bool(args.data_root),
-        pretrained_weights=loaded_weights,qwen35_assets=text_manifest,startup=startup)
-    if ema is not None:
-        environment['renderer_ema']=dict(**ema.metadata(),local_storage_bytes=ema.local_bytes,
-                                    local_optimizer_shards=len(ema.shadows))
-    environment['kernel_options'] = training_state['kernel_options']
-    if loader:
-        environment['data'] = dict(snapshot=catalog.meta, membership=membership,
-            online_tokenizer=online_tokenizer,tokenizer_counting_matches_corpus=docs.counting_matches_corpus,
-            mode=args.data_mode,
-            latent_grid='dynamic',actual_generation_image_tokens='dynamic',
-            generation_max_pixels=cfg.generation_max_pixels,generation_token_budget=cfg.generation_token_budget,rf=cfg.rf,
-            timestep_shift=cfg.timestep_shift,query_interaction=cfg.query_interaction,null_condition=cfg.null_condition,
-            fake_latents=args.latent_encoder=='fake',
-            local_trainable_parameters=sum(p.numel() for p in model.parameters() if p.requires_grad))
-    from utils.experiment import source_hashes
-    environment['source_sha256'] = source_hashes()
-    import utils.dependencies as stack
-    environment['stack'] = stack.name()
-    environment['dependencies'] = json.loads(stack.lock_path().read_text())
-    environment['installed_versions'] = stack.installed_versions()
-    environment['nccl'] = torch.cuda.nccl.version()
-    host = dict(rank=rank, local_rank=int(os.environ.get('LOCAL_RANK', 0)),
-        hostname=socket.gethostname(), tp_rank=P.state().get_tensor_model_parallel_rank(),
-        dp_rank=P.dp_rank())
-    hosts = [None] * world
-    dist.all_gather_object(hosts, host)
-    environment['rank_placement'] = hosts
-    if rank == 0:
-        (output / 'run.json').write_text(json.dumps(environment, indent=2))
-        print(json.dumps(environment), flush=True)
-    profile = nullcontext()
-    profile_this_rank = args.profile and rank in profile_ranks and not budget_already_complete
-    if profile_this_rank:
-        profile = torch.profiler.profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=args.warmup, warmup=1, active=2, repeat=1),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(str(output/'profile'/f'rank{rank}')),
-            record_shapes=True, profile_memory=True, with_stack=False)
+    pipeline = synthetic = None
+    if data is not None and not complete:
+        pipeline = DataPipeline(args, cfg, data, resumed)
+    elif not complete:
+        synthetic = fake_batch(
+            cfg, args.sequence_length, args.micro_batch, args.images, seed=args.seed + P.dp_rank(), device=ACCEL
+        )
+    record, host = contract.run_record(
+        args, cfg, run, model, ema, state, assets, data, pipeline, loaded, startup, parameters, scope
+    )
+    trainer = Trainer(args, cfg, run, model, wrapped, optimizer, ema, pipeline, synthetic)
+    persistence = Persistence(args, cfg, run, model, wrapped, optimizer, ema, state, record, loaded, roots)
+    persistence.pipeline = pipeline
+    persistence.start_step = start_step
+    persistence.last_saved_step = start_step if args.resume else -1
+    preparer = pipeline.preparer if pipeline else None
+    profile, profile_this_rank = _profiler(args, run, complete)
     DEV.synchronize()
-    completed_step = start_step
-    last_saved_step = start_step if args.resume else -1
-    def save_checkpoint(step):
-        from utils.checkpoint_catalog import prune, durable_json
-        checkpoint_begin = time.perf_counter()
-        wrapped.start_param_sync(force_sync=True)
-        path = checkpoint_root/f'step_{step:07d}'
-        checkpoint_io.save(path, model, optimizer, step, cfg, topology, training_state,
-                           data_state=loader.state_dict() if loader else None,ema=ema)
-        if rank == 0:
-            removed = prune(checkpoint_root, args.keep_checkpoints)
-            event = dict(step=step, path=str(path), keep=args.keep_checkpoints,
-                         seconds=time.perf_counter()-checkpoint_begin, removed=removed)
-            durable_json(checkpoint_root/'latest.json', event)
-            with (output/'checkpoints.jsonl').open('a') as handle:handle.write(json.dumps(event)+'\n')
-            print(json.dumps(dict(checkpoint_committed=event)), flush=True)
-        dist.barrier()
-    measurements = []
-    eval_snapshot_events=[]
-    def save_eval_snapshot(step):
-        from utils.eval_snapshot import save
-        provenance=dict(source_sha256=environment['source_sha256'],
-            dependencies=environment['dependencies'],
-            runtime={key:environment[key] for key in ('torch','stack','cuda')},
-            assets={key:training_state[key] for key in ('qwen35_assets','vision_assets','wan_assets')
-                    if key in training_state},
-            inference_inputs={key:training_state.get('data',{}).get(key) for key in
-                              ('tokenizer','latent_encoder','vae_dtype')},
-            resumed_from=args.resume,initial_weights=loaded_weights)
-        event=save(eval_snapshot_root/f'step_{step:07d}',model,wrapped,step,cfg,topology,
-                   ema=ema,provenance=provenance)
-        eval_snapshot_events.append(event)
-        if rank==0:
-            with (output/'eval_snapshots.jsonl').open('a') as handle:handle.write(json.dumps(event)+'\n')
-            print(json.dumps(dict(eval_snapshot=event)),flush=True)
-    validation_events=[]
-    validation_clock=output/'validation_clock.json'
-    last_validation=[time.time()]
-    if rank==0 and validation_clock.exists():
-        last_validation[0]=json.loads(validation_clock.read_text())['time']
-    def validation_due(step):
-        due=bool(args.validate_every and step%args.validate_every==0)
-        if args.validate_every_hours:
-            # Rank zero owns the wall clock; every rank must take the same branch.
-            flag=[rank==0 and time.time()-last_validation[0]>=args.validate_every_hours*3600]
-            dist.broadcast_object_list(flag,src=0)
-            due=due or flag[0]
-        return due
-    def validate(step):
-        if not args.validation_suite:return
-        # A preempted job restarts at a step it may already have reported.
-        done=[rank==0 and (output/'validation'/f'step_{step:07d}'/'results.json').exists()]
-        dist.broadcast_object_list(done,src=0)
-        if done[0]:return
-        from evaluations.sampling import run_suite
-        validation_begin=time.perf_counter()
-        wrapped.start_param_sync(force_sync=True)
-        hooks=wrapped.use_forward_hook
-        if hooks:wrapped.disable_forward_pre_hook(param_sync=False)
-        weights=dict(backbone='online',renderer='ema' if ema is not None else 'online')
-        if ema is not None:weights['ema']=ema.metadata()
-        try:
-            with ema.average_parameters() if ema is not None else nullcontext():
-                event=run_suite(model,args.validation_suite,output/'validation'/f'step_{step:07d}',preparer,
-                                weight_sources=weights)
-        finally:
-            if hooks:wrapped.enable_forward_pre_hook()
-        DEV.synchronize();dist.barrier()
-        event['sampling_seconds']=event['seconds']
-        event['seconds']=time.perf_counter()-validation_begin
-        event['step']=step
-        validation_events.append(event)
-        if rank==0:
-            from utils.file_sync import atomic_json
-            result_path=output/'validation'/f'step_{step:07d}'/'results.json'
-            result=json.loads(result_path.read_text());result['end_to_end_seconds']=event['seconds']
-            atomic_json(result_path,result)
-            with (output/'validation.jsonl').open('a') as handle:handle.write(json.dumps(event)+'\n')
-            last_validation[0]=time.time()
-            atomic_json(validation_clock,dict(time=last_validation[0],step=step))
-            print(json.dumps(dict(validation=event)),flush=True)
+
     # A restart checkpoint can commit just before its evaluation export is
     # interrupted. Revisit that boundary before consuming the next batch.
-    if args.eval_snapshot_every and start_step>0 and start_step%args.eval_snapshot_every==0:
-        save_eval_snapshot(start_step)
-    if budget_already_complete:
-        if rank==0:print(json.dumps(dict(status='budget_already_complete',step=start_step)),flush=True)
-        dist.barrier();dist.destroy_process_group();return
-    if args.validate_first:validate(start_step)
+    if args.eval_snapshot_every and start_step > 0 and start_step % args.eval_snapshot_every == 0:
+        persistence.save_eval_snapshot(start_step)
+    if complete:
+        if run.rank == 0:
+            print(json.dumps(dict(status="budget_already_complete", step=start_step)), flush=True)
+        dist.barrier()
+        dist.destroy_process_group()
+        return
+    if args.validate_first:
+        persistence.validate(start_step, preparer)
+
+    completed_step = start_step
+    measurements = []
     measured_begin = None
     begin = time.perf_counter()
     with profile as profiler:
@@ -640,310 +133,52 @@ def main():
                 DEV.synchronize()
                 dist.barrier()
                 measured_begin = time.perf_counter()
-            lr = learning_rate(start_step + local_step, args)
-            for opt in checkpoint_io._optimizers(optimizer):
-                for group in opt.optimizer.param_groups:
-                    group['lr'] = lr * group.get('lr_mult', 1.)
-            optimizer.zero_grad()
-            wrapped.zero_grad_buffer()
-            if ordered_buckets: ordered_buckets.begin()
-            DEV.reset_peak_memory_stats()
-            begin = time.perf_counter()
-            phase_events = []
-            renderer_forward_events = []
-            loss_totals=[torch.zeros((),device=ACCEL,dtype=torch.float32) for _ in range(3)]
-            consumed_receipts=[]; data_wait_seconds=0.; data_prepare_seconds=0.
-            if loader:
-                wait_begin=time.perf_counter()
-                while True:
-                    micro_batches=loader.next_group(args.grad_accum)
-                    counts=torch.tensor([sum(x[0].text_indices.numel() for x in micro_batches if x),
-                        sum(len(x[0].image_indices) for x in micro_batches if x),
-                        sum(x[1]['body_tokens'] for x in micro_batches if x),
-                        sum(x[1]['occupied'] for x in micro_batches if x),
-                        sum(x is not None for x in micro_batches),
-                        sum(x[1].get('generation_tokens',0) for x in micro_batches if x),
-                        sum(d['completed'] for x in micro_batches if x for d in x[1]['documents']),
-                        sum(d['completed'] and d.get('direction')=='T2I' for x in micro_batches if x for d in x[1]['documents']),
-                        sum(d['completed'] and d.get('direction')=='I2T' for x in micro_batches if x for d in x[1]['documents']),
-                        sum(x[0].ids.shape[1]+len(x[0].mainline.query_positions) for x in micro_batches if x),
-                        sum(x[0].ids.shape[1]-x[1]['occupied'] for x in micro_batches if x),
-                        sum(x[1].get('dit_microbatches',int(bool(x[0].generation_image_count))) for x in micro_batches if x),
-                        sum(x[0].generation_image_count for x in micro_batches if x),
-                        sum(x[1]['condition_query_tokens'] for x in micro_batches if x),
-                        sum(x[1]['unconditional_images'] for x in micro_batches if x),
-                        sum(x[1]['instruction_dropped_images'] for x in micro_batches if x),
-                        sum(x[1]['instruction_dropout_eligible_images'] for x in micro_batches if x)],device=ACCEL,dtype=torch.int64)
-                    dist.all_reduce(counts,group=P.state().get_data_parallel_group())
-                    counts=counts.tolist()
-                    if counts[4]:
-                        break
-                    if args.data_epochs > 1:
-                        from utils.checkpoint_catalog import durable_json
-                        cursor = loader.state_dict()
-                        if (cursor['documents']['position'] != {'block': docs.total, 'row': 0}
-                                or cursor['element'] or cursor['offset']):
-                            raise RuntimeError('Epoch ended before the last complete document was acknowledged')
-                        durable_json(output/f'epoch_{data_epoch:02d}_rank_{rank:05d}.json',
-                                     dict(epoch=data_epoch, step=completed_step, rank=rank, packs=cursor['serial'],
-                                          documents=cursor['documents']))
-                    if data_epoch + 1 == args.data_epochs:
-                        break
-                    if completed_step > last_saved_step and (args.save_every or args.save_final):
-                        save_checkpoint(completed_step)
-                        last_saved_step = completed_step
-                    loader.close()
-                    data_epoch += 1
-                    docs, packer, loader = open_epoch(data_epoch)
-                data_wait_seconds=time.perf_counter()-wait_begin
-                if counts[4]==0:
-                    args.steps=local_step
-                    break
-                # Each DP replica may have a different number of packs. Its
-                # final real microbatch launches the same ordered DP reduction
-                # sequence. Only an exhausted replica needs one zero-loss
-                # graph; don't run full empty graphs up to the GA upper bound.
-                micro_batches=[x for x in micro_batches if x] or [None]
-            accumulation_steps=len(micro_batches) if loader else args.grad_accum
-            for micro_step in range(accumulation_steps):
-                scales=None
-                if loader:
-                    item=micro_batches[micro_step]
-                    prep_begin=time.perf_counter()
-                    if item is None:
-                        batch=padding_batch; scales=(0.,0.)
-                    else:
-                        cpu_batch,receipt=item[0],item[1]
-                        scales=data_loss_scales(cpu_batch,counts[0],counts[12],dp)
-                        batch=loader.acquire(item)
-                        consumed_receipts.append(receipt)
-                    data_prepare_seconds+=time.perf_counter()-prep_begin
-                context = wrapped.no_sync() if micro_step + 1 < accumulation_steps else nullcontext()
-                with context:
-                    if args.phase_timing:
-                        events = [DEV.Event(enable_timing=True) for _ in range(3)]
-                        renderer_forward_events.append([])
-                        events[0].record()
-                    deferred=bool(batch.generation is not None and batch.generation.microbatches)
-                    outputs = wrapped(batch, reference=args.split_reference, compute_image_loss=not deferred)
-                    losses = compose_losses(outputs, cfg, scales)
-                    if ordered_buckets:
-                        finish_parameter_gathers(wrapped)
-                        if not len(batch.image_indices): ordered_buckets.absent_images()
-                        elif not batch.generation_image_count:ordered_buckets.absent_renderer()
-                        if not batch.text_indices.numel():ordered_buckets.absent_text()
-                    if args.phase_timing:
-                        events[1].record()
-                    if deferred:
-                        backward_deferred_renderer(model,batch,losses,1. if loader else 1/args.grad_accum,wrapped,
-                            renderer_forward_events[-1] if args.phase_timing else None,
-                            image_factor=cfg.image_weight*(scales[1] if scales is not None else 1.))
-                    else:(losses['loss'] / (1 if loader else args.grad_accum)).backward()
-                    if args.phase_timing:
-                        events[2].record()
-                        phase_events.append(events)
-                # The objective accumulates every microbatch. Logging only the
-                # last scaled loss would shrink it by GA and misweight layouts.
-                text_scale,image_scale=scales if scales is not None else (1/args.grad_accum,1/args.grad_accum)
-                loss_totals[0].add_(losses['loss'].detach().float()/(1 if loader else args.grad_accum))
-                loss_totals[1].add_(losses['text_loss'].detach().float()*text_scale)
-                loss_totals[2].add_(losses['image_loss'].detach().float()*image_scale)
-            if ordered_buckets: ordered_buckets.finish()
-            P.finish_grad_sync(wrapped)
-            if args.phase_timing:
-                optimizer_events = [DEV.Event(enable_timing=True) for _ in range(2)]
-                optimizer_events[0].record()
-            updated, grad_norm, _ = optimizer.step()
-            if ema is not None and updated and math.isfinite(float(grad_norm)):ema.update()
-            if args.phase_timing:
-                optimizer_events[1].record()
-            DEV.synchronize()
-            data_device_wait_seconds=loader.device_wait_seconds() if loader else 0.
-            local_seconds=time.perf_counter()-begin
-            if args.phase_timing:
-                # DiT forward/backward interleave in the staged schedule. Add
-                # its measured forward time to forward_ms, not backward_ms.
-                renderer_forward_ms=[sum(a.elapsed_time(b) for a,b in pairs) for pairs in renderer_forward_events]
-                pack_forward_ms=[e[0].elapsed_time(e[1])+r for e,r in zip(phase_events,renderer_forward_ms)]
-                pack_backward_ms=[e[1].elapsed_time(e[2])-r for e,r in zip(phase_events,renderer_forward_ms)]
-            if loader:
-                rank_row=dict(step=start_step+local_step+1,seconds=local_seconds,
-                    host_wait=data_wait_seconds,prepare_host=data_prepare_seconds,device_wait=data_device_wait_seconds,
-                    packs=[dict(length=x[0].ids.shape[1],text=x[0].text_indices.numel(),
-                        queries=len(x[0].mainline.query_positions),images=len(x[0].image_indices),
-                        generation_images=x[0].generation_image_count,
-                        vision_patches=sum(x[0].vision.lengths) if x[0].vision else 0,
-                        generation_tokens=x[1].get('generation_tokens',0),
-                        dit_microbatches=x[1].get('dit_microbatches',1 if x[0].generation_image_count else 0),
-                        generation_grids=x[0].generation.grids if x[0].generation else None) for x in micro_batches if x])
-                if args.phase_timing:
-                    rank_row.update(forward_ms=sum(pack_forward_ms),backward_ms=sum(pack_backward_ms))
-                    for pack,fwd,bwd,rfwd in zip(rank_row['packs'],pack_forward_ms,pack_backward_ms,renderer_forward_ms):
-                        pack.update(forward_ms=fwd,backward_ms=bwd,deferred_renderer_forward_ms=rfwd)
-                with (output/f'timing_rank_{rank:05d}.jsonl').open('a') as f:f.write(json.dumps(rank_row)+'\n')
-            elapsed = torch.tensor(local_seconds, device=ACCEL, dtype=torch.float32)
-            dist.all_reduce(elapsed, op=dist.ReduceOp.MAX)
-            seconds = elapsed.item()
-            local_memory = DEV.max_memory_allocated()
-            memory = torch.tensor(local_memory, device=ACCEL, dtype=torch.int64)
-            dist.all_reduce(memory, op=dist.ReduceOp.MAX)
-            values = torch.stack(loss_totals)
-            dist.all_reduce(values, group=P.state().get_data_parallel_group())
-            values /= dp
-            if not torch.isfinite(values).all().item() or not updated or not math.isfinite(float(grad_norm)):
-                raise FloatingPointError('Nonfinite loss or skipped optimizer update')
-            for receipt in consumed_receipts: loader.acknowledge(receipt)
-            completed_step = start_step+local_step+1
-            rank_step = dict(step=completed_step, rank=rank, tp_rank=host['tp_rank'], dp_rank=P.dp_rank(),
-                hostname=host['hostname'], seconds=local_seconds, peak_memory_gib=local_memory/2**30,
-                loss=loss_totals[0].item(), text_loss=loss_totals[1].item(), image_loss=loss_totals[2].item(),
-                grad_norm=float(grad_norm), optimizer_updated=bool(updated),
-                global_tokens_per_step=global_batch*args.sequence_length,
-                warmup=local_step < args.warmup)
-            if loader and args.data_epochs > 1:
-                rank_step['data_epoch'] = data_epoch
-            with (output/f'steps_rank_{rank:05d}.jsonl').open('a') as f:
-                f.write(json.dumps(rank_step)+'\n')
-            if args.log_all_ranks:
-                print(json.dumps(dict(rank_step=rank_step)), flush=True)
-            if loader:
-                with (output/f'consumed_rank_{rank:05d}.jsonl').open('a') as trace:
-                    trace.write(json.dumps(dict(step=start_step+local_step+1,receipts=consumed_receipts))+'\n')
-            row = dict(step=start_step+local_step+1, seconds=seconds,
-                tokens_per_second=global_batch*args.sequence_length/seconds,
-                peak_memory_gib=memory.item()/2**30, loss=values[0].item(),
-                text_loss=values[1].item(), image_loss=values[2].item(), grad_norm=float(grad_norm),
-                warmup=local_step < args.warmup, lr=lr)
-            if ema is not None:row.update(renderer_ema_decay=ema.decay,renderer_ema_updates=ema.num_updates)
-            if loader:
-                import resource
-                row['capacity_slots_per_second']=row.pop('tokens_per_second')
-                row['capacity_slots_per_second']=counts[4]*args.sequence_length/seconds
-                resource_values=torch.tensor([data_wait_seconds,data_prepare_seconds,data_device_wait_seconds,
-                    resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/2**20],device=ACCEL)
-                dist.all_reduce(resource_values,op=dist.ReduceOp.MAX)
-                row.update(body_tokens=counts[2],occupied_tokens=counts[3],images_consumed=counts[1],
-                           generation_images=counts[12],flow_samples=counts[12]*cfg.rf,
-                           generation_tokens=counts[5],documents_completed=counts[6],
-                           t2i_captions_completed=counts[7],i2t_captions_completed=counts[8],
-                           active_microbatches=counts[4],data_wait_seconds=resource_values[0].item(),
-                           supervised_text_tokens=counts[0],
-                           condition_query_tokens=counts[13],unconditional_images=counts[14],
-                           instruction_dropped_images=counts[15],instruction_dropout_eligible_images=counts[16],
-                           backbone_processed_slots=counts[9],padding_tokens=counts[10],dit_microbatches=counts[11],
-                           data_prepare_seconds=resource_values[1].item(),data_device_wait_seconds=resource_values[2].item(),
-                           cpu_peak_rss_gib=resource_values[3].item(),
-                           images_per_second=counts[1]/seconds,generation_images_per_second=counts[12]/seconds,
-                           documents_per_second=counts[6]/seconds,
-                           body_tokens_per_second=counts[2]/seconds,occupied_tokens_per_second=counts[3]/seconds)
-            if args.phase_timing:
-                phases = torch.tensor([sum(pack_forward_ms),sum(pack_backward_ms),
-                    optimizer_events[0].elapsed_time(optimizer_events[1])], device=ACCEL)
-                dist.all_reduce(phases, op=dist.ReduceOp.MAX)
-                row.update(zip(('forward_ms','backward_ms','optimizer_ms'), phases.tolist()))
-            if loader and args.data_epochs > 1:
-                row['data_epoch'] = data_epoch
-            if rank == 0:
-                with (output / 'steps.jsonl').open('a') as f:
-                    f.write(json.dumps(row)+'\n')
-                print(json.dumps(row), flush=True)
-            if local_step >= args.warmup:
+            result = trainer.step(
+                start_step + local_step,
+                completed_step,
+                lambda step=completed_step: persistence.save_if_unsaved(step),
+            )
+            begin = trainer.last_begin
+            if result is None:
+                args.steps = local_step
+                break
+            completed_step = start_step + local_step + 1
+            warmup = local_step < args.warmup
+            data_epoch = pipeline.epoch if pipeline and args.data_epochs > 1 else None
+            if pipeline:
+                metrics.write_rank_timing(args, run, completed_step, result)
+            metrics.write_rank_step(args, run, host, completed_step, result, warmup, data_epoch)
+            row = metrics.global_row(args, cfg, run, completed_step, result, warmup, ema, data_epoch)
+            if not warmup:
                 measurements.append(row)
             if args.validation_probes:
-                torch.save(checkpoint_io.validation_probes(model,optimizer),
-                    output/f"probe_rank_{rank:05d}_step_{row['step']:07d}.pt")
-            if (args.save_every and row['step'] % args.save_every == 0) or (args.save_first and row['step'] == 1):
-                save_checkpoint(row['step'])
-                last_saved_step = row['step']
-            if args.eval_snapshot_every and completed_step%args.eval_snapshot_every==0:
-                save_eval_snapshot(completed_step)
+                torch.save(
+                    checkpoint_io.validation_probes(model, optimizer),
+                    run.output / f"probe_rank_{run.rank:05d}_step_{completed_step:07d}.pt",
+                )
+            persistence.after_step(completed_step)
             if profile_this_rank:
                 profiler.step()
-            if validation_due(completed_step):validate(completed_step)
-        if args.validate_final and (not validation_events or validation_events[-1]['step']!=completed_step):validate(completed_step)
-        if args.save_final and completed_step > last_saved_step:
-            save_checkpoint(completed_step)
+            persistence.after_step_validation(completed_step, preparer)
+        events = persistence.validation_events
+        if args.validate_final and (not events or events[-1]["step"] != completed_step):
+            persistence.validate(completed_step, preparer)
+        if args.save_final and completed_step > persistence.last_saved_step:
+            persistence.save_checkpoint(completed_step)
         # Includes gradient zeroing, metric collectives and logging/checkpoints.
         DEV.synchronize()
-        wall_seconds = torch.tensor(time.perf_counter() - (measured_begin or begin), device=ACCEL)
-        dist.all_reduce(wall_seconds, op=dist.ReduceOp.MAX)
-        wall_seconds = wall_seconds.item()
-    if rank == 0:
-        if not measurements:
-            if not args.until_data_end:
-                raise RuntimeError('Dataset ended before any measured updates; reduce warmup or enlarge the explicit development snapshot')
-            # A preempted final update can resume directly at EOF. It must
-            # complete successfully rather than trigger an endless restart.
-            (output/'summary.json').write_text(json.dumps(dict(completed_updates=completed_step,
-                status='finite_dataset_complete', measured_updates=0, resumed_from=args.resume), indent=2))
-    if rank == 0 and measurements:
-        mean_seconds = sum(x['seconds'] for x in measurements)/len(measurements)
-        summary = dict(world=world, **topology, method='CQ_IT',image_condition_queries=cfg.image_condition_queries,
-            completed_updates=completed_step,steps=len(measurements),
-            mean_seconds=mean_seconds, tokens_per_second=global_batch*args.sequence_length/mean_seconds,
-            tokens_per_second_per_card=global_batch*args.sequence_length/mean_seconds/world,
-            peak_memory_gib=max(x['peak_memory_gib'] for x in measurements),
-            global_batch=global_batch, sequence_length=args.sequence_length, parameters=parameters,
-            trainable_parameters=trainable_parameters,frozen_parameters=parameters-trainable_parameters,
-            freeze_vision=cfg.freeze_vision,freeze_vision_merger=cfg.freeze_vision_merger,
-            vision_max_pixels=cfg.vision_max_pixels,generation_max_pixels=cfg.generation_max_pixels,
-            wall_seconds=wall_seconds,
-            wall_tokens_per_second=global_batch*args.sequence_length*len(measurements)/wall_seconds,
-            median_seconds=statistics.median(x['seconds'] for x in measurements),
-            p95_seconds=sorted(x['seconds'] for x in measurements)[math.ceil(.95*len(measurements))-1],
-            bucket_size=args.bucket_size, overlap_param_gather=not args.no_param_overlap,
-                micro_batch=args.micro_batch, grad_accum=args.grad_accum, images=args.images,
-            checkpoint_backbone=cfg.checkpoint_backbone, checkpoint_dit=cfg.checkpoint_dit,
-            checkpoint_backbone_layers=cfg.checkpoint_backbone_layers,
-            checkpoint_dit_layers=cfg.checkpoint_dit_layers,
-            split_reference=args.split_reference, profiling=args.profile)
-        summary['validation_probes']=args.validation_probes
-        summary['validation_seconds']=sum(e['seconds'] for e in validation_events if e['step']>start_step)
-        summary['qualitative_validation']=bool(args.validation_suite)
-        summary['eval_snapshot_dir']=str(eval_snapshot_root)
-        summary['eval_snapshot_steps']=[event['step'] for event in eval_snapshot_events if not event['skipped']]
-        summary['eval_snapshot_seconds']=sum(event['seconds'] for event in eval_snapshot_events)
-        if ema is not None:summary['renderer_ema']=dict(**ema.metadata(),local_storage_bytes=ema.local_bytes)
-        if args.phase_timing:
-            summary.update({key: statistics.mean(x[key] for x in measurements)
-                            for key in ('forward_ms','backward_ms','optimizer_ms')})
-        if loader:
-            summary.pop('images')
-            summary['max_images_per_pack']=args.max_images_per_pack
-            for old,new in (('tokens_per_second','capacity_slots_per_second'),
-                            ('tokens_per_second_per_card','capacity_slots_per_second_per_card'),
-                            ('wall_tokens_per_second','wall_capacity_slots_per_second')):
-                summary[new]=summary.pop(old)
-            summary['data_mode']=args.data_mode
-            summary['body_tokens_per_second']=sum(x['body_tokens'] for x in measurements)/wall_seconds
-            summary['occupied_tokens_per_second']=sum(x['occupied_tokens'] for x in measurements)/wall_seconds
-            summary['images_per_second']=sum(x['images_consumed'] for x in measurements)/wall_seconds
-            summary['generation_images_per_second']=sum(x['generation_images'] for x in measurements)/wall_seconds
-            summary['documents_per_second']=sum(x['documents_completed'] for x in measurements)/wall_seconds
-            summary['generation_tokens_per_second']=sum(x['generation_tokens'] for x in measurements)/wall_seconds
-            total_seconds=sum(x['seconds'] for x in measurements)
-            total_capacity=sum(x['active_microbatches'] for x in measurements)*args.sequence_length
-            summary['capacity_slots_per_second']=total_capacity/total_seconds
-            summary['capacity_slots_per_second_per_card']=total_capacity/total_seconds/world
-            summary['wall_capacity_slots_per_second']=total_capacity/wall_seconds
-            for key in ('occupied_tokens','body_tokens','images_consumed','generation_images','flow_samples',
-                        'supervised_text_tokens',
-                        'condition_query_tokens','backbone_processed_slots','padding_tokens','active_microbatches','dit_microbatches'):
-                values=[x[key] for x in measurements]
-                summary[key+'_per_update']=dict(mean=statistics.mean(values),min=min(values),max=max(values))
-            summary['fake_latents']=args.latent_encoder=='fake'
-            for key in ('data_wait_seconds','data_prepare_seconds','data_device_wait_seconds','cpu_peak_rss_gib'):
-                summary[key]=statistics.mean(x[key] for x in measurements)
-        (output/'summary.json').write_text(json.dumps(summary, indent=2))
-    if loader:
-        loader.close()
-        stats=dict(consumed_state=loader.state_dict(),prefetched_document_stats=docs.stats,
-                   packing_stats=packer.stats,preparer_stats=preparer.stats,
-                   device_stats=loader.stats,image_stats=docs.image_reader.stats() if docs.image_reader else {})
-        (output/f'data_rank_{rank:05d}.json').write_text(json.dumps(stats))
+        wall = torch.tensor(time.perf_counter() - (measured_begin or begin), device=ACCEL)
+        dist.all_reduce(wall, op=dist.ReduceOp.MAX)
+        wall_seconds = wall.item()
+    if run.rank == 0:
+        metrics.write_summary(
+            args, cfg, run, measurements, wall_seconds, completed_step, parameters, persistence, ema, pipeline is not None
+        )
+    if pipeline:
+        pipeline.close(run.output, run.rank)
     dist.barrier()
     dist.destroy_process_group()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
