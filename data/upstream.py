@@ -79,6 +79,84 @@ def bound_ref(ref, original, row):
     return result
 
 
+def bound_context(published, binding, key):
+    """The published row rebuilt on one upstream owner's own context."""
+    row = dict(published)
+    for field in (
+        "source_policy",
+        "metadata",
+        "caption_provenance",
+        "original_locator_json",
+        "adapter_metadata_json",
+    ):
+        row.pop(field, None)
+    context = binding["contexts"][binding["owners"][key]]
+    row.update(context, images=with_roots(context["images"], published))
+    return row
+
+
+def occurrences_verifiable(published, bound):
+    """True when every bound image occurrence provably binds its published slot.
+
+    The same comparison constrain_bound_occurrences enforces, asked instead of
+    asserted. An upstream record can name its own copy of a picture: that copy
+    is only usable when a pixel identity or content hash ties it to the slot
+    the publication fixed. A copy with neither cannot be shown to be the same
+    picture, so the caption it carries must not be attached to this image.
+    """
+    original = [s for s in published["segments"] if s["kind"] == "image"]
+    selected = [s for s in bound["segments"] if s["kind"] == "image"]
+    if len(original) != len(selected):
+        return False
+    for left, right in zip(original, selected):
+        logical, _ = occurrence_images(published, left)
+        image, _ = occurrence_images(bound, right)
+        if not any(logical.get(key) and logical[key] == image.get(key) for key in ("exact_identity", "sha256")):
+            return False
+    return True
+
+
+def verifiable_owners(published, keys):
+    """Those owner keys whose bound context holds the published visual slots."""
+    binding = published.get("_upstream_binding") or {}
+    owners = binding.get("owners") or {}
+    return [
+        key
+        for key in keys
+        if key in owners and occurrences_verifiable(published, bound_context(published, binding, key))
+    ]
+
+
+def owner_for(published, candidate, seed, epoch):
+    """(owner key, origin) for this candidate, or (None, None) if none binds.
+
+    The drawn owner is kept whenever its context is verifiable, so a caption
+    that bound before keeps binding exactly as it did. Only a draw the published
+    occurrence check would reject is repaired, by redrawing among the owners
+    that do bind. That repair can therefore never change a row which already
+    produced a document.
+    """
+    raw = candidate["provenance"]
+    origins = raw if isinstance(raw, list) else [raw]
+    distinct = {origin_key(origin): origin for origin in origins}
+    keys = sorted(distinct)
+    drawn = tie(keys, published["sample_id"], seed, epoch, "caption-origin")
+    if not published.get("_upstream_binding"):
+        return drawn, distinct[drawn]
+    usable = verifiable_owners(published, keys)
+    if drawn in usable:
+        return drawn, distinct[drawn]
+    if not usable:
+        return None, None
+    repaired = tie(usable, published["sample_id"], seed, epoch, "caption-origin-repair")
+    return repaired, distinct[repaired]
+
+
+def candidate_bindable(published, candidate, seed, epoch):
+    """True when this caption alternative has an owner that binds the image."""
+    return owner_for(published, candidate, seed, epoch)[0] is not None
+
+
 def constrain_bound_occurrences(published, bound):
     """Upstream alternatives bind the same visual slots, even if their asset indices differ."""
     bound["segments"] = [dict(s) for s in bound["segments"]]
@@ -99,26 +177,15 @@ def constrain_bound_occurrences(published, bound):
 
 
 def caption_record(row, candidate, seed, epoch):
-    raw = candidate["provenance"]
-    origins = raw if isinstance(raw, list) else [raw]
     # Identical text remains one draw. Select a documented owner only after that draw.
-    distinct = {origin_key(origin): origin for origin in origins}
-    key = tie(sorted(distinct), row["sample_id"], seed, epoch, "caption-origin")
-    origin = distinct[key]
+    key, origin = owner_for(row, candidate, seed, epoch)
+    if key is None:
+        raise ValueError(f"No upstream owner binds the published visual occurrence: {row['sample_id']}")
     binding = row.get("_upstream_binding")
     if binding:
-        context = binding["contexts"][binding["owners"][key]]
         published = row
-        row = dict(row)
-        for field in (
-            "source_policy",
-            "metadata",
-            "caption_provenance",
-            "original_locator_json",
-            "adapter_metadata_json",
-        ):
-            row.pop(field, None)
-        row.update(context, images=with_roots(context["images"], row))
+        row = bound_context(published, binding, key)
+        # Still the authority on the pairing, and now also applies its flags.
         constrain_bound_occurrences(published, row)
     elif isinstance(origin, dict) and origin.get("source") and origin["source"] != row.get("source"):
         raise ValueError("Cross-source caption has no bound image context")

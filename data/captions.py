@@ -72,6 +72,33 @@ def apply_alternatives(catalog, shard, rows):
                 row.update(caption_segment_index=slot, caption_candidates_json=json.dumps(options, ensure_ascii=False))
 
 
+def _rebind(row, candidates, eligible, key, seed, epoch):
+    """Take the first caption alternative, in a fixed order, that binds the image.
+
+    Reached only when the drawn alternative names no upstream owner able to
+    prove it holds the published picture; the published occurrence check
+    rejects that pairing, so such a draw never produced a document. Every
+    alternative that does bind is left where the ordinary draw put it, which is
+    why this cannot change a row the ordinary draw already accepted.
+    """
+    from data.upstream import candidate_bindable
+
+    options = []
+    for position, owners in eligible or []:
+        option = candidates[position]
+        if owners is not None:
+            option = dict(option, provenance=[option["provenance"][i] for i in owners])
+        options.append((position, option))
+    if not eligible:
+        options = list(enumerate(candidates))
+    order = sorted(range(len(options)), key=lambda i: hashlib.sha256(key + f":rebind:{i}".encode()).digest())
+    for position in order:
+        chosen, option = options[position]
+        if candidate_bindable(row, option, seed, epoch):
+            return chosen, option
+    raise ValueError(f"No caption alternative binds the published visual occurrence: {row['sample_id']}")
+
+
 def select(row, seed, epoch):
     if "caption_members" in row:
         return select_image_caption(row, seed, epoch)
@@ -105,6 +132,11 @@ def select(row, seed, epoch):
         candidate = candidates[chosen]
         if owners is not None:
             candidate = dict(candidate, provenance=[candidate["provenance"][i] for i in owners])
+    if row.get("_upstream_sampling"):
+        from data.upstream import candidate_bindable
+
+        if not candidate_bindable(row, candidate, seed, epoch):
+            chosen, candidate = _rebind(row, candidates, eligible, key, seed, epoch)
     caption = candidate["text"]
     if not isinstance(caption, str) or not caption.strip():
         raise ValueError("Caption must be nonempty text")
