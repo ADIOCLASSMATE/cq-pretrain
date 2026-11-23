@@ -37,6 +37,7 @@ def _restore(args, run, model, optimizer, cfg, state, ema, real_data):
     """Load the selected restart checkpoint. Returns (start_step, saved data cursor)."""
     resumed = {} if real_data else None
     start_step = 0
+    begin = time.perf_counter()
     if args.resume:
         start_step = checkpoint_io.load(
             args.resume, model, optimizer, cfg, run.topology, state, data_state_out=resumed, ema=ema
@@ -47,7 +48,21 @@ def _restore(args, run, model, optimizer, cfg, state, ema, real_data):
             restored = ["model", "optimizer", "FP32 masters", "CPU/NPU RNG", "consumed data cursor"]
             if ema is not None:
                 restored.append("renderer FP32 EMA and update counter")
-        print(json.dumps(dict(resume=dict(path=args.resume, step=start_step, restored=restored))), flush=True)
+        # How long an interruption costs to undo, recorded rather than inferred:
+        # every restart is paid for in points, so the price belongs in the log.
+        print(
+            json.dumps(
+                dict(
+                    resume=dict(
+                        path=args.resume,
+                        step=start_step,
+                        restored=restored,
+                        seconds=round(time.perf_counter() - begin, 1),
+                    )
+                )
+            ),
+            flush=True,
+        )
     return start_step, resumed
 
 
