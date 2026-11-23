@@ -65,6 +65,11 @@ SWITCH_STREAK = 2  # consecutive polls with room before leaving HIGH
 CHECKPOINT_WAIT = 3 * 60 * 60
 LOW_COOLDOWN = 30 * 60  # after a LOW job is lost, stay on HIGH at least this long
 MAX_CRASHES = 3
+# Consecutive in-place platform restarts that commit no checkpoint before the
+# controller stops paying and asks for a human. On 2026-11-23 a bad record the
+# resumed cursor reached every time looped five restarts in 90 minutes on
+# priority 4; the platform reports each one as a retry, never as a failed job.
+STALLED_RESTARTS = 3
 NORMAL = {"RUNNING", "PENDING", "CREATING", "SUBMITTED"}
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "STOPPED"}
 
@@ -364,7 +369,14 @@ class Controller:
             self.persist()
         elif job.get("last_running") and not job.get("left_running"):
             job["left_running"] = now().isoformat()
-            log("left RUNNING", name=job["name"], status=status)
+            # Count restarts that commit nothing. A restart after a new checkpoint
+            # starts a fresh streak, so ordinary node failures never accumulate.
+            committed = checkpoint_step()
+            if committed > job.get("checkpoint_at_restart", -1):
+                job["restarts"], job["checkpoint_at_restart"] = 1, committed
+            else:
+                job["restarts"] = job.get("restarts", 0) + 1
+            log("left RUNNING", name=job["name"], status=status, restarts=job["restarts"], checkpoint=committed)
             self.persist()
         if status == "SUCCEEDED":
             self.close(status, "finished")
@@ -376,6 +388,12 @@ class Controller:
             sys.exit(0)
         if status == "RUNNING":
             job.pop("left_running", None)
+        # The platform restarts a failed priority-4 job in place rather than ending
+        # it, so a deterministic failure -- a record the resumed data cursor reaches
+        # again every time -- loops for up to --fault-tolerance-max-retry attempts
+        # and spends points the whole way without committing anything.
+        if job["priority"] == 4 and job.get("restarts", 0) >= STALLED_RESTARTS:
+            self.halt("restarting without committing a checkpoint", job)
         down = status in TERMINAL or status == "UNKNOWN"
         if job["priority"] != 4 and status != "RUNNING" and not down:
             if job.get("last_running"):
@@ -395,6 +413,35 @@ class Controller:
             return
         if job["priority"] == 4 and status == "RUNNING":
             self.maybe_leave_high(job)
+
+    def halt(self, reason, job):
+        """Stop paying for a job that restarts without progressing, and ask for a human."""
+        log(
+            "halting",
+            name=job["name"],
+            reason=reason,
+            restarts=job.get("restarts"),
+            checkpoint=checkpoint_step(),
+            high_points=self.points(),
+        )
+        try:
+            self.stop(reason)
+        except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
+            log("stop failed while halting", error=str(error)[:300])
+        save(
+            HOME / "ATTENTION.json",
+            dict(
+                time=now().isoformat(),
+                reason=reason,
+                restarts=job.get("restarts"),
+                checkpoint=checkpoint_step(),
+                high_points=self.points(),
+                hint="The job keeps restarting without committing a checkpoint, so the failure repeats on "
+                "every resume: read the newest RUN/logs for the traceback. After fixing it, delete this "
+                "file and restart the controller.",
+            ),
+        )
+        sys.exit(2)
 
     def maybe_leave_high(self, job):
         lost = self.state.get("low_lost_at")

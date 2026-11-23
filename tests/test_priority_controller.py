@@ -59,7 +59,9 @@ class FakeRun:
         (report / "results.json").write_text("{}")
 
 
-class ControllerTests(unittest.TestCase):
+class ControllerFixture(unittest.TestCase):
+    """A controller wired to a fake run directory, with no platform calls."""
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.fake = FakeRun(self.temporary.name)
@@ -99,6 +101,8 @@ class ControllerTests(unittest.TestCase):
         for _ in range(times):
             controller.maybe_leave_high(controller.state["job"])
 
+
+class ControllerTests(ControllerFixture):
     def test_checkpoint_between_the_two_room_polls_leaves_at_once(self):
         self.fake.checkpoint(300)
         self.fake.steps(*range(330, 349))
@@ -190,6 +194,74 @@ class LastRowsTests(unittest.TestCase):
             path.write_text("\n".join(rows) + '\n{"step": 10')
             got = pc.last_rows(path, 5, window=600)
             self.assertEqual([row["step"] for row in got], [95, 96, 97, 98, 99])
+
+
+class RestartLoopTests(ControllerFixture):
+    """A priority-4 job the platform keeps restarting must stop costing points.
+
+    The platform retries a failed job in place instead of ending it, so a
+    deterministic failure -- a record the resumed data cursor reaches again on
+    every attempt -- never reaches the crash accounting in close(). On
+    2026-11-23 that loop ran five restarts in 90 minutes with the checkpoint
+    stuck at step 800.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.room = [0]  # no room for LOW, so leaving priority 4 is never considered
+        self.statuses = []
+        item = patch.object(pc.Controller, "status", lambda controller, name: (self.statuses.pop(0), {}))
+        item.start()
+        self.addCleanup(item.stop)
+
+    def running_job(self):
+        controller = self.controller(banked_after=-1)
+        controller.state["job"]["last_running"] = pc.now().isoformat()
+        controller.state["job"]["running_since"] = pc.now().isoformat()
+        return controller
+
+    def restart(self, controller):
+        """One platform retry: the job leaves RUNNING, then comes back."""
+        self.statuses.extend(["QUEUING", "RUNNING"])
+        controller.cycle()
+        controller.cycle()
+
+    def test_restarts_without_a_checkpoint_halt_the_controller(self):
+        self.fake.checkpoint(800)
+        controller = self.running_job()
+        for _ in range(pc.STALLED_RESTARTS - 1):
+            self.restart(controller)
+        self.assertEqual(controller.state["job"]["restarts"], pc.STALLED_RESTARTS - 1)
+        self.statuses.append("QUEUING")
+        with self.assertRaises(SystemExit) as caught:
+            controller.cycle()
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("restarting without committing a checkpoint", self.stopped)
+        attention = json.loads((self.fake.root / "priority/ATTENTION.json").read_text())
+        self.assertEqual(attention["checkpoint"], 800)
+        self.assertEqual(attention["restarts"], pc.STALLED_RESTARTS)
+
+    def test_a_restart_that_banked_work_starts_a_fresh_streak(self):
+        """Ordinary node failures must never accumulate into a halt."""
+        self.fake.checkpoint(800)
+        controller = self.running_job()
+        for step in (850, 900, 950, 1000):
+            self.restart(controller)
+            self.assertEqual(controller.state["job"]["restarts"], 1)
+            self.fake.checkpoint(step)
+        self.assertFalse((self.fake.root / "priority/ATTENTION.json").exists())
+
+    def test_a_low_priority_job_is_left_to_the_ordinary_down_path(self):
+        """LOW is free and preemptible; repeated requeues there are expected."""
+        self.fake.checkpoint(800)
+        controller = self.running_job()
+        controller.state["job"]["priority"] = 3
+        for _ in range(pc.STALLED_RESTARTS + 2):
+            self.statuses.extend(["RUNNING"])
+            controller.cycle()
+            controller.state["job"]["left_running"] = pc.now().isoformat()
+            controller.state["job"]["restarts"] = controller.state["job"].get("restarts", 0) + 1
+        self.assertFalse((self.fake.root / "priority/ATTENTION.json").exists())
 
 
 if __name__ == "__main__":
