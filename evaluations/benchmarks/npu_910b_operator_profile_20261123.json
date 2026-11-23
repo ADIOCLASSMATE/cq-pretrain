@@ -1,0 +1,100 @@
+{
+  "date": "2026-11-23",
+  "question": "Within an Ascend 910B step, where does the time actually go, and is the longest part improvable?",
+  "job": "cq-npu-gdn-1123",
+  "cards": "16 x 910B (64GB), one node, TP1 DP16",
+  "configuration": "8 packs/card, global batch 128, 8192-token packs, full recompute, keep-attention-activations 6, wide loader",
+  "source_commit": "9620cfc",
+  "artifacts": ".runs/bench-gdn-20261123T173045Z (on the Ascend host; profile/ holds ASCEND_PROFILER_OUTPUT for rank 0)",
+
+  "headline": "The step is not compute-bound. The device is idle about a third of every step while the host issues ~351k kernel launches, and the data loader and collectives are both already out of the way.",
+
+  "step_budget": {
+    "note": "Computing/Communication/Free are read from step_trace_time.csv of the profiled run (2 steps). Profiling inflates the step from ~38.2s to ~45-48.6s and that overhead lands almost entirely in host time, so the unprofiled budget below assumes device Computing is unchanged by profiling and attributes the rest of the unprofiled wall to idle. That assumption is the main uncertainty in this row.",
+    "profiled_steps_seconds": [45.29, 48.61],
+    "profiled_computing_seconds": [25.68, 24.57],
+    "profiled_free_seconds": [18.48, 23.87],
+    "profiled_communication_not_overlapped_seconds": [1.13, 0.17],
+    "unprofiled_median_step_seconds": 38.21,
+    "inferred_unprofiled_split": {
+      "device_computing_seconds": 25.1,
+      "device_idle_seconds": 12.4,
+      "communication_not_overlapped_seconds": 0.7,
+      "device_idle_fraction": 0.33
+    },
+    "data_wait_seconds_median": 0.01
+  },
+
+  "launch_counts_per_step": {
+    "note": "Call counts are unaffected by profiler overhead; these are the robust numbers here.",
+    "device_kernels": 351027,
+    "torch_op_calls": 1947488,
+    "empty_tensor": 243963,
+    "aten::as_strided": 206834,
+    "aten::slice": 85791,
+    "aten::copy_": 61733,
+    "aten::mul": 31915,
+    "aten::zero_": 28357,
+    "aten::_local_scalar_dense": 5193,
+    "_local_scalar_dense_comment": "Scalar reads of device tensors. Each one is a host/device synchronisation point, so the count matters more than its measured time."
+  },
+
+  "device_time_by_operator_group": {
+    "note": "Share of summed operator duration (28.4 s/step). Overlap factor is only 28.4/25.1 = 1.13 here, so these shares are close to shares of device-busy time -- unlike the 2026-10-18 Q=64 MOSS profile where the sum was 1.5x wall and the shares were not readable that way.",
+    "GEMM": {"share": 0.292, "launches": 14180, "avg_us": 585.0},
+    "elementwise": {"share": 0.169, "launches": 151486, "avg_us": 31.7},
+    "layout_movement": {"share": 0.166, "launches": 119938, "avg_us": 39.2},
+    "other": {"share": 0.175, "launches": 37034, "avg_us": 134.1},
+    "attention": {"share": 0.074, "launches": 15331, "avg_us": 137.4},
+    "conv3d_and_pad": {"share": 0.058, "launches": 3025, "avg_us": 546.4},
+    "gated_delta": {"share": 0.051, "launches": 1008, "avg_us": 1427.3},
+    "reduce": {"share": 0.015, "launches": 9027, "avg_us": 46.7}
+  },
+  "small_operator_tail": {
+    "definition": "operator types averaging under 50us",
+    "share_of_launches": 0.76,
+    "share_of_operator_time": 0.252,
+    "largest_by_count": {
+      "Transpose": {"launches_2_steps": 115677, "avg_us": 25.4, "share": 0.052},
+      "Add": {"launches_2_steps": 89266, "avg_us": 43.8, "share": 0.069},
+      "Mul": {"launches_2_steps": 69722, "avg_us": 33.4, "share": 0.041},
+      "Cast": {"launches_2_steps": 64724, "avg_us": 19.9, "share": 0.023},
+      "ZerosLike": {"launches_2_steps": 56747, "avg_us": 12.6, "share": 0.013}
+    }
+  },
+
+  "gated_delta_recompute_ab": {
+    "question": "DELTA_ASCENDC_MODE=cached caches w/h/vn in the GDN forward so the backward skips recompute_w_u_fwd and chunk_gated_delta_rule_fwd_h. Does trading memory for backward time pay?",
+    "verdict": "No, and it does not even spend memory. Activation recompute rebuilds the graph one layer at a time, so the cached tensors are never co-resident.",
+    "fused_control": {"steps": 10, "mean_seconds": 38.89, "median_seconds": 38.21, "forward_ms": 12243.9, "backward_ms": 26622.3, "peak_gib": 32.36, "occupied_tokens_per_s_per_card_mean": 1584.2},
+    "cached": {"steps": 10, "mean_seconds": 39.44, "median_seconds": 39.17, "forward_ms": 12843.5, "backward_ms": 25832.4, "peak_gib": 32.41, "occupied_tokens_per_s_per_card_mean": 1561.9},
+    "reading": "Backward -3.0% and forward +4.9%: the mechanism does what it claims, but it moves work rather than removing it, and the net is -1.4% (within about 3x the 0.5% measurement noise floor, so call it a wash at best). Peak memory is unchanged at 32.4 GiB."
+  },
+
+  "what_this_rules_out": [
+    "Data loading: data_wait median 0.01 s.",
+    "Collectives: not-overlapped communication is 0.17-1.13 s of a 38 s step.",
+    "Optimizer: 45-108 ms.",
+    "Recompute depth: measured 2026-11-23 in accel_910b_vs_l40s_20261123.json; DiT recompute is ~3% of the step and spending memory to skip it is net neutral.",
+    "The GDN backward's own recompute: the A/B above."
+  ],
+
+  "where_the_headroom_is": {
+    "statement": "No flag reaches the idle third. It is host-side issue cost, so the lever is reducing the number of torch ops and kernels per step, which is a code change.",
+    "candidates_not_yet_attributed": "Call stacks were not captured (with_stack=False, matching the original Ascend profiler configuration), so the 244k empty_tensor, 207k as_strided and 5.2k scalar reads per step are NOT yet attributed to call sites. Re-profile with with_stack=True on a single rank before optimising any of them.",
+    "ranked_guesses_requiring_confirmation": [
+      "Allocation churn: 244k tensor allocations per step at ~16us of host time each.",
+      "Host/device synchronisation: ~5.2k scalar reads of device tensors per step.",
+      "Layout churn: Transpose is 16% of all launches; the GDN adapter transposes q/k/v in the forward and five gradients in the backward.",
+      "The un-fused Wan DiT pointwise chain (modulated_norm + gated_add, ~4.5k reference calls per step, each expanding into several kernels). This is the TorchAIR path and would remove on the order of 9% of launches, not the whole idle third."
+    ]
+  },
+
+  "torchair_status": {
+    "state": "blocked",
+    "cause": "torch/utils/_triton.py:72 has_triton() probes the 'cuda' device interface, which torch_npu/MindSpeed make report available, and then reads .major off NPU device properties, which is None. 'None >= 7' raises TypeError inside torch.compile.",
+    "assessment": "Probably patchable (has_triton is a capability probe, not a real dependency for the TorchAIR backend), but TorchAIR as wired here compiles only modulated_norm and gated_add, so the ceiling on that fix is small. Whole-graph capture, which is what would actually reach the idle third, is a separate and much larger project given the dynamic packing shapes."
+  },
+
+  "cross_backend_note": "On L40S the summed forward+backward event time (34.8 s) EXCEEDS the 27.8 s wall, while on Ascend it matches the wall (37.3 s vs 38.2 s). That is consistent with CUDA launches being cheap enough for the device to run ahead of the host while the Ascend host cannot. It is an observation, not a measurement of the launch cost on either side."
+}
