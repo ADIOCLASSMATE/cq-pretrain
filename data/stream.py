@@ -323,8 +323,13 @@ class DocumentStream:
             from corpus_pipeline.dedup.dcvlm_loss_policy_reader import decode_image_bytes
             from PIL import Image, ImageOps
 
+            # The member's own SHA256 is checked inside, which is what proves
+            # these are the pinned image's bytes; the whole-archive hash is not
+            # affordable per image in a training stream. See _archive_identity.
             body = read_ref_bytes(
-                locator, roots=os.environ.get("CORPUS_DATASET_ROOTS") or locator.get("_dataset_roots")
+                locator,
+                roots=os.environ.get("CORPUS_DATASET_ROOTS") or locator.get("_dataset_roots"),
+                verify_archive=False,
             )
             picture = ImageOps.exif_transpose(decode_image_bytes(body, policy=locator.get("_decode_policy")))
             pixels = np.asarray(picture, dtype=np.uint8).copy()

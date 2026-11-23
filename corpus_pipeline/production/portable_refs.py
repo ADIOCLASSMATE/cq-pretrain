@@ -193,6 +193,28 @@ def resolve_ref(ref, roots=None, *, allowed_datasets=None):
     return path
 
 
+def _archive_identity(fd, value):
+    """Declared size and stat identity, without hashing the whole archive.
+
+    What a reader needs is that the bytes it returns are the pinned image, and
+    read_ref_bytes proves exactly that by hashing the member it extracted. The
+    full-archive hash below proves something strictly weaker about the bytes in
+    use -- that they arrived in the pinned container -- at a cost set by the
+    container rather than the image: the stage-1 corpus draws about five images
+    from a 2.3 GiB TAR before its shuffled stream moves on, so a 210 KiB image
+    costs roughly 440 MiB of SHA256. That is the whole of the image pipeline's
+    time on a 12-CPU-per-card node.
+
+    So streaming readers take this path and keep the member hash, which is the
+    check that actually constrains the data; release acceptance, which attests
+    to archives rather than consuming them, keeps the full verification.
+    """
+    before = _stamp(os.fstat(fd))
+    if before[2] != value['archive_size']:
+        raise ValueError('portable archive size mismatch')
+    return before
+
+
 def _verify_archive(fd, path, value):
     """One full hash per archive identity/stat per process, also across threads."""
     key = (str(path), value['dataset_id'], value['archive_sha256'], value['archive_size'])
@@ -225,8 +247,14 @@ def _verify_archive(fd, path, value):
         return before
 
 
-def read_ref_bytes(ref, roots=None):
-    """Read original bytes with archive and member integrity, without mutation."""
+def read_ref_bytes(ref, roots=None, verify_archive=True):
+    """Read original bytes with archive and member integrity, without mutation.
+
+    `verify_archive=False` keeps every check that constrains the returned bytes
+    -- containment, the declared archive size, stat stability across the read
+    and the member's own SHA256 -- and drops only the full-archive hash. See
+    _archive_identity for why a streaming reader should.
+    """
     value = logical_ref(ref)
     if value.get('dataset_id') is not None:
         roots = _roots(roots)
@@ -251,8 +279,14 @@ def read_ref_bytes(ref, roots=None):
     flags = os.O_RDONLY | (getattr(os, 'O_NOFOLLOW', 0) if portable else 0)
     fd = os.open(path, flags)
     try:
-        before = (_stamp(os.fstat(fd)) if value.get('kind')=='file'
-                  else _verify_archive(fd, path, value)) if portable else None
+        if not portable:
+            before = None
+        elif value.get('kind') == 'file':
+            before = _stamp(os.fstat(fd))
+        elif verify_archive:
+            before = _verify_archive(fd, path, value)
+        else:
+            before = _archive_identity(fd, value)
         # Regular-file pread normally fills the request; tolerate short reads.
         pieces, remaining = [], length
         while remaining:

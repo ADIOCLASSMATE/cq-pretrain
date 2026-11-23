@@ -24,16 +24,36 @@ mkdir -p "${BENCH_ROOT}"
 [[ "${NODE}" == 0 ]] && echo "suite root ${BENCH_ROOT} node=${NODE} cpus=$(nproc)"
 
 failed=()
+# The gate is one process on node 0. It must launch standalone: launch.sh
+# otherwise inherits PET_NNODES and joins the multi-node rendezvous, where the
+# other node's 16 training ranks find it and form a world of 17 -- which is
+# how the first attempt died ("global_batch must be divisible by DP").
+# Every other node waits for the sentinel instead of racing ahead into that
+# rendezvous.
 if [[ "${NODE}" == 0 ]]; then
   echo "=== gate: the Ascend varlen kernel against the per-segment loop ==="
-  NPROC_PER_NODE=1 PRETRAIN_MODULE=scripts.validation.validate_varlen \
+  env -u PET_NNODES -u PET_NODE_RANK -u PET_MASTER_ADDR -u PET_MASTER_PORT \
+    NNODES=1 NODE_RANK=0 NPROC_PER_NODE=1 PRETRAIN_MODULE=scripts.validation.validate_varlen \
     bash "${ROOT}/scripts/launch.sh" --output "${BENCH_ROOT}/varlen_gate.json" \
     >"${BENCH_ROOT}/gate.log" 2>&1
-  if [[ $? -ne 0 ]]; then
+  code=$?
+  echo "${code}" > "${BENCH_ROOT}/GATE_DONE"
+  if [[ ${code} -ne 0 ]]; then
     echo "GATE FAILED -- numerics first; no timing collected."
     tail -40 "${BENCH_ROOT}/gate.log"
     exit 1
   fi
+else
+  for _ in $(seq 1 240); do
+    [[ -f "${BENCH_ROOT}/GATE_DONE" ]] && break
+    sleep 5
+  done
+  if [[ "$(cat "${BENCH_ROOT}/GATE_DONE" 2>/dev/null || echo 1)" != "0" ]]; then
+    echo "node ${NODE}: gate did not pass; not starting timing."
+    exit 1
+  fi
+fi
+if [[ "${NODE}" == 0 ]]; then
   python3 -c "
 import json
 report = json.load(open('${BENCH_ROOT}/varlen_gate.json'))
