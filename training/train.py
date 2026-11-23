@@ -19,6 +19,7 @@ import torch
 import torch.distributed as dist
 
 import distributed.accel as accel
+import ops.census as census
 import utils.checkpoint as checkpoint_io
 from data.batch import fake_batch
 import distributed.megatron as P
@@ -111,6 +112,7 @@ def main():
     persistence.start_step = start_step
     persistence.last_saved_step = start_step if args.resume else -1
     preparer = pipeline.preparer if pipeline else None
+    counter = census.OperatorCensus() if args.operator_census and run.rank in run.profile_ranks else None
     profile, profile_this_rank = _profiler(args, run, complete)
     DEV.synchronize()
 
@@ -137,11 +139,15 @@ def main():
                 DEV.synchronize()
                 dist.barrier()
                 measured_begin = time.perf_counter()
-            result = trainer.step(
-                start_step + local_step,
-                completed_step,
-                lambda step=completed_step: persistence.save_if_unsaved(step),
-            )
+            # The census covers the measured steps only; a warmup step compiles
+            # and allocates differently from the steady state it is meant to explain.
+            counting = counter is not None and args.warmup <= local_step < args.warmup + args.operator_census
+            with census.census(counter, counting):
+                result = trainer.step(
+                    start_step + local_step,
+                    completed_step,
+                    lambda step=completed_step: persistence.save_if_unsaved(step),
+                )
             begin = trainer.last_begin
             if result is None:
                 args.steps = local_step
@@ -189,6 +195,8 @@ def main():
         )
     if pipeline:
         pipeline.close(run.output, run.rank)
+    if counter is not None:
+        print(json.dumps(dict(operator_census=str(counter.write(run.output / f"census_rank_{run.rank:05d}.json")))))
     dist.barrier()
     dist.destroy_process_group()
     if profile_this_rank:

@@ -7,17 +7,25 @@ has left its collectives -- synchronous mid-step parsing stalls the profiled
 rank long enough for the others to hit the HCCL execution timeout.
 """
 
+import os
+
 import torch_npu
+
+# Python stacks are what turn an operator breakdown into a list of lines to fix,
+# but they are recorded per dispatch and this model issues about two million of
+# them per update: one active step is already a multi-gigabyte trace, so the
+# window narrows when they are requested.
+_WITH_STACK = os.environ.get("PRETRAIN_PROFILE_STACK", "0") == "1"
 
 
 def profiler(output, warmup):
     return torch_npu.profiler.profile(
         activities=[torch_npu.profiler.ProfilerActivity.CPU, torch_npu.profiler.ProfilerActivity.NPU],
-        schedule=torch_npu.profiler.schedule(wait=warmup, warmup=1, active=2, repeat=1),
+        schedule=torch_npu.profiler.schedule(wait=warmup, warmup=1, active=1 if _WITH_STACK else 2, repeat=1),
         on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(str(output), analyse_flag=False),
         record_shapes=True,
         profile_memory=True,
-        with_stack=False,
+        with_stack=_WITH_STACK,
         experimental_config=torch_npu.profiler._ExperimentalConfig(
             profiler_level=torch_npu.profiler.ProfilerLevel.Level1
         ),

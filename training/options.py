@@ -131,6 +131,13 @@ def build_parser():
     # Execution and measurement.
     parser.add_argument("--profile", action="store_true")
     parser.add_argument("--profile-ranks", default="0", help="Comma separated global ranks")
+    parser.add_argument(
+        "--operator-census",
+        type=int,
+        default=0,
+        help="Count this many updates' dispatched operators per call site (profile ranks). "
+        "Diagnostic only: it slows every step it covers and excludes the run from timings",
+    )
     parser.add_argument("--bucket-size", type=int, default=40_000_000, help="DDP bucket elements")
     parser.add_argument(
         "--bf16-grad-reduce",
