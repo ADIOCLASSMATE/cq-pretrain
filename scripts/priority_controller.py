@@ -50,7 +50,10 @@ POLL = 120  # seconds per cycle
 LOW_START_GRACE = 15 * 60  # a LOW job that never ran and is not RUNNING by then is down
 RESTART_GRACE = 5 * 60  # a LOW job that ran, in a non-QUEUING non-RUNNING state
 SWITCH_STREAK = 2  # consecutive polls with room before leaving HIGH
-CHECKPOINT_WAIT = 60 * 60  # longest wait for a fresh checkpoint before switching
+# Leaving HIGH waits for a checkpoint newer than the moment room appeared, so the HIGH
+# job always banks its work first. A cold restart reaches its first checkpoint after
+# roughly 50-60 min on 32 L40S; this cap only guards against a run that never saves.
+CHECKPOINT_WAIT = 3 * 60 * 60
 LOW_COOLDOWN = 30 * 60  # after a LOW job is lost, stay on HIGH at least this long
 MAX_CRASHES = 3
 NORMAL = {"RUNNING", "PENDING", "CREATING", "SUBMITTED"}
