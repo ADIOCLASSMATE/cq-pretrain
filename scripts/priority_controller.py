@@ -1,8 +1,13 @@
-"""Keep the 32-GPU L40S training running, on low priority whenever possible.
+"""Keep a 32-card training run going, on the free preemptible tier whenever possible.
+
+One policy, two clusters. `--cluster l40s` submits 4 x 8 L40S cards and `--cluster ascend`
+submits 2 x 16 Ascend 910B cards; CLUSTERS below holds everything that differs, including
+which priority number is the paid one. A card-hour costs almost the same on either
+(0.33 vs 0.35 points), so the same reasoning about when to pay applies unchanged.
 
 Policy
-- Low priority (free points, preemptible) is used whenever 4 whole L40S nodes are idle.
-- Otherwise the job runs on priority 4 (HIGH, paid with public-project points, not preempted).
+- The free preemptible tier is used whenever enough whole nodes are idle.
+- Otherwise the job runs on the paid tier (HIGH), which is not preempted.
 - While on HIGH: poll free capacity. Once enough whole nodes are idle (other than ours) for
   two consecutive polls, leave HIGH at the cheapest checkpoint boundary:
     - the HIGH job first banks one checkpoint of its own, so its paid start-up is never lost;
@@ -25,7 +30,7 @@ Policy
 Files (in RUN/priority/): state.json, ledger.jsonl, controller.log, STOP (pause; checked each cycle).
 The job command is `bash RUN/job.sh`, which must resume from RUN/checkpoints by itself.
 
-    python scripts/priority_controller.py --run /path/to/run --prefix cq8k32
+    python scripts/priority_controller.py --run /path/to/run --prefix cq8k32 --cluster l40s
 """
 
 import argparse
@@ -40,8 +45,6 @@ from pathlib import Path
 RUN = HOME = None  # set by main()
 PREFIX = "cq8k32"
 CLI = [str(Path.home() / ".local/bin/inspire"), "--json"]
-WS, PROJECT, GROUP = "可上网GPU资源", "公共科研项目", "L40s-cuda13.2"
-IMAGE = "docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3"
 DATASETS = [
     "dcvlm-baseline-200b:v2",
     "gen-und-mm-pretrain:01",
@@ -52,8 +55,40 @@ DATASETS = [
     "poster100k:v1",
     "tide:v1",
 ]
-NODES = 4
-POINTS_PER_NODE_HOUR = 2.64  # quota row 8,210,800
+
+# Both clusters price a card-hour almost identically (L40S 2.64 per 8-card node,
+# Ascend 5.6 per 16-card node: 0.33 vs 0.35 points per card-hour) and both have
+# a free preemptible tier, so the policy below is the same on either. Only these
+# names, the node width and which priority number means paid differ.
+CLUSTERS = {
+    "l40s": dict(
+        workspace="可上网GPU资源",
+        project="公共科研项目",
+        group="L40s-cuda13.2",
+        quota="8,210,800",
+        image="docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3",
+        nodes=4,  # 4 x 8 = 32 cards
+        points_per_node_hour=2.64,
+        high=4,  # reads back as 20 / NORMAL: paid, not preempted
+        low=3,  # reads back as 13 / LOW: free, preemptible
+        exclude=("qb-prod-y40s-gpu167",),  # does not mount global_user
+    ),
+    "ascend": dict(
+        workspace="昇腾卡公共空间",
+        project="多模态大模型新架构评测探索与scaling-law",
+        group="910B资源",
+        quota="16,180,1800",  # the wide-CPU row; the loader needs it
+        image="docker-t.sii.shaipower.online/inspire-studio/dev-wjx-ascend:v-1.4",
+        nodes=2,  # 2 x 16 = 32 cards
+        points_per_node_hour=5.6,
+        high=6,  # reads back as 31 / HIGH
+        low=3,  # the project's historical free tier
+        exclude=("infra-gpu-npu-248.host.shzhisuan.com",),
+    ),
+}
+WS = PROJECT = GROUP = QUOTA = IMAGE = EXCLUDE = None  # set by main() from --cluster
+NODES = HIGH = LOW = 0
+POINTS_PER_NODE_HOUR = 0.0
 POLL = 120  # seconds per cycle
 WATCH = 10  # seconds between checks while a checkpoint is due within a poll
 WATCH_LIMIT = 5 * 60  # longest watch in one cycle (a stalled job must not stall the controller)
@@ -227,7 +262,7 @@ class Controller:
 
     def submit(self, priority):
         self.state["counter"] += 1
-        tag = "hi" if priority == 4 else "lo"
+        tag = "hi" if priority == HIGH else "lo"
         name = f"{PREFIX}-{tag}-{self.state['counter']:03d}"
         args = [
             "job",
@@ -241,7 +276,7 @@ class Controller:
             "--group",
             GROUP,
             "-q",
-            "8,210,800",
+            QUOTA,
             "--nodes",
             str(NODES),
             "-i",
@@ -250,8 +285,7 @@ class Controller:
             str(priority),
             "--shm-size",
             "128",
-            "--exclude-node",
-            "qb-prod-y40s-gpu167",
+            *[x for node in EXCLUDE for x in ("--exclude-node", node)],
             "--auto-fault-tolerance",
             "--fault-tolerance-max-retry",
             "100",
@@ -298,7 +332,7 @@ class Controller:
         progressed = checkpoint_step() > job["checkpoint_at_submit"]
         crash = status == "FAILED" and not progressed and reason == "down" and not self.preempted(job["name"])
         self.state["crashes"] = self.state["crashes"] + 1 if crash else 0
-        if job["priority"] != 4 and reason == "down":
+        if job["priority"] != HIGH and reason == "down":
             self.state["low_lost_at"] = now().isoformat()
         with (HOME / "ledger.jsonl").open("a") as f:
             f.write(
@@ -321,7 +355,7 @@ class Controller:
     def account(self, job, status_running):
         """Accumulate HIGH running time for the points estimate."""
         stamp = now()
-        if job["priority"] == 4 and job.get("running_since"):
+        if job["priority"] == HIGH and job.get("running_since"):
             last = datetime.fromisoformat(job.get("accounted") or job["running_since"])
             self.state["high_seconds"] += (stamp - last).total_seconds()
             job["accounted"] = stamp.isoformat()
@@ -337,10 +371,10 @@ class Controller:
         cooling = lost and (now() - datetime.fromisoformat(lost)).total_seconds() < LOW_COOLDOWN
         if room >= NODES and not cooling:
             log("choosing LOW", free_nodes=room)
-            if self.submit(3):
+            if self.submit(LOW):
                 return
         log("choosing HIGH", free_nodes=room, cooling=bool(cooling))
-        self.submit(4)
+        self.submit(HIGH)
 
     def cycle(self):
         if self.state["crashes"] >= MAX_CRASHES:
@@ -392,10 +426,10 @@ class Controller:
         # it, so a deterministic failure -- a record the resumed data cursor reaches
         # again every time -- loops for up to --fault-tolerance-max-retry attempts
         # and spends points the whole way without committing anything.
-        if job["priority"] == 4 and job.get("restarts", 0) >= STALLED_RESTARTS:
+        if job["priority"] == HIGH and job.get("restarts", 0) >= STALLED_RESTARTS:
             self.halt("restarting without committing a checkpoint", job)
         down = status in TERMINAL or status == "UNKNOWN"
-        if job["priority"] != 4 and status != "RUNNING" and not down:
+        if job["priority"] != HIGH and status != "RUNNING" and not down:
             if job.get("last_running"):
                 stalled = (now() - datetime.fromisoformat(job["left_running"])).total_seconds()
                 down = status == "QUEUING" or stalled > RESTART_GRACE
@@ -411,7 +445,7 @@ class Controller:
             log("job down, rechecking capacity", status=status)
             self.start_job()
             return
-        if job["priority"] == 4 and status == "RUNNING":
+        if job["priority"] == HIGH and status == "RUNNING":
             self.maybe_leave_high(job)
 
     def halt(self, reason, job):
@@ -516,12 +550,21 @@ class Controller:
 def main():
     import fcntl
 
-    global RUN, HOME, PREFIX
+    global RUN, HOME, PREFIX, WS, PROJECT, GROUP, QUOTA, IMAGE, EXCLUDE, NODES, HIGH, LOW
+    global POINTS_PER_NODE_HOUR
     parser = argparse.ArgumentParser()
     parser.add_argument("--run", type=Path, required=True, help="Run directory holding job.sh and checkpoints/")
     parser.add_argument("--prefix", default=PREFIX, help="Job name prefix")
+    parser.add_argument("--cluster", choices=sorted(CLUSTERS), required=True, help="Which cluster to submit to")
+    parser.add_argument("--nodes", type=int, help="Override the cluster's node count")
     args = parser.parse_args()
     RUN, HOME, PREFIX = args.run, args.run / "priority", args.prefix
+    profile = CLUSTERS[args.cluster]
+    WS, PROJECT, GROUP = profile["workspace"], profile["project"], profile["group"]
+    QUOTA, IMAGE, EXCLUDE = profile["quota"], profile["image"], profile["exclude"]
+    NODES = args.nodes or profile["nodes"]
+    HIGH, LOW = profile["high"], profile["low"]
+    POINTS_PER_NODE_HOUR = profile["points_per_node_hour"]
     HOME.mkdir(parents=True, exist_ok=True)
     lock = (HOME / "controller.lock").open("w")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

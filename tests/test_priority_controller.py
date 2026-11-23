@@ -71,6 +71,11 @@ class ControllerFixture(unittest.TestCase):
         self.stopped = []
         patches = [
             patch.object(pc, "RUN", self.fake.root),
+            # A cluster profile is normally installed by main(); these tests call the
+            # policy directly, so they take the L40S one the production run uses.
+            patch.object(pc, "HIGH", pc.CLUSTERS["l40s"]["high"]),
+            patch.object(pc, "LOW", pc.CLUSTERS["l40s"]["low"]),
+            patch.object(pc, "NODES", pc.CLUSTERS["l40s"]["nodes"]),
             patch.object(pc, "HOME", self.fake.root / "priority"),
             patch.object(pc, "free_nodes", lambda: self.room[0]),
             patch.object(pc, "needed_for_switch", lambda: 5),
@@ -266,3 +271,63 @@ class RestartLoopTests(ControllerFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClusterProfileTests(unittest.TestCase):
+    """A wrong field here submits a real job to the wrong place, or at the wrong price."""
+
+    def test_both_profiles_are_complete_and_describe_32_cards(self):
+        cards = dict(l40s=8, ascend=16)
+        for name, profile in pc.CLUSTERS.items():
+            with self.subTest(cluster=name):
+                for key in ("workspace", "project", "group", "quota", "image", "nodes",
+                            "points_per_node_hour", "high", "low", "exclude"):
+                    self.assertIn(key, profile)
+                self.assertNotEqual(profile["high"], profile["low"])
+                self.assertEqual(profile["nodes"] * cards[name], 32)
+                # The quota row's first field is the cards per node it allocates.
+                self.assertEqual(int(profile["quota"].split(",")[0]), cards[name])
+
+    def test_a_card_hour_costs_about_the_same_on_either_cluster(self):
+        """The throughput comparison is only meaningful while this holds."""
+        rates = {
+            name: profile["points_per_node_hour"] / int(profile["quota"].split(",")[0])
+            for name, profile in pc.CLUSTERS.items()
+        }
+        self.assertLess(max(rates.values()) / min(rates.values()), 1.15, rates)
+
+    def test_submit_uses_the_selected_cluster_and_its_paid_priority(self):
+        for name, profile in pc.CLUSTERS.items():
+            with self.subTest(cluster=name), tempfile.TemporaryDirectory() as temporary:
+                fake = FakeRun(temporary)
+                sent = []
+                patches = [
+                    patch.object(pc, "RUN", fake.root),
+                    patch.object(pc, "HOME", fake.root / "priority"),
+                    patch.object(pc, "WS", profile["workspace"]),
+                    patch.object(pc, "PROJECT", profile["project"]),
+                    patch.object(pc, "GROUP", profile["group"]),
+                    patch.object(pc, "QUOTA", profile["quota"]),
+                    patch.object(pc, "IMAGE", profile["image"]),
+                    patch.object(pc, "EXCLUDE", profile["exclude"]),
+                    patch.object(pc, "NODES", profile["nodes"]),
+                    patch.object(pc, "HIGH", profile["high"]),
+                    patch.object(pc, "LOW", profile["low"]),
+                    patch.object(pc, "cli", lambda *a, **k: sent.append(a) or dict(success=True)),
+                    patch("builtins.print"),
+                ]
+                for item in patches:
+                    item.start()
+                self.addCleanup(lambda items=patches: [i.stop() for i in items])
+                controller = pc.Controller()
+                controller.submit(profile["high"])
+                command = list(sent[0])
+                self.assertEqual(command[command.index("--workspace") + 1], profile["workspace"])
+                self.assertEqual(command[command.index("--group") + 1], profile["group"])
+                self.assertEqual(command[command.index("-q") + 1], profile["quota"])
+                self.assertEqual(command[command.index("-i") + 1], profile["image"])
+                self.assertEqual(command[command.index("--nodes") + 1], str(profile["nodes"]))
+                self.assertEqual(command[command.index("--priority") + 1], str(profile["high"]))
+                for node in profile["exclude"]:
+                    self.assertIn(node, command)
+                self.assertTrue(controller.state["job"]["name"].endswith("-hi-001"))
