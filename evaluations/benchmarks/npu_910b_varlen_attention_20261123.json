@@ -1,0 +1,105 @@
+{
+  "date": "2026-11-23",
+  "job": "cq-npu-varlen-1124",
+  "status": "SUCCEEDED",
+  "hardware": "1 node x 16 Ascend 910B (64 GiB), 180 CPU, quota row 16,180,1800",
+  "change": "models/generator_wan21.py packed_attention and models/vision_encoder.py VisionAttention attend to every packed segment in one varlen call (ops.attention.varlen -> npu_fusion_attention TND) instead of looping once per visual/image",
+  "configuration": "8 packs/card, global batch 128, seq 8192, full recompute, keep-attention-activations 6, wide loader (--data-workers 8 --image-workers 12 --image-prefetch 48 --data-prefetch 24)",
+
+  "numerical_gate": {
+    "script": "scripts/validation/validate_varlen_npu.py",
+    "method": "three-way: FP64 CPU oracle, BF16 device per-segment loop (the implementation in use until now), BF16 device varlen. The new form must not be further from the oracle than the loop. Forward and all three gradients.",
+    "passed": true,
+    "cases": 6,
+    "forward_output_disagreement": "exactly 0.0 in all six cases (bit-identical)",
+    "gradient_disagreement_max": 2.7e-05,
+    "bf16_self_error_vs_fp64": "~0.0036 output, ~0.0044 dq/dk, ~0.0037 dv",
+    "note": "the loop-vs-varlen gradient disagreement is ~0.3% of BF16's own error against the oracle; both forms are equally far from FP64"
+  },
+
+  "cpu_tests": {
+    "new": "tests/test_varlen_attention.py, 14 tests, FP64 bit-exact against a locally re-implemented loop oracle",
+    "full_suite_after": "229 passed, 4 failed",
+    "full_suite_at_base_commit": "215 passed, 4 failed (same four)",
+    "regressions": 0,
+    "pre_existing_failures": "this venv's transformers does not recognize model type qwen3_5; HF now returns a tuple where the test expects pooler_output"
+  },
+
+  "device_kernel_launches_per_step": {
+    "source": "ASCEND_PROFILER_OUTPUT/op_statistic.csv, 2 profiled steps",
+    "before": 351027,
+    "after": 228309,
+    "reduction": "35%",
+    "by_operator": {
+      "Transpose": {"before": 115677, "after": 6453},
+      "AsStrided": {"before": 29784, "after": 576},
+      "FlashAttentionScore": {"before": 22795, "after": 3691},
+      "FlashAttentionScoreGrad": {"before": 7866, "after": 1926},
+      "ZerosLike": {"before": 56747, "after": 13907},
+      "TensorMove": {"before": 28563, "after": 7143},
+      "Slice": {"before": 29448, "after": 32352}
+    }
+  },
+
+  "dispatch_census_per_step": {
+    "source": "ops/census.py, 2 counted steps",
+    "before": 375314,
+    "after": 292982,
+    "by_file": {
+      "models/generator_wan21.py": {"before": 110816, "after": 66987},
+      "models/vision_encoder.py": {"before": 34584, "after": 7296},
+      "<engine>": {"before": 139202, "after": 122605}
+    },
+    "caveat": "pack contents differ between the two census runs (images per pack varies), so per-file deltas carry data noise; distributed/megatron.py and ops/functional.py read higher after. The op_statistic launch counts above are the cleaner measure."
+  },
+
+  "device_occupancy": {
+    "source": "ASCEND_PROFILER_OUTPUT/step_trace_time.csv, profiled step 5",
+    "before": {"computing_s": 25.68, "communication_not_overlapped_s": 1.13, "free_s": 18.48},
+    "after": {"computing_s": 23.06, "communication_not_overlapped_s": 10.41, "free_s": 2.63},
+    "reading": "the launch-bound idle this change targeted is gone (free 18.5 s -> 2.6 s). Non-overlapped communication rose in its place. Not separated: HCCL waits for the slowest rank, and data_wait spiked to 11-25 s on several steps in the same run, so most of that 10.4 s is most likely rank skew from the host pipeline rather than genuine transport cost."
+  },
+
+  "phase_timing_ms": {
+    "forward": {"before": 12244, "after": 8648, "change": "-29%"},
+    "backward": {"before": 26622, "after": 20247, "change": "-24%"},
+    "forward_plus_backward_s": {"before": 38.9, "after": 28.9, "change": "-26%"}
+  },
+
+  "wall_time": {
+    "measured_steps": 10,
+    "mean_s": 38.03,
+    "median_s": 33.96,
+    "p95_s": 53.52,
+    "baseline_mean_s": 36.50,
+    "baseline_median_s": 35.90,
+    "data_wait_median_s": 5.40,
+    "data_wait_max_s": 25.05,
+    "verdict": "no reliable wall-clock win yet. The same loader settings that kept the pre-change run fed (data_wait median 0.02 s) no longer keep up: compute got 26% faster, so the host pipeline became the binding constraint again."
+  },
+
+  "fed_steps_only": {
+    "definition": "data_wait < 0.5 s",
+    "n": 3,
+    "mean_s": 31.05,
+    "median_s": 29.84,
+    "occupied_tokens_per_second_per_card_median": 2050,
+    "occupied_tokens_per_second_per_card_mean": 1979,
+    "baseline_fed": 1680,
+    "l40s_steady_state": 1506,
+    "caveat": "n=3. Indicative only; a longer fed run is needed before this number is used."
+  },
+
+  "operator_paths": {
+    "attention": {"npu_fusion_attention_tiled": 672, "npu_fusion_attention_varlen": 20088},
+    "note": "the backbone keeps the CQ-mask tiled path; the DiT and vision towers now take the varlen path"
+  },
+
+  "not_measured": [
+    "a long fed run with a wider loader (the number that would settle the wall-clock gain)",
+    "whether the 10.4 s non-overlapped communication is rank skew or real transport",
+    "the same change on CUDA (L40S still runs the per-segment loop; this commit does not alter CUDA behaviour)",
+    "multi-node Ascend",
+    "--ce-chunk, --dit-microbatch-images"
+  ]
+}
