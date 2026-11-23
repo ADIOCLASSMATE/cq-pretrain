@@ -46,7 +46,11 @@ class _FusedLinearCE(torch.autograd.Function):
         total = hidden.new_zeros((), dtype=torch.float32)
         for start in range(0, hidden.shape[0], chunk):
             logits = F.linear(hidden[start : start + chunk], weight).float()
-            total += torch_npu.npu_cross_entropy_loss(logits, targets[start : start + chunk], reduction="sum")[0]
+            # The operator returns its summed loss as a [1] tensor; `total` is
+            # 0-dim, and aclnnInplaceAdd requires the destination shape to match.
+            total += torch_npu.npu_cross_entropy_loss(logits, targets[start : start + chunk], reduction="sum")[
+                0
+            ].sum()
             del logits
         ctx.save_for_backward(hidden, weight, targets)
         ctx.chunk = chunk

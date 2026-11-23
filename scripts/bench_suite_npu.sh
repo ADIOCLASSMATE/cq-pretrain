@@ -8,8 +8,11 @@
 #
 # One job runs the whole suite so the model load and the scheduling wait are
 # paid once. A configuration that fails (usually out of memory) is recorded
-# and the suite continues.
+# and the suite continues, but the suite then exits nonzero: a platform job
+# that reports SUCCEEDED while every configuration failed is worse than no
+# measurement, because the number it did not produce gets assumed.
 set -uo pipefail
+FAILED=()
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PRETRAIN_BACKEND=npu
 export NPROC_PER_NODE="${NPROC_PER_NODE:-16}"
@@ -32,7 +35,8 @@ NPROC_PER_NODE="${NPROC_PER_NODE}" bash "${ROOT}/scripts/launch.sh" \
   --steps 3 --warmup 1 --rf 1 --timestep-shift 3.0 --dit-microbatch-tokens 8192 \
   --checkpoint --keep-attention-activations 6 --phase-timing \
   --output "${BENCH_ROOT}/smoke" >"${BENCH_ROOT}/smoke.log" 2>&1
-echo "smoke exit=$? (log ${BENCH_ROOT}/smoke.log)"
+SMOKE=$?
+echo "smoke exit=${SMOKE} (log ${BENCH_ROOT}/smoke.log)"
 python3 - "${BENCH_ROOT}/smoke/summary.json" <<'PY' || true
 import json, sys
 from pathlib import Path
@@ -52,8 +56,17 @@ run() {
   shift 2
   echo "=== ${name}: packs_per_card=${packs} $* ==="
   BENCH_NAME="${name}" PACKS_PER_CARD="${packs}" bash "${ROOT}/scripts/bench_accel.sh" "$@" 2>&1
-  echo "=== ${name} done ==="
+  local code=$?
+  [[ ${code} -eq 0 ]] || FAILED+=("${name}")
+  echo "=== ${name} done (exit ${code}) ==="
 }
+
+# A failed smoke means the dispatch itself is broken, so every configuration
+# below would fail the same way; stop and hand back the one log that matters.
+if [[ ${SMOKE} -ne 0 ]]; then
+  echo "SUITE ABORTED: the synthetic smoke failed; read ${BENCH_ROOT}/smoke.log"
+  exit 1
+fi
 
 run parity 4 --checkpoint --keep-attention-activations 6
 run keep-more 4 --checkpoint --keep-attention-activations 16
@@ -61,3 +74,9 @@ run no-recompute 4 --no-checkpoint
 run packs8-parity 8 --checkpoint --keep-attention-activations 6
 run packs8-no-recompute 8 --no-checkpoint
 echo "suite complete: ${BENCH_ROOT}"
+if [[ ${#FAILED[@]} -gt 0 ]]; then
+  echo "FAILED configurations: ${FAILED[*]}"
+  # Out-of-memory at a larger setting is a real answer, not a broken suite;
+  # parity failing is not. Either way the job must not read as SUCCEEDED.
+  exit 1
+fi
