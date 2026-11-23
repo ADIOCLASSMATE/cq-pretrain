@@ -73,7 +73,7 @@ DCVLM 始终保持原生任务方向和图文顺序。gen-und 内的 QA/OCR/文�
 
 ## 证据与交付检查
 
-- [原始 gen-und 报告](../../GENUND_DATASET_REPORT.md)
+- [原始 gen-und 报告](../../archive/reports/GENUND_DATASET_REPORT.md)
 - [2026-10-21 汇总](../../reports/genund_20261021/dataset_summary.json)
 - [2026-10-22 字段复查](../../reports/unified_mm_20261022/deep_metadata_verified.json)
 - [对话/StyleBooth 语义检查](../../reports/genund_20261021/annotation_semantics.json)

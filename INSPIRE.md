@@ -68,7 +68,7 @@ CLI 7.2.2 的 `init --help` 已不支持项目级 `--scope project`，提交命�
   不能直接覆盖当前散图、独立 JSON 和 OpenUni 的格式。新审计位于
   `/inspire/sj-ssd3/project/high-dimensionaldata/public/preprocessing/genund_mount_preflight_20261103_v1`。
   **CPU 与昇腾分区的项目公共目录不能按同名路径视为共享。** 跨分区仍须实测可见性；
-  历史 CPU 审计见 `GENUND_DATASET_REPORT.md`，其中“昇腾无副本”仅适用于 2026-10-21。
+  历史 CPU 审计见 `archive/reports/GENUND_DATASET_REPORT.md`，其中“昇腾无副本”仅适用于 2026-10-21。
 - DCVLM small-pool 旧索引：`/inspire/sj-ssd3/project/high-dimensionaldata/public/datasets/dcvlm_pretrain_v1_20261016T062238Z`，119,010,208 文档；索引与标注保留。其原始池已按用户要求退役，依赖旧 TAR 的图片读取不可用，不再作为可直接训练的正式输入；原生图文顺序与类型的历史产物不改写。
 - DCVLM 离线处理运行 `dcvlm_frontpass_20261022T2129Z` 的 LOW Notebook 总申请上限为 **48 卡**（2026-10-23 用户更新，含排队和未确认申请）；轮询补齐、优先已有节点并合并分散实例。启动必须显式 `--max-cards 48`；该限制独立于账号可见 256 卡总额度。运行策略、控制器回执与持久计卡账本见 `corpus_pipeline/cluster/`，不会控制其他实验。
 - 通用预算与节点规划模块：`corpus_pipeline/resource_manager/`。DCVLM 通过 `cluster/resource_planning.py` 复用，允许同节点组合 4＋2＋1；队列完成与 worker 资格仍由数据管道负责。新任务通过独立 scope/profile、状态目录、argv 命令及平台适配器接入。模型服务使用原生 Serving 后端，固定每副本卡数；当前 SDK 不提供 Serving 精确节点选择，禁止以 Notebook/Job 替代模型部署来绕过该限制。
@@ -207,7 +207,7 @@ CPU 计算不需要 NPU，也不依赖 CPU 资源空间的隔离存储。索引�
 
 - `cq_qwen35_9b_moss_128_20261017`：Q=256 + 旧数据集的 128 卡训练，已于 step 1200
   停止（`cq-qwen9b-moss128-p3-20261017`，CANCELLED）。checkpoint 保留。
-- `.runs/cq-speed-20261017`：Q=64 调优证据（见 TUNING.md）。
+- `.runs/cq-speed-20261017`：Q=64 调优证据（见 docs/TUNING.md）。
 - `.runs/cq-t2i50-tune-20261017`、`.runs/cq-document-tune-20261017`：t2i50 与整文档
   打包的前序调优快照。
 

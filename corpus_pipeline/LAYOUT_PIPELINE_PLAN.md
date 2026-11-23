@@ -165,7 +165,7 @@ flowchart TD
 
 内部几何以明确画布上的像素 `xyxy` 为基准，OCR polygon 单独保存，EXIF 与 resize/crop 变换有记录。框格式和坐标空间是显式字段，不凭四个数字猜测 `xywh/xyxy/yxyx`。已有标注必须与准确图像版本绑定，不能把近重图片当成可直接互换标签的原图。
 
-MOSS 导出另设带版本的适配器，区分 `scene/element`、`summary/items` 以及 normalized、absolute、centralized 等坐标空间；需要归一化或换轴时显式转换并检查。沿用既有 [总体方案的格式说明](../UNIFIED_MM_CORPUS_PLAN.md#72-固定一个内部格式再输出-moss-适配格式)，不混用“编译器输入草稿”和“已编译的模型条件”。
+MOSS 导出另设带版本的适配器，区分 `scene/element`、`summary/items` 以及 normalized、absolute、centralized 等坐标空间；需要归一化或换轴时显式转换并检查。沿用既有 [总体方案的格式说明](../archive/reports/UNIFIED_MM_CORPUS_PLAN.md#72-固定一个内部格式再输出-moss-适配格式)，不混用“编译器输入草稿”和“已编译的模型条件”。
 
 文字遵循逐字忠实原则：保留中文／英文原文、换行和读序；不自动纠错、翻译或补全不可辨认的小字。描述性 caption 可以选择中英文，画面中文字不能随描述语言改变。字体只能标有视觉依据的外观，未知具体字体名称不猜测。文字块、行与词等粒度明确，避免将不同层级当成重复对象。
 
