@@ -142,6 +142,10 @@ def main():
             # The census covers the measured steps only; a warmup step compiles
             # and allocates differently from the steady state it is meant to explain.
             counting = counter is not None and args.warmup <= local_step < args.warmup + args.operator_census
+            if counter is not None and not counting and counter.steps:
+                # Written as soon as the window closes, not at the end: the
+                # report is the point of the run and must survive a later crash.
+                counter.write(run.output / f"census_rank_{run.rank:05d}.json")
             with census.census(counter, counting):
                 result = trainer.step(
                     start_step + local_step,
