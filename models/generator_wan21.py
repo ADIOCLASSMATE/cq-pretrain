@@ -55,44 +55,28 @@ class RMSNorm(nn.Module):
         return (x.float() * torch.rsqrt(variance + self.eps)).to(x.dtype) * self.weight
 
 
-def _uniform(ends):
-    """Segment length when every packed segment has the same length, else None."""
-    size = ends[0]
-    return size if size > 0 and all(end == size * (i + 1) for i, end in enumerate(ends)) else None
+def packed_attention(q, k, v, q_ends, k_ends, fused=True):
+    """Every (draw, visual) pair is one independent attention segment.
 
+    q is [draws, patches, heads, dim]. For self-attention k and v have that
+    shape too; for cross-attention they are [1, text, heads, dim], one
+    condition every draw reads. Flattening draw-major already leaves each
+    (draw, visual) pair contiguous, so only the segment ends have to be built
+    and a single varlen kernel replaces the loop that ran once per visual.
+    """
+    from ops.attention import varlen
 
-def packed_attention(q, k, v, q_ends, k_ends):
-    """Self-attention batches independent draws. Cross-attention shares each visual's KV."""
     q, k = q.to(v.dtype), k.to(v.dtype)
-    n, lq, lk = len(q_ends), _uniform(q_ends), _uniform(k_ends)
-    if n > 1 and lq and lk:
-        # Same-size visuals (e.g. batched sampling at one resolution): one SDPA
-        # call over [visuals x draws] instead of one per visual; same per-row math.
-        draws, heads, dim = q.shape[0], q.shape[2], q.shape[3]
-        query = q.reshape(draws, n, lq, heads, dim)
-        if k.shape[0] == 1:
-            a = query.transpose(0, 1).reshape(n, draws * lq, heads, dim)
-            b, c = (t.reshape(n, lk, heads, dim) for t in (k, v))
-            y = F.scaled_dot_product_attention(a.transpose(1, 2), b.transpose(1, 2), c.transpose(1, 2))
-            y = y.transpose(1, 2).reshape(n, draws, lq, heads, dim).transpose(0, 1)
-        else:
-            a = query.reshape(draws * n, lq, heads, dim)
-            b, c = (t.reshape(draws * n, lk, heads, dim) for t in (k, v))
-            y = F.scaled_dot_product_attention(a.transpose(1, 2), b.transpose(1, 2), c.transpose(1, 2))
-            y = y.transpose(1, 2).reshape(draws, n, lq, heads, dim)
-        return y.reshape(draws, n * lq, heads, dim).flatten(0, 1)
-    result = []
-    qa = ka = 0
-    for qb, kb in zip(q_ends, k_ends):
-        query = q[:, qa:qb]
-        # All query rows for this visual can read its same condition independently.
-        # Folding those rows into one sequence keeps a single copy of K/V in SDPA.
-        a = query.reshape(1, -1, *query.shape[2:]) if k.shape[0] == 1 else query
-        b, c = (t[:, ka:kb].transpose(1, 2) for t in (k, v))
-        y = F.scaled_dot_product_attention(a.transpose(1, 2), b, c)
-        result.append(y.transpose(1, 2).reshape_as(query))
-        qa, ka = qb, kb
-    return torch.cat(result, dim=1).flatten(0, 1)
+    draws, patches, heads, dim = q.shape
+    if k.shape[0] == 1 and draws > 1:
+        # One shared condition. Repeat it so segment i of the key matches
+        # segment i of the query: one copy, not one slice per visual.
+        k, v = (t.expand(draws, -1, -1, -1) for t in (k, v))
+    keys = k.shape[1]
+    cu_q = tuple(draw * patches + end for draw in range(draws) for end in q_ends)
+    cu_k = tuple(draw * keys + end for draw in range(draws) for end in k_ends)
+    query, key, value = (t.reshape(-1, heads, dim) for t in (q, k, v))
+    return varlen(query, key, value, cu_q, cu_k, fused)
 
 
 def rotary(x, rope):
@@ -105,6 +89,7 @@ class Attention(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         dim = cfg.dit_width
+        self.fused = cfg.fused
         self.heads = cfg.dit_heads // P.tp_size()
         self.head_dim = dim // cfg.dit_heads
         self.q = P.ColumnLinear(dim, dim, bias=True)
@@ -129,7 +114,14 @@ class Attention(nn.Module):
             q, k = rotary(q, (layout.cos, layout.sin)), rotary(k, (layout.cos, layout.sin))
         else:
             k, v = k.unsqueeze(0), v.unsqueeze(0)
-        y = packed_attention(q, k, v, layout.video_ends, layout.video_ends if self_attention else layout.text_ends)
+        y = packed_attention(
+            q,
+            k,
+            v,
+            layout.video_ends,
+            layout.video_ends if self_attention else layout.text_ends,
+            self.fused,
+        )
         return self.o(y.flatten(1))
 
 

@@ -35,6 +35,31 @@ def attend(q, k, v, mask, valid_rows, plan, scale=None):
     return attention(q, k, v, mask, valid_rows, scale)
 
 
+def varlen(q, k, v, cu_q, cu_k, scale=None):
+    """Packed segments in one TND kernel. Q is [T,N,D]; cu_* are cumulative ends.
+
+    TND is this kernel's own packed layout: it takes the segment boundaries the
+    CPU planner already produced and runs every segment in one launch, instead
+    of one launch per segment. Same per-row math as the reference loop.
+    """
+    import torch_npu
+
+    audit.record("attention", "npu_fusion_attention_varlen")
+    scale = q.shape[-1] ** -0.5 if scale is None else scale
+    return torch_npu.npu_fusion_attention(
+        q.contiguous(),
+        k.contiguous(),
+        v.contiguous(),
+        head_num=q.shape[1],
+        input_layout="TND",
+        actual_seq_qlen=tuple(int(end) for end in cu_q),
+        actual_seq_kvlen=tuple(int(end) for end in cu_k),
+        scale=scale,
+        keep_prob=1.0,
+        sparse_mode=0,
+    )[0]
+
+
 def attention(q, k, v, mask=None, valid_rows=None, scale=None):
     """Q/K/V: [sequence,batch,heads,dim]; bool mask True means forbidden."""
     import torch_npu
