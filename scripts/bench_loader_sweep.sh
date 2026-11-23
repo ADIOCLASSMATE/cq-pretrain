@@ -20,8 +20,13 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PRETRAIN_BACKEND="${PRETRAIN_BACKEND:-npu}"
-export BENCH_DATA="${BENCH_DATA:?Set BENCH_DATA to the release directory}"
-export BENCH_ASSETS="${BENCH_ASSETS:?Set BENCH_ASSETS to the pinned model directory}"
+if [[ "${PRETRAIN_BACKEND:-npu}" == npu ]]; then
+  export BENCH_DATA="${BENCH_DATA:-/inspire/sj-ssd3/project/high-dimensionaldata/public/preprocessing/training_corpus_stage1_512_20261121_v1/release}"
+  export BENCH_ASSETS="${BENCH_ASSETS:-/inspire/sj-ssd3/project/high-dimensionaldata/public/models}"
+else
+  export BENCH_DATA="${BENCH_DATA:-/inspire/hdd/global_user/wanjiaxin-253108030048/datasets/mm_pretrain/stage1-512-v1/release}"
+  export BENCH_ASSETS="${BENCH_ASSETS:-${ROOT}/.assets}"
+fi
 BENCH_ROOT="${BENCH_ROOT:-${ROOT}/.runs/bench-loader-sweep-$(date -u +%Y%m%dT%H%M%SZ)}"
 RANKS="${RANKS:-16}"
 WORLD="${WORLD:-32}"
