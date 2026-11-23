@@ -26,7 +26,7 @@ echo "suite root ${BENCH_ROOT}"
 failed=()
 
 echo "=== gate: varlen kernel against the per-segment loop (1 card) ==="
-NPROC_PER_NODE=1 PRETRAIN_MODULE=scripts.validation.validate_varlen_npu \
+NPROC_PER_NODE=1 PRETRAIN_MODULE=scripts.validation.validate_varlen \
   bash "${ROOT}/scripts/launch.sh" \
   --output "${BENCH_ROOT}/varlen_gate.json" \
   --vision-assets "${BENCH_ASSETS}/Qwen3.5-2B-Base" >"${BENCH_ROOT}/gate.log" 2>&1

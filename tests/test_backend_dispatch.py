@@ -49,6 +49,7 @@ BACKEND_MODULES = {
     "ops/cuda_gated_delta.py",
     "ops/cuda_cross_entropy.py",
     "ops/cuda_compile.py",
+    "ops/cuda_attention.py",
     "ops/flex_cq.py",
     "ops/npu_fused.py",
     "ops/npu_gated_delta.py",

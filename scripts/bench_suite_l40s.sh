@@ -21,7 +21,9 @@ export NPROC_PER_NODE="${NPROC_PER_NODE:-8}"
 export WORLD="${WORLD:-32}"
 export BENCH_DATA="${BENCH_DATA:-/inspire/hdd/global_user/wanjiaxin-253108030048/datasets/mm_pretrain/stage1-512-v1/release}"
 export BENCH_ASSETS="${BENCH_ASSETS:-${ROOT}/.assets}"
-export BENCH_ROOT="${BENCH_ROOT:-${ROOT}/.runs/bench-l40s-$(date -u +%Y%m%dT%H%M%SZ)}"
+# Not a timestamp: each node would compute its own and the run would land in
+# as many directories as there are nodes. The job name is identical everywhere.
+export BENCH_ROOT="${BENCH_ROOT:-${ROOT}/.runs/bench-l40s-${PET_JOB_NAME:-${JOB_NAME:-current}}}"
 NODE="${PET_NODE_RANK:-${NODE_RANK:-0}}"
 mkdir -p "${BENCH_ROOT}"
 export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-${BENCH_ROOT}/../cache/triton}"
@@ -50,6 +52,30 @@ PY
 fi
 
 failed=()
+# Numerics before timing: if the CUDA varlen kernel disagrees with the loop it
+# replaces, no throughput number from it is worth collecting. One rank, no
+# collectives; it runs on node 0 and the others wait at the next phase.
+if [[ "${NODE}" == 0 ]]; then
+  echo "=== gate: flash_attn varlen against the per-segment loop ==="
+  NPROC_PER_NODE=1 PRETRAIN_MODULE=scripts.validation.validate_varlen \
+    bash "${ROOT}/scripts/launch.sh" --output "${BENCH_ROOT}/varlen_gate.json" \
+    >"${BENCH_ROOT}/gate.log" 2>&1
+  if [[ $? -ne 0 ]]; then
+    echo "GATE FAILED -- numerics first; no timing collected."
+    tail -40 "${BENCH_ROOT}/gate.log"
+    exit 1
+  fi
+  python3 -c "
+import json, sys
+report = json.load(open('${BENCH_ROOT}/varlen_gate.json'))
+print('  passed =', report['passed'], ' device =', report.get('device'))
+for name, case in report['cases'].items():
+    agree = case['loop_vs_varlen']
+    print(f\"  {name:22s} loop_out={case['loop']['output']:.5f} \"
+          f\"agree_out={agree['output']:.1e} agree_dk={agree['dk']:.1e}\")
+" || failed+=(gate-report)
+fi
+
 run() {
   local name="$1" steps="$2" warmup="$3"
   shift 3

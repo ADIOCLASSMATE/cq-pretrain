@@ -32,6 +32,10 @@ def varlen(q, k, v, cu_q, cu_k, fused=True, scale=None):
 
         return npu_attention.varlen(q, k, v, cu_q, cu_k, scale)
     if q.device.type == "cuda":
+        from ops import cuda_attention
+
+        if cuda_attention.available(q, fused):
+            return cuda_attention.varlen(q, k, v, cu_q, cu_k, scale)
         # SDPA is a fused kernel here; only the per-segment launches remain.
         audit.record("varlen_attention", "sdpa_per_segment")
     else:

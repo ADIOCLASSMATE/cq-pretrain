@@ -19,7 +19,10 @@ WORLD="${WORLD:?Set WORLD to the total card count}"
 PACKS_PER_CARD="${PACKS_PER_CARD:-4}"
 STEPS="${BENCH_STEPS:-20}"
 WARMUP="${BENCH_WARMUP:-6}"
-OUT="${BENCH_ROOT:?Set BENCH_ROOT}/${NAME}"
+# Every node runs this script, so BENCH_ROOT must be decided once by the caller.
+# A per-node default (a timestamp, say) differs by a second between nodes and
+# scatters one run across several directories.
+OUT="${BENCH_ROOT:?Set BENCH_ROOT; it must be identical on every node}/${NAME}"
 DATA="${BENCH_DATA:?Set BENCH_DATA}"
 ASSETS="${BENCH_ASSETS:?Set BENCH_ASSETS}"
 NODE="${PET_NODE_RANK:-${NODE_RANK:-0}}"

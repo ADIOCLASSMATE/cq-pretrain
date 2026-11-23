@@ -10,7 +10,11 @@ is no further from the oracle than the loop already was.
 Forward and backward are both checked: the kernel supplies its own gradient,
 and a wrong segment mapping shows up in dk/dv long before it shows in the loss.
 
-    python -m scripts.validation.validate_varlen_npu --output .runs/varlen.json
+Both backends are gated the same way: Ascend's npu_fusion_attention TND form
+and CUDA's flash_attn_varlen_func replace the same loop, so one comparison
+decides both.
+
+    python -m scripts.validation.validate_varlen --output .runs/varlen.json
 """
 
 import argparse
@@ -44,9 +48,21 @@ def inputs(lengths_q, lengths_k, heads, dim, seed):
     return make(sum(lengths_q)), make(sum(lengths_k)), make(sum(lengths_k))
 
 
+def fused_varlen():
+    """The backend's one-call varlen form, whichever accelerator this is."""
+    import distributed.accel as accel
+
+    if accel.IS_NPU:
+        from ops import npu_attention
+
+        return npu_attention.varlen
+    from ops import cuda_attention
+
+    return cuda_attention.varlen
+
+
 def run_case(case, device, dtype):
     """Oracle, loop and varlen for one shape; returns their errors and agreement."""
-    from ops import npu_attention
 
     lengths_q, lengths_k = case["lengths_q"], case["lengths_k"]
     cu_q, cu_k = ends(lengths_q), ends(lengths_k)
@@ -59,7 +75,7 @@ def run_case(case, device, dtype):
     oracle_grads = [t.grad for t in oracle_inputs]
 
     results = {}
-    for name, call in (("loop", varlen_reference), ("varlen", npu_attention.varlen)):
+    for name, call in (("loop", varlen_reference), ("varlen", fused_varlen())):
         tensors = [t.to(device=device, dtype=dtype).detach().requires_grad_() for t in (q, k, v)]
         out = call(*tensors, cu_q, cu_k)
         (out.float() * upstream.to(device=device, dtype=torch.float32)).sum().backward()
