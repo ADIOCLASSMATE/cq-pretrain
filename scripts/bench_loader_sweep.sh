@@ -108,6 +108,23 @@ echo "  smoke ok: $(cat "${BENCH_ROOT}/smoke.json" | tr -d '\n' | cut -c1-160)"
 # A step at 8 packs per card must produce 8 packs in the compute time. Measured
 # Ascend compute after varlen is ~29 s, so the target is >= 0.28 packs/s/rank.
 PROD=(--data-workers 8 --image-workers 12 --image-prefetch 48 --data-prefetch 24)
+# One rank alone with the stage breakdown: no contention, so this is the
+# floor cost of an image, and it says which stage to attack.
+echo "=== breakdown: one rank, stage timings per image ==="
+OMP_NUM_THREADS="${OMP:-4}" "${PYTHON}" -m scripts.validation.bench_loader_host \
+  --label breakdown --rank 0 --world "${WORLD}" --packs 6 --warmup-packs 2 --breakdown \
+  --report "${BENCH_ROOT}/breakdown.json" "${COMMON[@]}" "${PROD[@]}" \
+  >"${BENCH_ROOT}/breakdown.log" 2>&1 \
+  && "${PYTHON}" -c "
+import json
+r = json.load(open('${BENCH_ROOT}/breakdown.json'))
+print('  seconds per image, one rank, 12 threads:')
+for key, value in sorted(r.get('breakdown_seconds_per_image', {}).items(), key=lambda kv: -kv[1]):
+    print(f'    {key:14s}{value:9.4f}')
+print('  calls:', r.get('breakdown_calls'))
+print('  images/s', r['images_per_second'], ' packs/s', r['packs_per_second'])
+" || echo "  breakdown failed; see ${BENCH_ROOT}/breakdown.log"
+
 run baseline 0 "${PROD[@]}"
 run threads1 1 "${PROD[@]}"
 run threads1-wide 1 --data-workers 8 --image-workers 24 --image-prefetch 96 --data-prefetch 24

@@ -25,7 +25,42 @@ import argparse
 import json
 import os
 import time
+from collections import Counter
 from pathlib import Path
+
+
+def install_breakdown():
+    """Time the three stages of one image read, without touching production code.
+
+    The sweep showed the host saturated at roughly two CPU-seconds per image,
+    which is one to two orders of magnitude more than decoding a 210 KB JPEG
+    should cost, so the question is which stage owns it: fetching the bytes
+    off the shared mount, decoding them, or the Qwen resize/patchify.
+    """
+    import threading
+
+    totals, lock = Counter(), threading.Lock()
+
+    def timed(label, function):
+        def wrapper(*args, **kwargs):
+            begin = time.perf_counter()
+            try:
+                return function(*args, **kwargs)
+            finally:
+                with lock:
+                    totals[label] += time.perf_counter() - begin
+                    totals[label + "_calls"] += 1
+
+        return wrapper
+
+    from corpus_pipeline.dedup import dcvlm_loss_policy_reader as reader
+    from corpus_pipeline.production import portable_refs
+    from data import vision
+
+    portable_refs.read_ref_bytes = timed("read_bytes", portable_refs.read_ref_bytes)
+    reader.decode_image_bytes = timed("decode", reader.decode_image_bytes)
+    vision.NativeImageProcessor.__call__ = timed("process", vision.NativeImageProcessor.__call__)
+    return totals
 
 
 def build(args, cfg, data, rank, world):
@@ -71,10 +106,13 @@ def main():
     parser.add_argument("--world", type=int, default=32)
     parser.add_argument("--torch-threads", type=int, default=0, help="torch.set_num_threads; 0 leaves the default")
     parser.add_argument("--label", default="run")
+    parser.add_argument("--breakdown", action="store_true", help="Time read/decode/process per image")
     # Not --output: the training parser owns that one, and parse_known_args here
     # would swallow it and leave the real parser without a required argument.
     parser.add_argument("--report", type=Path, help="Where to write this rank's JSON report")
     known, rest = parser.parse_known_args()
+
+    breakdown = install_breakdown() if known.breakdown else None
 
     import torch
 
@@ -135,6 +173,12 @@ def main():
             cpus=os.cpu_count(),
         ),
     )
+    if breakdown is not None:
+        calls = max(1, breakdown.get("decode_calls", 0))
+        report["breakdown_seconds_per_image"] = {
+            key: round(value / calls, 4) for key, value in breakdown.items() if not key.endswith("_calls")
+        }
+        report["breakdown_calls"] = {k: v for k, v in breakdown.items() if k.endswith("_calls")}
     docs.close()
     print(json.dumps(report), flush=True)
     if known.report:
