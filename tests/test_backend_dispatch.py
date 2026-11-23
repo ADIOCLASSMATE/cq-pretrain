@@ -35,6 +35,9 @@ VENDOR = {
     "FLA": re.compile(r"\bfrom fla\.|\bimport fla\b"),
     "FlexAttention": re.compile(r"flex_attention\("),
     "torch.cuda": re.compile(r"\btorch\.cuda\b"),
+    # A device-specific profiler reads as plain `torch.profiler`; only the
+    # activity names it. One of these survived a whole port in training/train.py.
+    "profiler activity": re.compile(r"ProfilerActivity\.(CUDA|NPU)\b"),
 }
 
 # Modules that are allowed to name a vendor runtime, and why.
@@ -52,6 +55,8 @@ BACKEND_MODULES = {
     "ops/npu_attention.py",
     "ops/npu_cross_entropy.py",
     "ops/npu_compile.py",
+    "ops/cuda_profile.py",
+    "ops/npu_profile.py",
 }
 SHARED_FOLDERS = ("ops", "distributed", "models", "data", "training", "utils", "configs")
 

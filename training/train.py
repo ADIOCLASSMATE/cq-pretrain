@@ -63,22 +63,26 @@ def _remaining_budget(args, start_step):
     return False
 
 
+def _profile_root(run):
+    return run.output / "profile" / f"rank{run.rank}"
+
+
 def _profiler(args, run, complete):
     if not (args.profile and run.rank in run.profile_ranks and not complete):
         return nullcontext(), False
-    profile = torch.profiler.profile(
-        activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-        schedule=torch.profiler.schedule(wait=args.warmup, warmup=1, active=2, repeat=1),
-        on_trace_ready=torch.profiler.tensorboard_trace_handler(str(run.output / "profile" / f"rank{run.rank}")),
-        record_shapes=True,
-        profile_memory=True,
-        with_stack=False,
-    )
-    return profile, True
+    import ops.profile as profiling
+
+    return profiling.profiler(_profile_root(run), args.warmup), True
 
 
 def main():
     args = parse_args()
+    if args.profile:
+        import ops.profile as profiling
+
+        # A profiler swallows callback-construction errors; reject an output
+        # path its parser cannot accept before any weight is built.
+        profiling.check_output_path(args.output)
     cfg, data, assets = configure.resolve(args)
     run = model_setup.initialize(args, cfg)
     roots = model_setup.storage_roots(args, run.output)
@@ -187,6 +191,12 @@ def main():
         pipeline.close(run.output, run.rank)
     dist.barrier()
     dist.destroy_process_group()
+    if profile_this_rank:
+        # Parsing a trace is minutes of CPU work on one rank. Only here, with
+        # every collective finished, can it not stall the others into a timeout.
+        import ops.profile as profiling
+
+        profiling.finalize(_profile_root(run))
 
 
 if __name__ == "__main__":
