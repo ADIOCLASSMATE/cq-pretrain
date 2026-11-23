@@ -12,8 +12,18 @@ import torch
 
 
 @lru_cache(None)
+def _torchair():
+    """TorchAIR ships inside torch_npu on this stack; accept either import path."""
+    try:
+        import torchair
+    except ImportError:
+        from torch_npu.dynamo import torchair
+    return torchair
+
+
+@lru_cache(None)
 def compiled(name):
-    import torchair
+    torchair = _torchair()
 
     from ops.functional import gated_add_reference, modulated_norm_reference
 
