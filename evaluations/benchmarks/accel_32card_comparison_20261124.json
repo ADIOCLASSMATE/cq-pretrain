@@ -40,34 +40,43 @@
     }
   },
   "varlen_attention_ab": {
-    "what": "models/generator_wan21.packed_attention and models/vision_encoder.VisionAttention ran one attention call per visual, because the batched path required every packed segment to have equal length and native-resolution packing never does. Both now issue one packed varlen call.",
-    "gate": "scripts/validation/validate_varlen.py, both backends: FP64 CPU oracle vs the BF16 per-segment loop (what trained until now) vs BF16 varlen. The new form passes only when it is no further from the oracle than the loop.",
-    "ascend_gate": "passed; forward output bit-identical to the loop, gradients agree to 2.7e-05 against BF16's own 4.4e-03 error",
-    "l40s_gate": "passed; flash_attn_varlen_func matches the oracle as closely as the SDPA loop (output 0.00366 vs 0.00365, dk 0.00443 vs 0.00443)",
+    "what": "One packed varlen call replaces the per-visual attention loop in the Wan DiT and the vision tower. Same global batch, same loader, same job; PRETRAIN_{CUDA,NPU}_VARLEN=0 restores the loop, which is also the numerical oracle.",
+    "numerics_gate": "Passed on both backends against an FP64 CPU oracle: forward bit-identical on Ascend, gradient disagreement at most 2.7e-05 against a BF16 self-error of ~0.004.",
     "ascend_32_cards": {
+      "measured_steps": 14,
       "varlen_on": {
-        "steps": 14,
         "mean_seconds": 16.11,
         "median_seconds": 16.11,
-        "p95_seconds": 17.17,
-        "data_wait_median": 0.011,
-        "peak_gib": 30.83,
-        "forward_ms": 5088,
-        "backward_ms": 10056,
-        "occupied_tokens_per_second_per_card": 1918
+        "occupied_tokens_per_second_per_card": 1918,
+        "data_wait_median": 0.011
       },
       "varlen_off": {
-        "steps": 14,
         "mean_seconds": 17.85,
         "median_seconds": 17.79,
-        "p95_seconds": 18.99,
-        "data_wait_median": 0.011,
-        "peak_gib": 30.83,
-        "forward_ms": 5721,
-        "backward_ms": 11127,
-        "occupied_tokens_per_second_per_card": 1731
+        "occupied_tokens_per_second_per_card": 1731,
+        "data_wait_median": 0.011
       },
-      "gain": "+10.8 percent, both arms fully fed, so this is a device-side gain and not a loader artefact"
+      "gain": "+10.8 percent; both arms fully fed, so this is device-side",
+      "probe_is_valid_here": "Ascend shows no warm-up: steps 2-20 sit in 14.9-17.2 s with no trend."
+    },
+    "l40s_32_cards": {
+      "measured_steps": 14,
+      "varlen_on": {
+        "mean_seconds": 30.02,
+        "median_seconds": 29.29,
+        "occupied_tokens_per_second_per_card": 1029,
+        "data_wait_median": 0.026,
+        "kernel": "flash_attn_varlen"
+      },
+      "varlen_off": {
+        "mean_seconds": 28.52,
+        "median_seconds": 28.12,
+        "occupied_tokens_per_second_per_card": 1083,
+        "data_wait_median": 0.027,
+        "kernel": "sdpa_per_segment"
+      },
+      "finding": "varlen does not help on CUDA and may cost ~5 percent. Consistent with the launch counts: CUDA launches are cheap and this cluster was never host-bound.",
+      "probe_is_NOT_valid_as_an_absolute_number": "Both arms land far below this cluster's own 724-step steady state (20.08 s median). L40S needs about 100 updates to settle; inside the warm-up the same configuration bounces between 20.5 and 42 s with no trend. Only the within-job on/off difference can be read from these two rows."
     }
   },
   "points": {
@@ -83,5 +92,23 @@
     "Whether the reader fix changes L40S throughput: its data_wait was already 0.08, but its CPUs were doing the same wasted hashing, so the freed capacity may or may not convert.",
     "TorchAIR fusion of the Wan DiT pointwise chain: torch_npu's Dynamo device check reads a None compute capability on this stack. It reaches about 9 percent of launches and cannot touch the remainder.",
     "--ce-chunk and --dit-microbatch-images."
-  ]
+  ],
+  "head_to_head": {
+    "ascend_production_run": {
+      "source": "live run cq-stage1-8k-npu32 (cqnpu32-hi-001), 32 cards, varlen on, reader fixed",
+      "median_seconds_per_step": 15.97,
+      "occupied_tokens_per_second_per_card": 1926,
+      "data_wait_median": 0.012,
+      "warm_up": "none observed"
+    },
+    "l40s_best_recorded_steady_state": {
+      "source": "run cq-stage1-8k-wsd-32b, 724 measured updates, before the reader fix and before varlen",
+      "median_seconds_per_step": 20.08,
+      "mean_seconds_per_step": 20.49,
+      "p90_seconds_per_step": 21.97,
+      "occupied_tokens_per_second_per_card": 1506,
+      "data_wait_median": 0.08
+    },
+    "status": "Ascend is ~21 percent faster per card at near-identical cost per card-hour (0.35 vs 0.33 points). A 150-update L40S steady-state measurement with the reader fix, at the configuration that measured best there (varlen off), is running to confirm the L40S side rather than assume it; its first 100 updates are discarded."
+  }
 }
