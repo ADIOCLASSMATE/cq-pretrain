@@ -1,0 +1,162 @@
+{
+  "date": "2026-11-23",
+  "question": "Is Ascend 910B faster than L40S for this model per card and per quota point, and can its extra 20 GiB of memory be spent on speed?",
+  "answer": {
+    "per_card": "910B is about 11% faster than L40S once its host loader is fed.",
+    "per_point": "About +5%: 0.35 points/card-hour on 910B against 0.33 on L40S.",
+    "extra_memory": "No measurable gain. Every configuration that spends the extra memory lands at or below the fully recomputed baseline.",
+    "real_bottleneck": "The host data pipeline, not the device. Default loader threads left the 910B waiting about 14 s per 28 s step."
+  },
+  "method": {
+    "entry_point": "training.train on the published release; no microbenchmark",
+    "metric": "occupied_tokens per second per card = median(occupied_tokens)/cards / seconds",
+    "statistic": "occ/mean is the headline (same statistic as the L40S baseline); occ/median is given because the two disagree inside the noise band",
+    "per_card_work_held_fixed": "global_batch = packs_per_card x cards, one sequence_length window per pack",
+    "warmup_excluded": true,
+    "no_silent_fallback": "PRETRAIN_REQUIRE_FUSED=1 makes any reference path taken on an NPU tensor raise; summary.json records operator_paths"
+  },
+  "baseline_l40s": {
+    "run": "runs/cq-stage1-8k-wsd-32, source_601a2de",
+    "cards": 32,
+    "packs_per_card": 4,
+    "measured_steps": 724,
+    "selection": "steps 101..824 of the final restart-free segment; the first ~100 steps after a restart are warm-up and were excluded",
+    "mean_seconds": 20.49,
+    "median_seconds": 20.08,
+    "data_wait_median_seconds": 0.08,
+    "peak_memory_gib": 28.8,
+    "capacity_gib": 44.4,
+    "occupied_tokens_per_second_per_card": 1506
+  },
+  "ascend_910b": {
+    "cards": 16,
+    "capacity_gib": 60.96,
+    "node_shape": "16 cards, 180 CPU quota row (192 cores visible)",
+    "loader": "--data-workers 8 --image-workers 12 --image-prefetch 48 --data-prefetch 24",
+    "configurations": [
+      {
+        "name": "packs8-wide",
+        "note": "best; baseline recompute, 8 packs per card",
+        "packs_per_card": 8,
+        "recompute": "backbone 24/24, DiT 30/30",
+        "measured_steps": 38,
+        "mean_seconds": 36.72,
+        "median_seconds": 37.07,
+        "data_wait_median_seconds": 0.01,
+        "peak_memory_gib": 32.5,
+        "occupied_tokens_per_second_per_card_mean": 1679,
+        "occupied_tokens_per_second_per_card_median": 1663
+      },
+      {
+        "name": "base-full",
+        "note": "same configuration as packs8-wide in a separate job; the pair bounds run-to-run spread at about 0.5%",
+        "packs_per_card": 8,
+        "recompute": "backbone 24/24, DiT 30/30",
+        "measured_steps": 10,
+        "mean_seconds": 36.5,
+        "median_seconds": 35.9,
+        "peak_memory_gib": 32.2,
+        "forward_ms": 10760,
+        "backward_ms": 25245,
+        "occupied_tokens_per_second_per_card_mean": 1688,
+        "occupied_tokens_per_second_per_card_median": 1716
+      },
+      {
+        "name": "dit-keep6",
+        "recompute": "backbone 24/24, DiT 24/30 (6 layers' activations kept)",
+        "measured_steps": 10,
+        "mean_seconds": 38.01,
+        "median_seconds": 37.03,
+        "peak_memory_gib": 41.9,
+        "forward_ms": 10532,
+        "backward_ms": 25318,
+        "occupied_tokens_per_second_per_card_mean": 1621,
+        "occupied_tokens_per_second_per_card_median": 1664
+      },
+      {
+        "name": "dit-keep12",
+        "note": "spends 19.5 GiB more than baseline and buys 5% off backward, which the slower forward cancels",
+        "recompute": "backbone 24/24, DiT 18/30 (12 layers' activations kept)",
+        "measured_steps": 10,
+        "mean_seconds": 37.24,
+        "median_seconds": 35.81,
+        "peak_memory_gib": 51.7,
+        "forward_ms": 10983,
+        "backward_ms": 23970,
+        "occupied_tokens_per_second_per_card_mean": 1654,
+        "occupied_tokens_per_second_per_card_median": 1720
+      },
+      {
+        "name": "dit-keep18",
+        "recompute": "backbone 24/24, DiT 12/30 (18 layers' activations kept)",
+        "result": "out of memory at 60.96 GiB"
+      },
+      {
+        "name": "bb-keep6",
+        "recompute": "backbone 18/24 (6 layers' activations kept), DiT 30/30",
+        "measured_steps": 10,
+        "mean_seconds": 38.81,
+        "median_seconds": 38.63,
+        "peak_memory_gib": 39.4,
+        "forward_ms": 12062,
+        "backward_ms": 26862,
+        "occupied_tokens_per_second_per_card_mean": 1587,
+        "occupied_tokens_per_second_per_card_median": 1595
+      },
+      {
+        "name": "ditchunk16k",
+        "recompute": "backbone 24/24, DiT 30/30; --dit-microbatch-tokens 16384",
+        "measured_steps": 10,
+        "mean_seconds": 36.81,
+        "median_seconds": 35.63,
+        "peak_memory_gib": 33.8,
+        "forward_ms": 9777,
+        "backward_ms": 23381,
+        "occupied_tokens_per_second_per_card_mean": 1674,
+        "occupied_tokens_per_second_per_card_median": 1729,
+        "note": "cheapest of the memory-spending knobs and the only one ahead of baseline by median, but inside the noise band"
+      },
+      {
+        "name": "default-loader",
+        "note": "the starved measurement this whole investigation started from",
+        "packs_per_card": 4,
+        "loader": "defaults: --data-workers 2 --image-workers 2",
+        "cpu_quota_row": "16,128,1024",
+        "measured_steps": 18,
+        "mean_seconds": 29.98,
+        "data_wait_median_seconds": 15.05,
+        "occupied_tokens_per_second_per_card_mean": 1026
+      }
+    ]
+  },
+  "conclusions": [
+    "Feeding the loader is the only change that mattered: data_wait fell from 15.05 s to 0.01 s and the step from 29.98 s to about 21 s at 4 packs per card.",
+    "The extra 20 GiB can be spent (dit-keep12 reaches 51.7 GiB) but buys nothing. DiT recompute is only about 5% of backward and about 3% of the step, so trading memory for it is inside the measurement noise.",
+    "Partial backbone recompute is actively worse: -6% against baseline.",
+    "The memory configurations disagree between mean and median at n=10, which is itself the evidence that their differences are not resolvable. Only the n=38 and n=724 runs support a claim.",
+    "keep_attention_activations has no headroom: its ceiling is layers // full_attention_interval = 24/4 = 6, which production already uses.",
+    "--micro-batch is not an axis for real data; training/configure.py rejects any value but 1."
+  ],
+  "operator_paths_on_npu": {
+    "attention": "npu_fusion_attention_tiled",
+    "gated_delta": "ascendc_chunk_gated_delta",
+    "causal_conv1d": "ascendc_causal_conv1d",
+    "gated_rms_norm": "fla_npu_rms_norm_gated",
+    "rms_norm": "npu_rms_norm",
+    "swiglu": "npu_swiglu",
+    "rotary": "npu_rotary_mul",
+    "cross_entropy": "npu_cross_entropy_loss",
+    "wgrad": "npu_matmul_add_fp32",
+    "modulated_norm": "reference",
+    "gated_add": "reference"
+  },
+  "untested": [
+    "The Wan DiT pointwise chain (modulated_norm, gated_add) still runs its reference expression on both backends. The Ascend fusion is TorchAIR, which cannot be enabled on this stack: Dynamo's device check reads a None compute capability from torch_npu and raises TypeError on 'None >= 7'.",
+    "--ce-chunk and --dit-microbatch-images were not swept.",
+    "Multi-node 910B scaling. Every number here is one 16-card node, against 32 L40S cards on four nodes, so L40S carries inter-node allreduce cost that Ascend does not."
+  ],
+  "evidence": {
+    "ascend_runs": ".runs/bench-910b-20261123T131419Z, .runs/bench-loader-20261123T135335Z, .runs/bench-final-20261123T145415Z, .runs/bench-memory-20261123T153830Z (on the ascend host)",
+    "scripts": "scripts/bench_accel.sh, scripts/bench_suite_npu.sh, scripts/bench_dataloader_npu.sh, scripts/bench_final_npu.sh, scripts/bench_memory_npu.sh"
+  }
+}
