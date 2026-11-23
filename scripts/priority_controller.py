@@ -4,12 +4,20 @@ Policy
 - Low priority (free points, preemptible) is used whenever 4 whole L40S nodes are idle.
 - Otherwise the job runs on priority 4 (HIGH, paid with public-project points, not preempted).
 - While on HIGH: poll free capacity. Once enough whole nodes are idle (other than ours) for
-  two consecutive polls, wait for the next committed checkpoint, then stop HIGH and submit LOW.
+  two consecutive polls, leave HIGH at the cheapest checkpoint boundary:
+    - the HIGH job first banks one checkpoint of its own, so its paid start-up is never lost;
+    - after that, leaving costs the updates since the newest checkpoint (they are redone) and
+      staying costs the updates up to the next one (paid): leave at once while the newest
+      checkpoint is the nearer one, otherwise let the next checkpoint, and a validation that
+      follows it, finish first.
+  The trained update and the save interval come from the job's own train/steps.jsonl and
+  train/run.json, because job.sh edits only reach the next start. A checkpoint due within a
+  poll is watched every few seconds, so the stop follows it closely.
 - While on LOW: only watch the job. The platform requeues a preempted job instead of ending it,
   so a LOW job that has run and now reads QUEUING is down at once; any other state that is not
   RUNNING is down after RESTART_GRACE (pods restarting in place), and a LOW job that never ran
-  is down after LOW_START_GRACE. When down: stop it, check capacity, resubmit LOW if whole nodes
-  are idle, otherwise go to HIGH.
+  is down after LOW_START_GRACE outside the start-up states or after twice that in any state.
+  When down: stop it, check capacity, resubmit LOW if whole nodes are idle, otherwise go to HIGH.
 - Never two jobs at once: a job is stopped and confirmed terminal before the next is submitted.
 - A job that ends without a preemption event and without a new checkpoint counts as a crash;
   three in a row stop the controller (ATTENTION file) instead of burning points on a bug.
@@ -47,12 +55,13 @@ DATASETS = [
 NODES = 4
 POINTS_PER_NODE_HOUR = 2.64  # quota row 8,210,800
 POLL = 120  # seconds per cycle
+WATCH = 10  # seconds between checks while a checkpoint is due within a poll
+WATCH_LIMIT = 5 * 60  # longest watch in one cycle (a stalled job must not stall the controller)
 LOW_START_GRACE = 15 * 60  # a LOW job that never ran and is not RUNNING by then is down
 RESTART_GRACE = 5 * 60  # a LOW job that ran, in a non-QUEUING non-RUNNING state
 SWITCH_STREAK = 2  # consecutive polls with room before leaving HIGH
-# Leaving HIGH waits for a checkpoint newer than the moment room appeared, so the HIGH
-# job always banks its work first. A cold restart reaches its first checkpoint after
-# roughly 50-60 min on 32 L40S; this cap only guards against a run that never saves.
+# With room, a HIGH job that has not reached its leaving boundary after this long leaves
+# anyway: a run that trains reaches one in well under an hour, so it is stuck.
 CHECKPOINT_WAIT = 3 * 60 * 60
 LOW_COOLDOWN = 30 * 60  # after a LOW job is lost, stay on HIGH at least this long
 MAX_CRASHES = 3
@@ -94,7 +103,9 @@ def cli(*args, timeout=180, check=True):
 def free_nodes():
     """Whole idle L40S nodes; our own running job occupies its nodes, so they are not counted."""
     items = cli("resources", "availability", "--workspace", WS)["data"]["items"]
-    row = next(r for r in items if r["compute_group"] == GROUP)
+    row = next((r for r in items if r["compute_group"] == GROUP), None)
+    if row is None:
+        raise RuntimeError(f"{GROUP} missing from resources availability")
     return int(row.get("full_free_nodes") or 0)
 
 
@@ -105,11 +116,82 @@ def needed_for_switch():
 
 
 def checkpoint_step():
+    """The newest committed restart checkpoint (latest.json is written after the save completes)."""
     latest = RUN / "checkpoints/latest.json"
     try:
         return json.loads(latest.read_text())["step"]
     except (OSError, ValueError, KeyError):
         return -1
+
+
+def last_rows(path, count, window=64 * 1024):
+    """The last complete JSON lines of an append-only log."""
+    with path.open("rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        handle.seek(max(0, size - window))
+        lines = handle.read().splitlines()
+    if size > window:
+        lines = lines[1:]  # cut by the window
+    rows = []
+    for line in lines[-count - 1 :]:
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            pass  # the line still being written
+    return rows[-count:]
+
+
+def training_progress(job):
+    """The job's own report: last completed update, save and validation intervals, update seconds.
+
+    None until this job has written run.json and a step row; both files outlive earlier jobs,
+    so anything older than the submission belongs to a previous job.
+    """
+    record, steps = RUN / "train/run.json", RUN / "train/steps.jsonl"
+    begun = datetime.fromisoformat(job["submitted"]).timestamp()
+    try:
+        written, stepped = record.stat().st_mtime, steps.stat().st_mtime
+        if min(written, stepped) < begun:
+            return None
+        arguments = json.loads(record.read_text())["arguments"]
+        rows = last_rows(steps, 20)
+        # run.json is written at every (re)start: newer than the last step row means the job
+        # restarted in place and resumes from the newest checkpoint, so nothing is at stake.
+        step = checkpoint_step() if written > stepped else int(rows[-1]["step"])
+        progress = dict(
+            step=step,
+            every=int(arguments["save_every"]),
+            validate_every=int(arguments.get("validate_every") or 0),
+            seconds=sorted(float(row["seconds"]) for row in rows)[len(rows) // 2],
+        )
+    except (OSError, ValueError, KeyError, TypeError, IndexError):
+        return None
+    return progress if progress["every"] > 0 else None
+
+
+def validating(progress, checkpoint):
+    """Validation runs right after the checkpoint of a validation step, before the next update."""
+    step, every = progress["step"], progress["validate_every"]
+    if not every or checkpoint != step or step % every:
+        return False
+    return not (RUN / f"train/validation/step_{step:07d}/results.json").exists()
+
+
+def leave_plan(step, checkpoint, banked_after, every, busy=False):
+    """Leave HIGH now: (True, None). Otherwise (False, target): wait for that update's checkpoint.
+
+    `step` is the last completed update, `checkpoint` the newest committed checkpoint,
+    `banked_after` the checkpoint the HIGH job started from, `every` its save interval and
+    `busy` whether a validation of `checkpoint` is still running.
+    """
+    due = step if step % every == 0 and checkpoint < step else (step // every + 1) * every
+    if checkpoint <= banked_after:
+        return False, due  # bank one checkpoint of this job's own first
+    if busy:
+        return False, checkpoint
+    if step - checkpoint < due - step:
+        return True, None  # the newest checkpoint is nearer than the next one
+    return False, due
 
 
 class Controller:
@@ -300,7 +382,9 @@ class Controller:
                 stalled = (now() - datetime.fromisoformat(job["left_running"])).total_seconds()
                 down = status == "QUEUING" or stalled > RESTART_GRACE
             else:
-                down = status not in NORMAL and age > LOW_START_GRACE or age > 2 * LOW_START_GRACE
+                # Never ran: down once out of the start-up states for LOW_START_GRACE, and in
+                # any state after twice that (a LOW job that cannot get scheduled).
+                down = (status not in NORMAL and age > LOW_START_GRACE) or age > 2 * LOW_START_GRACE
         if down:
             if status not in TERMINAL:
                 self.stop("down")
@@ -325,18 +409,61 @@ class Controller:
             self.persist()
             return
         if not switch:
-            switch = self.state["switch"] = dict(streak=0, checkpoint=checkpoint_step(), since=now().isoformat())
+            switch = self.state["switch"] = dict(streak=0, since=now().isoformat())
         switch["streak"] += 1
         self.persist()
         if switch["streak"] < SWITCH_STREAK:
             return
         waited = (now() - datetime.fromisoformat(switch["since"])).total_seconds()
-        if checkpoint_step() == switch["checkpoint"] and waited < CHECKPOINT_WAIT:
-            if switch["streak"] == SWITCH_STREAK:
-                log("room for LOW; waiting for the next checkpoint", free_nodes=room, needed=need)
-            return
+        if waited >= CHECKPOINT_WAIT:
+            log("room lasted without a leaving boundary; leaving HIGH anyway", waited_minutes=round(waited / 60))
+        else:
+            watched = self.await_boundary(job, switch, room, need)
+            if watched is None:
+                return
+            if watched and free_nodes() < need:
+                log("room gone while waiting for the checkpoint, staying on HIGH")
+                self.state.pop("switch", None)
+                self.persist()
+                return
         self.stop("switch to LOW")
         self.start_job()
+
+    def await_boundary(self, job, switch, room, need):
+        """Seconds watched once leaving now is cheapest, None while it is not yet.
+
+        A checkpoint due within a poll is watched every WATCH seconds instead of waiting a poll.
+        """
+        begin = time.monotonic()
+        while True:
+            progress, checkpoint = training_progress(job), checkpoint_step()
+            target = eta = None
+            if progress is not None:
+                leave, target = leave_plan(
+                    progress["step"],
+                    checkpoint,
+                    job["checkpoint_at_submit"],
+                    progress["every"],
+                    validating(progress, checkpoint),
+                )
+                if leave:
+                    return time.monotonic() - begin
+                eta = (target - progress["step"]) * progress["seconds"]
+            if switch.get("target", "unset") != target:
+                switch["target"] = target
+                self.persist()
+                log(
+                    "room for LOW; waiting for a checkpoint",
+                    target=target,
+                    step=progress and progress["step"],
+                    checkpoint=checkpoint,
+                    save_every=progress and progress["every"],
+                    free_nodes=room,
+                    needed=need,
+                )
+            if eta is None or eta > POLL or time.monotonic() - begin > WATCH_LIMIT:
+                return None
+            time.sleep(WATCH)
 
 
 def main():
@@ -358,8 +485,8 @@ def main():
         if not (HOME / "STOP").exists():
             try:
                 controller.cycle()
-            except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
-                log("cycle error", error=str(error)[:500])
+            except Exception as error:  # an unexpected reply must not leave the job unmanaged
+                log("cycle error", error=f"{type(error).__name__}: {error}"[:500])
         time.sleep(POLL)
 
 
