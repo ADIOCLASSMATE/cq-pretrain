@@ -112,6 +112,17 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(json.loads(Path(path).read_text())["total_dispatches"], 10)
 
 
+class HigherOrderOpTests(unittest.TestCase):
+    def test_the_mode_claims_higher_order_operators(self):
+        """FlexAttention dispatches as a HOP; a mode that does not claim one raises.
+
+        The first L40S census died exactly there, taking the training step with
+        it, because the backbone runs FlexAttention on CUDA and never did on
+        Ascend. A diagnostic must not be able to end a run.
+        """
+        self.assertTrue(census._mode_class().supports_higher_order_operators)
+
+
 class InstallationTests(unittest.TestCase):
     def test_disabled_counts_nothing_and_leaves_the_step_count_alone(self):
         counter = census.OperatorCensus()

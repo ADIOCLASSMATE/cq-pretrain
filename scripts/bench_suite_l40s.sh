@@ -92,30 +92,25 @@ run() {
 PRODUCTION=(--checkpoint --keep-attention-activations 6
   --data-workers 8 --image-workers 12 --image-prefetch 48 --data-prefetch 24)
 
+# The A/B that answers whether the per-segment attention loop costs L40S what
+# it cost Ascend. Same code, same data, same allocation, one environment flag:
+# PRETRAIN_CUDA_VARLEN=0 restores the loop that is also the numerical oracle.
+export PRETRAIN_CUDA_VARLEN=1
+run varlen-on 20 6 "${PRODUCTION[@]}"
+# Exported, not prefixed: an assignment in front of a shell function call
+# does not reliably stay scoped to it in bash.
+export PRETRAIN_CUDA_VARLEN=0
+run varlen-off 20 6 "${PRODUCTION[@]}"
+export PRETRAIN_CUDA_VARLEN=1
+
+# Last, and allowed to fail: the census slows the updates it covers and has to
+# survive FlexAttention's higher-order op, which took the first attempt down.
+# Nothing above depends on it.
 run census 8 4 "${PRODUCTION[@]}" --operator-census 2 --profile-ranks 0
 if [[ "${NODE}" == 0 ]]; then
-  python3 - "${BENCH_ROOT}/census/census_rank_00000.json" <<'PY' || failed+=(census-report)
-import json, sys
-from pathlib import Path
-path = Path(sys.argv[1])
-if not path.exists():
-    print("  no census written"); raise SystemExit(1)
-c = json.loads(path.read_text())
-print("  dispatches_per_step =", c["dispatches_per_step"])
-print("  syncs_per_step      =", c["device_to_host_syncs_per_step"])
-files = {}
-for row in c["by_site"]:
-    files[row["site"].split(":")[0]] = files.get(row["site"].split(":")[0], 0) + row["per_step"]
-print("  --- by file, per step ---")
-for name, count in sorted(files.items(), key=lambda kv: -kv[1])[:10]:
-    print(f"  {name:44s}{count:9d}{100 * count / c['dispatches_per_step']:6.1f}%")
-print("  --- top sites ---")
-for row in c["by_site"][:10]:
-    print(f"  {row['site']:44s}{row['per_step']:9d}  written={row['written_on_this_line']}")
-PY
+  python3 "${ROOT}/scripts/validation/census_report.py" \
+    "${BENCH_ROOT}/census/census_rank_00000.json" || failed+=(census-report)
 fi
-
-run timing 20 6 "${PRODUCTION[@]}"
 
 if [[ ${#failed[@]} -gt 0 ]]; then
   echo "FAILED: ${failed[*]}"

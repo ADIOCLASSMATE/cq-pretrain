@@ -135,6 +135,12 @@ def _mode_class():
     from torch.utils._python_dispatch import TorchDispatchMode
 
     class _Mode(TorchDispatchMode):
+        # FlexAttention is dispatched as a higher-order op. Without this a mode
+        # that does not claim to handle one raises NotImplementedError and takes
+        # the training step down with it, which is how the first L40S census
+        # died: the backbone runs FlexAttention there and never did on Ascend.
+        supports_higher_order_operators = True
+
         def __init__(self, counter):
             super().__init__()
             self.counter = counter
