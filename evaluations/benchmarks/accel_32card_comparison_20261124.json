@@ -1,114 +1,147 @@
 {
-  "date": "2026-11-24",
-  "question": "At the same card count, which accelerator trains this model faster per point spent?",
-  "why_earlier_numbers_did_not_answer_it": [
-    "Every Ascend measurement before today was 16 cards on one node, so it never paid for a cross-node allreduce, while the L40S numbers it was compared against always did.",
-    "Both sides were host-bound by a corpus-reader defect (below), so they measured the reader rather than the accelerator."
-  ],
-  "configuration": {
-    "world": 32,
-    "global_batch": 128,
-    "packs_per_card": 4,
-    "sequence_length": 8192,
-    "tp": 1,
-    "recompute": "full backbone and DiT, 6 retained full-attention activations",
-    "loader": "--data-workers 8 --image-workers 12 --image-prefetch 48 --data-prefetch 24",
-    "ascend_nodes": "2 x 16 cards, quota row 16,180,1800",
-    "l40s_nodes": "4 x 8 cards, quota row 8,210,800"
+ "date": "2026-11-24",
+ "question": "At the same card count, which accelerator trains this model faster per point spent?",
+ "why_earlier_numbers_did_not_answer_it": [
+  "Every Ascend measurement before today was 16 cards on one node, so it never paid for a cross-node allreduce, while the L40S numbers it was compared against always did.",
+  "Both sides were host-bound by a corpus-reader defect (below), so they measured the reader rather than the accelerator."
+ ],
+ "configuration": {
+  "world": 32,
+  "global_batch": 128,
+  "packs_per_card": 4,
+  "sequence_length": 8192,
+  "tp": 1,
+  "recompute": "full backbone and DiT, 6 retained full-attention activations",
+  "loader": "--data-workers 8 --image-workers 12 --image-prefetch 48 --data-prefetch 24",
+  "ascend_nodes": "2 x 16 cards, quota row 16,180,1800",
+  "l40s_nodes": "4 x 8 cards, quota row 8,210,800"
+ },
+ "corpus_reader_defect": {
+  "symptom": "image_wait_share 0.92 in the packer thread; no thread setting moved it (torch intra-op threads: no effect, doubling image workers: +3.5%).",
+  "cause": "corpus_pipeline/production/portable_refs.py read_ref_bytes SHA256-hashed the entire containing TAR on first touch of each archive.",
+  "measured_amplification": {
+   "rows_scanned": 400,
+   "images": 446,
+   "distinct_archives": 81,
+   "hashed_gib": 192.24,
+   "hashed_mib_per_image": 441.4,
+   "typical_image_kib": 210,
+   "images_per_archive": 5.51,
+   "median_archive_mib": 2319,
+   "largest_archive_mib": 9778
   },
-  "corpus_reader_defect": {
-    "symptom": "image_wait_share 0.92 in the packer thread; no thread setting moved it (torch intra-op threads: no effect, doubling image workers: +3.5%).",
-    "cause": "corpus_pipeline/production/portable_refs.py read_ref_bytes SHA256-hashed the entire containing TAR on first touch of each archive.",
-    "measured_amplification": {
-      "rows_scanned": 400,
-      "images": 446,
-      "distinct_archives": 81,
-      "hashed_gib": 192.24,
-      "hashed_mib_per_image": 441.4,
-      "typical_image_kib": 210,
-      "images_per_archive": 5.51,
-      "median_archive_mib": 2319,
-      "largest_archive_mib": 9778
-    },
-    "fix": "Stream the member and keep its own SHA256, declared length and open-file stat check, which is what pins the bytes. The whole-archive hash attests to the container, not the data; release acceptance keeps it (default unchanged), training reads skip it.",
-    "integrity_retained": "tests/test_archive_verification.py: corrupted bytes, wrong member hash, wrong size and out-of-range extents are all still rejected; both modes return identical bytes.",
-    "effect_on_ascend_32_cards": {
-      "data_wait_median_seconds_before": 5.4,
-      "data_wait_median_seconds_after": 0.011,
-      "seconds_per_step_before": 37.07,
-      "seconds_per_step_after": 16.11
-    }
-  },
-  "varlen_attention_ab": {
-    "what": "One packed varlen call replaces the per-visual attention loop in the Wan DiT and the vision tower. Same global batch, same loader, same job; PRETRAIN_{CUDA,NPU}_VARLEN=0 restores the loop, which is also the numerical oracle.",
-    "numerics_gate": "Passed on both backends against an FP64 CPU oracle: forward bit-identical on Ascend, gradient disagreement at most 2.7e-05 against a BF16 self-error of ~0.004.",
-    "ascend_32_cards": {
-      "measured_steps": 14,
-      "varlen_on": {
-        "mean_seconds": 16.11,
-        "median_seconds": 16.11,
-        "occupied_tokens_per_second_per_card": 1918,
-        "data_wait_median": 0.011
-      },
-      "varlen_off": {
-        "mean_seconds": 17.85,
-        "median_seconds": 17.79,
-        "occupied_tokens_per_second_per_card": 1731,
-        "data_wait_median": 0.011
-      },
-      "gain": "+10.8 percent; both arms fully fed, so this is device-side",
-      "probe_is_valid_here": "Ascend shows no warm-up: steps 2-20 sit in 14.9-17.2 s with no trend."
-    },
-    "l40s_32_cards": {
-      "measured_steps": 14,
-      "varlen_on": {
-        "mean_seconds": 30.02,
-        "median_seconds": 29.29,
-        "occupied_tokens_per_second_per_card": 1029,
-        "data_wait_median": 0.026,
-        "kernel": "flash_attn_varlen"
-      },
-      "varlen_off": {
-        "mean_seconds": 28.52,
-        "median_seconds": 28.12,
-        "occupied_tokens_per_second_per_card": 1083,
-        "data_wait_median": 0.027,
-        "kernel": "sdpa_per_segment"
-      },
-      "finding": "varlen does not help on CUDA and may cost ~5 percent. Consistent with the launch counts: CUDA launches are cheap and this cluster was never host-bound.",
-      "probe_is_NOT_valid_as_an_absolute_number": "Both arms land far below this cluster's own 724-step steady state (20.08 s median). L40S needs about 100 updates to settle; inside the warm-up the same configuration bounces between 20.5 and 42 s with no trend. Only the within-job on/off difference can be read from these two rows."
-    }
-  },
-  "points": {
-    "l40s_points_per_card_hour": 0.33,
-    "ascend_points_per_card_hour": 0.35,
-    "note": "Ascend costs 6 percent more per card-hour, so it must be more than 6 percent faster to win on tokens per point."
-  },
-  "historical_baselines_superseded_by_the_reader_fix": {
-    "l40s_production_steady_state": "1506 occupied tokens/s/card over 724 steps, 20.49 s/step, data_wait 0.08",
-    "ascend_16_cards_single_node": "1679-1688 occupied tokens/s/card"
-  },
-  "not_measured": [
-    "Whether the reader fix changes L40S throughput: its data_wait was already 0.08, but its CPUs were doing the same wasted hashing, so the freed capacity may or may not convert.",
-    "TorchAIR fusion of the Wan DiT pointwise chain: torch_npu's Dynamo device check reads a None compute capability on this stack. It reaches about 9 percent of launches and cannot touch the remainder.",
-    "--ce-chunk and --dit-microbatch-images."
-  ],
-  "head_to_head": {
-    "ascend_production_run": {
-      "source": "live run cq-stage1-8k-npu32 (cqnpu32-hi-001), 32 cards, varlen on, reader fixed",
-      "median_seconds_per_step": 15.97,
-      "occupied_tokens_per_second_per_card": 1926,
-      "data_wait_median": 0.012,
-      "warm_up": "none observed"
-    },
-    "l40s_best_recorded_steady_state": {
-      "source": "run cq-stage1-8k-wsd-32b, 724 measured updates, before the reader fix and before varlen",
-      "median_seconds_per_step": 20.08,
-      "mean_seconds_per_step": 20.49,
-      "p90_seconds_per_step": 21.97,
-      "occupied_tokens_per_second_per_card": 1506,
-      "data_wait_median": 0.08
-    },
-    "status": "Ascend is ~21 percent faster per card at near-identical cost per card-hour (0.35 vs 0.33 points). A 150-update L40S steady-state measurement with the reader fix, at the configuration that measured best there (varlen off), is running to confirm the L40S side rather than assume it; its first 100 updates are discarded."
+  "fix": "Stream the member and keep its own SHA256, declared length and open-file stat check, which is what pins the bytes. The whole-archive hash attests to the container, not the data; release acceptance keeps it (default unchanged), training reads skip it.",
+  "integrity_retained": "tests/test_archive_verification.py: corrupted bytes, wrong member hash, wrong size and out-of-range extents are all still rejected; both modes return identical bytes.",
+  "effect_on_ascend_32_cards": {
+   "data_wait_median_seconds_before": 5.4,
+   "data_wait_median_seconds_after": 0.011,
+   "seconds_per_step_before": 37.07,
+   "seconds_per_step_after": 16.11
   }
+ },
+ "varlen_attention_ab": {
+  "what": "One packed varlen call replaces the per-visual attention loop in the Wan DiT and the vision tower. Same global batch, same loader, same job; PRETRAIN_{CUDA,NPU}_VARLEN=0 restores the loop, which is also the numerical oracle.",
+  "numerics_gate": "Passed on both backends against an FP64 CPU oracle: forward bit-identical on Ascend, gradient disagreement at most 2.7e-05 against a BF16 self-error of ~0.004.",
+  "ascend_32_cards": {
+   "measured_steps": 14,
+   "varlen_on": {
+    "mean_seconds": 16.11,
+    "median_seconds": 16.11,
+    "occupied_tokens_per_second_per_card": 1918,
+    "data_wait_median": 0.011
+   },
+   "varlen_off": {
+    "mean_seconds": 17.85,
+    "median_seconds": 17.79,
+    "occupied_tokens_per_second_per_card": 1731,
+    "data_wait_median": 0.011
+   },
+   "gain": "+10.8 percent; both arms fully fed, so this is device-side",
+   "probe_is_valid_here": "Ascend shows no warm-up: steps 2-20 sit in 14.9-17.2 s with no trend."
+  },
+  "l40s_32_cards": {
+   "measured_steps": 14,
+   "varlen_on": {
+    "mean_seconds": 30.02,
+    "median_seconds": 29.29,
+    "occupied_tokens_per_second_per_card": 1029,
+    "data_wait_median": 0.026,
+    "kernel": "flash_attn_varlen"
+   },
+   "varlen_off": {
+    "mean_seconds": 28.52,
+    "median_seconds": 28.12,
+    "occupied_tokens_per_second_per_card": 1083,
+    "data_wait_median": 0.027,
+    "kernel": "sdpa_per_segment"
+   },
+   "finding": "varlen does not help on CUDA and may cost ~5 percent. Consistent with the launch counts: CUDA launches are cheap and this cluster was never host-bound.",
+   "probe_is_NOT_valid_as_an_absolute_number": "Both arms land far below this cluster's own 724-step steady state (20.08 s median). L40S needs about 100 updates to settle; inside the warm-up the same configuration bounces between 20.5 and 42 s with no trend. Only the within-job on/off difference can be read from these two rows."
+  }
+ },
+ "points": {
+  "l40s_points_per_card_hour": 0.33,
+  "ascend_points_per_card_hour": 0.35,
+  "note": "Ascend costs 6 percent more per card-hour, so it must be more than 6 percent faster to win on tokens per point."
+ },
+ "historical_baselines_superseded_by_the_reader_fix": {
+  "l40s_production_steady_state": "1506 occupied tokens/s/card over 724 steps, 20.49 s/step, data_wait 0.08",
+  "ascend_16_cards_single_node": "1679-1688 occupied tokens/s/card"
+ },
+ "not_measured": [
+  "Whether the reader fix changes L40S throughput: its data_wait was already 0.08, but its CPUs were doing the same wasted hashing, so the freed capacity may or may not convert.",
+  "TorchAIR fusion of the Wan DiT pointwise chain: torch_npu's Dynamo device check reads a None compute capability on this stack. It reaches about 9 percent of launches and cannot touch the remainder.",
+  "--ce-chunk and --dit-microbatch-images."
+ ],
+ "head_to_head": {
+  "ascend_production_run": {
+   "source": "live run cq-stage1-8k-npu32 (cqnpu32-hi-001), 32 cards, varlen on, reader fixed",
+   "median_seconds_per_step": 15.97,
+   "occupied_tokens_per_second_per_card": 1926,
+   "data_wait_median": 0.012,
+   "warm_up": "none observed"
+  },
+  "l40s_best_recorded_steady_state": {
+   "source": "run cq-stage1-8k-wsd-32b, 724 measured updates, before the reader fix and before varlen",
+   "median_seconds_per_step": 20.08,
+   "mean_seconds_per_step": 20.49,
+   "p90_seconds_per_step": 21.97,
+   "occupied_tokens_per_second_per_card": 1506,
+   "data_wait_median": 0.08
+  },
+  "status": "Ascend is ~21 percent faster per card at near-identical cost per card-hour (0.35 vs 0.33 points). A 150-update L40S steady-state measurement with the reader fix, at the configuration that measured best there (varlen off), is running to confirm the L40S side rather than assume it; its first 100 updates are discarded."
+ },
+ "decision": {
+  "chosen": "ascend",
+  "measured_on": "2026-11-24",
+  "basis": "Both clusters measured at 32 cards, global batch 128, same corpus and recompute, both with the loader fed (data_wait median 0.011 vs 0.029 s), both past their warm-up.",
+  "ascend": {
+   "source": "live production run cq-stage1-8k-npu32, updates 101-278",
+   "n": 178,
+   "mean_seconds": 15.97,
+   "median_seconds": 15.96,
+   "p90_seconds": 16.85,
+   "occupied_tokens_per_second_per_card": 1930,
+   "points_per_card_hour": 0.35,
+   "million_tokens_per_point": 19.85
+  },
+  "l40s": {
+   "source": "cq-l40s-steady-1124, 150 updates with the first 100 discarded, varlen off (its better arm)",
+   "n": 50,
+   "mean_seconds": 21.34,
+   "median_seconds": 19.91,
+   "p90_seconds": 26.64,
+   "occupied_tokens_per_second_per_card": 1551,
+   "points_per_card_hour": 0.33,
+   "million_tokens_per_point": 16.92
+  },
+  "result": {
+   "per_card": "+24% for Ascend",
+   "per_point": "+17% for Ascend",
+   "predictability": "Ascend p90 is 5.6% above its median; L40S p90 is 34% above its median."
+  },
+  "why_the_l40s_number_needed_150_updates": "A 14-step probe cannot measure L40S: inside its warm-up the same configuration bounces between 20.5 and 42 s with no trend. Ascend shows no warm-up (15.7-17.2 s from the first update), so a short probe is fair there and dishonest here. The first L40S A/B, measured over 14 steps, read 28-30 s and would have overstated Ascend's lead by roughly 2x.",
+  "what_the_reader_fix_bought_each": "Ascend: 37.07 -> 16.11 s per update, because 12 CPUs per card could not absorb the waste. L40S: 20.08 -> 19.91 s, inside noise, because 28 CPUs per card already absorbed it and its loader was already fed. The defect was identical on both; only Ascend was bound by it.",
+  "open_risk_free_tier_availability": "Per-point figures assume both run paid. Observed capacity today: Ascend full_free_nodes was 0 on every check; L40S reached 6. If Ascend's free tier stays unavailable while L40S's does not, free L40S hours beat paid Ascend hours regardless of per-card speed. The controller switches automatically when nodes free up, so this needs watching over days, not one snapshot."
+ }
 }
