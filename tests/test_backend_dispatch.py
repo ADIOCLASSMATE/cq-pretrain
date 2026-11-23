@@ -17,10 +17,9 @@ import os
 import re
 import sys
 import tokenize
+import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,82 +83,87 @@ def code_only(text):
     return "".join(masked)
 
 
-def test_vendor_runtimes_are_confined_to_their_backend_modules():
-    offenders = []
-    for folder in SHARED_FOLDERS:
-        for path in sorted((ROOT / folder).rglob("*.py")):
-            relative = str(path.relative_to(ROOT))
-            if relative in BACKEND_MODULES:
-                continue
-            text = code_only(path.read_text())
-            for label, rx in VENDOR.items():
-                match = rx.search(text)
-                if match:
-                    line = text[: match.start()].count("\n") + 1
-                    offenders.append(f"{relative}:{line} {label}")
-    assert not offenders, "Vendor runtime called outside a backend module: " + "; ".join(offenders)
-
-
-def test_every_backend_module_is_listed():
-    """A new ops/<backend>_*.py must be added to the allowlist deliberately."""
-    present = {
-        str(path.relative_to(ROOT)) for path in (ROOT / "ops").glob("*.py") if path.name.startswith(("cuda_", "npu_"))
-    }
-    assert present <= BACKEND_MODULES, f"Unlisted backend modules: {sorted(present - BACKEND_MODULES)}"
-
-
-@pytest.mark.parametrize("backend", ("cuda", "npu"))
-def test_fused_dispatch_follows_the_selected_backend(backend):
-    with patch.dict(os.environ, PRETRAIN_BACKEND=backend):
-        for name in [m for m in sys.modules if m.startswith(("ops.", "distributed.accel"))]:
-            sys.modules.pop(name, None)
-        accel = importlib.reload(importlib.import_module("distributed.accel"))
-        assert accel.BACKEND == backend and accel.IS_NPU == (backend == "npu")
-        assert accel.dist_backend() == ("hccl" if backend == "npu" else "nccl")
-        fused = importlib.import_module("ops.fused")
-        assert fused._backend.__name__ == f"ops.{backend}_fused"
+def _reset_backend_modules():
     for name in [m for m in sys.modules if m.startswith(("ops.", "distributed.accel"))]:
         sys.modules.pop(name, None)
-    importlib.import_module("distributed.accel")
 
 
-@pytest.mark.parametrize("backend,stack", (("cuda", "cuda"), ("npu", "core17")))
-def test_each_backend_accepts_only_its_pinned_stack(backend, stack):
-    import utils.dependencies as dependencies
+class BackendDispatchTests(unittest.TestCase):
+    def tearDown(self):
+        # Drop the per-backend imports so the next import observes the real
+        # environment rather than a backend this test forced.
+        _reset_backend_modules()
 
-    with patch.dict(os.environ, PRETRAIN_BACKEND=backend):
-        os.environ.pop("PRETRAIN_STACK", None)
-        accel = importlib.reload(importlib.import_module("distributed.accel"))
-        assert accel.BACKEND == backend
-        assert dependencies.name() == stack
-        assert dependencies.lock_path().name == f"deps.{stack}.lock.json"
-        assert dependencies.lock_path().exists()
-        with patch.dict(os.environ, PRETRAIN_STACK="something-else"), pytest.raises(ValueError):
-            dependencies.name()
-    importlib.reload(importlib.import_module("distributed.accel"))
+    def test_vendor_runtimes_are_confined_to_their_backend_modules(self):
+        offenders = []
+        for folder in SHARED_FOLDERS:
+            for path in sorted((ROOT / folder).rglob("*.py")):
+                relative = str(path.relative_to(ROOT))
+                if relative in BACKEND_MODULES:
+                    continue
+                text = code_only(path.read_text())
+                for label, rx in VENDOR.items():
+                    match = rx.search(text)
+                    if match:
+                        line = text[: match.start()].count("\n") + 1
+                        offenders.append(f"{relative}:{line} {label}")
+        self.assertFalse(offenders, "Vendor runtime called outside a backend module: " + "; ".join(offenders))
 
+    def test_every_backend_module_is_listed(self):
+        """A new ops/<backend>_*.py must be added to the allowlist deliberately."""
+        present = {
+            str(path.relative_to(ROOT))
+            for path in (ROOT / "ops").glob("*.py")
+            if path.name.startswith(("cuda_", "npu_"))
+        }
+        self.assertLessEqual(present, BACKEND_MODULES, f"Unlisted backend modules: {sorted(present - BACKEND_MODULES)}")
 
-def test_production_synthetic_cli_keeps_model_configuration():
-    from training.train import parse_args
-    from configs.config import RunConfig
+    def test_fused_dispatch_follows_the_selected_backend(self):
+        for backend in ("cuda", "npu"):
+            with self.subTest(backend=backend), patch.dict(os.environ, PRETRAIN_BACKEND=backend):
+                _reset_backend_modules()
+                accel = importlib.reload(importlib.import_module("distributed.accel"))
+                self.assertEqual(accel.BACKEND, backend)
+                self.assertEqual(accel.IS_NPU, backend == "npu")
+                self.assertEqual(accel.dist_backend(), "hccl" if backend == "npu" else "nccl")
+                fused = importlib.import_module("ops.fused")
+                self.assertEqual(fused._backend.__name__, f"ops.{backend}_fused")
 
-    path = "configs/qwen35_2b_wan.yaml"
-    before = RunConfig.load(path).to_dict()
-    with patch.dict(os.environ):
-        args = parse_args(
-            [
-                "--config",
-                path,
-                "--synthetic",
-                "--tp",
-                "1",
-                "--global-batch",
-                "1",
-                "--log-all-ranks",
-                "--output",
-                "/tmp/cq-test-unused",
-            ]
-        )
-    assert args.synthetic and args.log_all_ranks
-    assert args.tp == 1 and args.global_batch == 1
-    assert RunConfig.load(path).to_dict() == before
+    def test_each_backend_accepts_only_its_pinned_stack(self):
+        import utils.dependencies as dependencies
+
+        for backend, stack in (("cuda", "cuda"), ("npu", "core17")):
+            with self.subTest(backend=backend), patch.dict(os.environ, PRETRAIN_BACKEND=backend):
+                os.environ.pop("PRETRAIN_STACK", None)
+                accel = importlib.reload(importlib.import_module("distributed.accel"))
+                self.assertEqual(accel.BACKEND, backend)
+                self.assertEqual(dependencies.name(), stack)
+                self.assertEqual(dependencies.lock_path().name, f"deps.{stack}.lock.json")
+                self.assertTrue(dependencies.lock_path().exists())
+                with patch.dict(os.environ, PRETRAIN_STACK="something-else"), self.assertRaises(ValueError):
+                    dependencies.name()
+
+    def test_production_synthetic_cli_keeps_model_configuration(self):
+        from training.train import parse_args
+        from configs.config import RunConfig
+
+        path = "configs/qwen35_2b_wan.yaml"
+        before = RunConfig.load(path).to_dict()
+        with patch.dict(os.environ):
+            args = parse_args(
+                [
+                    "--config",
+                    path,
+                    "--synthetic",
+                    "--tp",
+                    "1",
+                    "--global-batch",
+                    "1",
+                    "--log-all-ranks",
+                    "--output",
+                    "/tmp/cq-test-unused",
+                ]
+            )
+        self.assertTrue(args.synthetic and args.log_all_ranks)
+        self.assertEqual((args.tp, args.global_batch), (1, 1))
+        self.assertEqual(RunConfig.load(path).to_dict(), before)
