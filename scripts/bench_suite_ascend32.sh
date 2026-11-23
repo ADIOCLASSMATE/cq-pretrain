@@ -35,6 +35,7 @@ if [[ "${NODE}" == 0 ]]; then
   env -u PET_NNODES -u PET_NODE_RANK -u PET_MASTER_ADDR -u PET_MASTER_PORT \
     NNODES=1 NODE_RANK=0 NPROC_PER_NODE=1 PRETRAIN_MODULE=scripts.validation.validate_varlen \
     bash "${ROOT}/scripts/launch.sh" --output "${BENCH_ROOT}/varlen_gate.json" \
+    --vision-assets "${BENCH_ASSETS}/Qwen3.5-2B-Base" \
     >"${BENCH_ROOT}/gate.log" 2>&1
   code=$?
   echo "${code}" > "${BENCH_ROOT}/GATE_DONE"
