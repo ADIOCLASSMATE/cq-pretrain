@@ -44,7 +44,8 @@ class AnchorPathTests(unittest.TestCase):
         self.assertEqual(case["images"][0]["sha256"], "x")
         self.assertEqual(case["images"][1]["path"], "/abs/b.jpg")
         self.assertEqual(case["video"]["path"], "/run/src/clip.mp4")
-        self.assertEqual(case["video"]["frames_path"], "/run/src/frames/")
+        # pathlib normalizes the trailing slash away; the same directory either way.
+        self.assertEqual(case["video"]["frames_path"], "/run/src/frames")
         self.assertEqual(case["video_path"], "/run/src/legacy.mp4")
 
     def test_a_text_only_case_is_unchanged(self):
