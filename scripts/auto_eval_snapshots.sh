@@ -16,7 +16,7 @@ RUN=""
 TASKS="geneval"
 MAX_CONCURRENT=2
 ASCEND_CODE=/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/code/ascend-pretrain
-RESOURCE_CONTROLLER="$ASCEND_CODE/scripts/resource_allocator.py"
+RESOURCE_CONTROLLER=/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/.codex/skills/inspire-wjx-ascend/scripts/resource_allocator.py
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -35,8 +35,9 @@ mkdir -p "$RUN"
 touch "$SUBMITTED_FILE"
 
 running_evals() {
-    ssh ascend "~/.local/bin/inspire job list -n 100 --workspace 昇腾卡公共空间 2>/dev/null" | \
-        grep -c "cq-eval-" | head -1
+    # Count running/queuing eval jobs (run on Ascend directly, no SSH)
+    ~/.local/bin/inspire job list -n 100 --workspace 昇腾卡公共空间 2>/dev/null | \
+        grep -c "cq-eval-" || echo 0
 }
 
 log() {

@@ -270,38 +270,45 @@ class Controller:
         self.state["counter"] += 1
         tag = "hi" if priority == HIGH else "lo"
         name = f"{PREFIX}-{tag}-{self.state['counter']:03d}"
+
+        # Use competitive submission to claim free nodes rather than passive queuing.
+        # This discovers idle nodes and excludes occupied ones, so the job heads
+        # toward free capacity immediately instead of waiting for the platform's
+        # scheduler to pick nodes randomly.
         args = [
-            "job",
-            "create",
-            "-n",
-            name,
-            "--workspace",
-            WS,
-            "-p",
-            PROJECT,
-            "--group",
-            GROUP,
-            "-q",
-            QUOTA,
-            "--nodes",
-            str(NODES),
-            "-i",
-            IMAGE,
-            "--priority",
-            str(priority),
-            "--shm-size",
-            "128",
-            *[x for node in EXCLUDE for x in ("--exclude-node", node)],
-            "--auto-fault-tolerance",
-            "--fault-tolerance-max-retry",
-            "100",
-            "--fault-tolerance-retry-interval",
-            "60",
-            *[x for d in DATASETS for x in ("--dataset", d)],
-            "-c",
-            f"bash {RUN}/job.sh",
+            "bash",
+            str(RUN.parent.parent / "scripts" / "submit_competitive.sh"),
+            "--name", name,
+            "--nodes", str(NODES),
+            "--workspace", WS,
+            "--project", PROJECT,
+            "--group", GROUP,
+            "--priority", str(priority),
+            "--quota", QUOTA,
+            "--image", IMAGE,
+            "--shm-size", "128",
+            "--command", f"bash {RUN}/job.sh",
         ]
-        reply = cli(*args, check=False)
+
+        # Note: competitive_submit.py discovers and auto-excludes occupied nodes.
+        # Fixed exclusions like EXCLUDE are handled implicitly by the discovery.
+
+        # Pass datasets
+        for d in DATASETS:
+            args.extend(["--dataset", d])
+
+        # Fault tolerance
+        args.extend([
+            "--auto-fault-tolerance",
+            "--fault-tolerance-max-retry", "100",
+            "--fault-tolerance-retry-interval", "60",
+        ])
+
+        p = subprocess.run(args, capture_output=True, text=True, timeout=30)
+        reply = {"success": p.returncode == 0}
+        if p.returncode != 0:
+            # Parse stderr to find error message
+            reply["error"] = p.stderr or p.stdout or "unknown error"
         if not reply.get("success"):
             log("submit rejected", name=name, priority=priority, error=str(reply.get("error"))[:400])
             self.persist()
@@ -317,6 +324,7 @@ class Controller:
         self.persist()
         log("submitted", name=name, priority=priority, checkpoint=checkpoint_step())
         return True
+
 
     def stop(self, reason):
         job = self.state["job"]
