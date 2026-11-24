@@ -22,8 +22,14 @@
 set -uo pipefail
 RUN=/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/runs/cq-stage1-8k-npu32
 SRC="$RUN/SOURCE"
-DATA=/inspire/sj-ssd3/project/high-dimensionaldata/public/preprocessing/training_corpus_stage1_512_20261121_v1/release
-ASSETS=/inspire/sj-ssd3/project/high-dimensionaldata/public/models
+# Both live under global_user, not under /inspire/sj-ssd3/project/<project>/.
+# A project-scoped mount is only present for jobs billed to that project, so
+# reading the corpus from one tied this run to whoever paid for it: billing the
+# public project made the corpus vanish and every attempt failed on a missing
+# path. These copies are byte-identical, and catalog and asset identity are
+# content hashes rather than paths, so the resume contract is unaffected.
+DATA=/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/datasets/mm_pretrain/stage1-512-v1/release
+ASSETS=/inspire/sj-ssd3/global_user/wanjiaxin-253108030048/models
 DECAY_START="${DECAY_START:-73000}"   # first cosine step; an epoch is about 91K updates
 DECAY_END="${DECAY_END:-91000}"
 NODE="${PET_NODE_RANK:-${NODE_RANK:-0}}"
