@@ -1,0 +1,38 @@
+# Benchmark evaluation driven from the Ascend side.
+#
+# Two things differ from configs/evaluation.yaml, which drives the CUDA side:
+#
+#  * Paths. The L40S config reads /inspire/hdd/...; Ascend cannot see that
+#    filesystem at all, so every asset is named under the sj-ssd3 global_user
+#    tree that this cluster does mount.
+#  * Division of labour. Ascend samples the images; it does not score them.
+#    The GenEval detector is a pinned torch 1.13 / Python 3.9 CUDA runtime, so
+#    scoring stays on H100 and only the images (about 225 MB compressed for a
+#    full 553 x 4 run) travel. FID is not listed: it needs 50,000 images per
+#    snapshot, which is the one output too large to be worth moving.
+assets:
+  # qa/ (GQA test-dev, MME, POPE, TextVQA val) and vqav2/ (val).
+  benchmarks: /inspire/sj-ssd3/global_user/wanjiaxin-253108030048/benchmarks/cq_eval_v1
+  # Holds official-geneval/; its prompts file is byte-identical to the copy the
+  # H100 detector reads, so images sampled here are scored against the same 553.
+  geneval: /inspire/sj-ssd3/global_user/wanjiaxin-253108030048/evaluations/assets
+sampling:
+  resolution: 512
+  steps: 30
+  guidance: 3.0
+  shift: 3.0
+  batch: 50
+  vae_dtype: float32
+tasks: [geneval, qa, vqav2]
+job:
+  workspace: 昇腾卡公共空间
+  project: 公共科研项目
+  group: 910B资源
+  # Evaluation is never urgent: it queues on the free preemptible tier for as
+  # long as it takes, and each task resumes from its own partial outputs.
+  # Verified read-back on this project: 3 -> 13/LOW, 4 -> 20/NORMAL.
+  priority: 3
+  quota: 16,180,1800
+  image: docker-t.sii.shaipower.online/inspire-studio/dev-wjx-ascend:v-1.4
+  shm_size: 128
+  exclude_node: infra-gpu-npu-248.host.shzhisuan.com

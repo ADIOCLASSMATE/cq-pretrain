@@ -163,7 +163,10 @@ class EvaluationModel:
             try:
                 conditions = [generate_dit(self.model, c, self.tokenizer, self.tokens, self.processor) for c in cases]
                 generate_batch_dit(self.model, conditions, cases, self._preparer().vae, directory)
-            except DEV.OutOfMemoryError:
+            # torch.cuda.OutOfMemoryError is only an alias for this; the NPU
+            # device module does not export one at all, so naming it through
+            # DEV would raise AttributeError here and hide the real failure.
+            except torch.OutOfMemoryError:
                 conditions = None
                 DEV.empty_cache()
                 for spec in group:
