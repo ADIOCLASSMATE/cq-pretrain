@@ -288,6 +288,19 @@ class ClusterProfileTests(unittest.TestCase):
                 # The quota row's first field is the cards per node it allocates.
                 self.assertEqual(int(profile["quota"].split(",")[0]), cards[name])
 
+    def test_the_paid_tier_matches_what_the_platform_resolved(self):
+        """Measured 2026-11-24 by submitting at each priority and reading the level back.
+
+        Both clusters now bill 公共科研项目, and that project resolves 4 to
+        20/NORMAL (paid, not preempted) and 3 to 13/LOW (free, preemptible).
+        Flipping these silently sends a paid job down the preemptible branch.
+        """
+        for name, profile in pc.CLUSTERS.items():
+            with self.subTest(cluster=name):
+                self.assertEqual(profile["project"], "公共科研项目")
+                self.assertEqual(profile["high"], 4)
+                self.assertEqual(profile["low"], 3)
+
     def test_a_card_hour_costs_about_the_same_on_either_cluster(self):
         """The throughput comparison is only meaningful while this holds."""
         rates = {

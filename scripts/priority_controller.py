@@ -75,17 +75,23 @@ CLUSTERS = {
     ),
     "ascend": dict(
         workspace="昇腾卡公共空间",
-        project="多模态大模型新架构评测探索与scaling-law",
+        project="公共科研项目",
         group="910B资源",
         quota="16,180,1800",  # the wide-CPU row; the loader needs it
         image="docker-t.sii.shaipower.online/inspire-studio/dev-wjx-ascend:v-1.4",
         nodes=2,  # 2 x 16 = 32 cards
         points_per_node_hour=5.6,
-        high=6,  # reads back as 31 / HIGH
-        low=3,  # the project's historical free tier
+        high=4,  # reads back as 20 / NORMAL: paid, not preempted
+        low=3,  # reads back as 13 / LOW: free, preemptible
         exclude=("infra-gpu-npu-248.host.shzhisuan.com",),
     ),
 }
+# Which requested priority is the paid tier is a property of the *project*, not
+# of the cluster: 公共科研项目 resolves 4 to 20/NORMAL and 3 to 13/LOW on both
+# clusters, while 多模态大模型新架构评测探索与scaling-law resolved 4 to 20/NORMAL
+# but was driven at 6 (31/HIGH). Both rows above were read back from the
+# platform, not inferred -- a profile that calls a paid tier preemptible sends
+# the job down the LOW branch, where losing it looks routine instead of costly.
 WS = PROJECT = GROUP = QUOTA = IMAGE = EXCLUDE = None  # set by main() from --cluster
 NODES = HIGH = LOW = 0
 POINTS_PER_NODE_HOUR = 0.0
