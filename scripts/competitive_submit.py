@@ -35,7 +35,7 @@ def find_excluded_nodes_via_cli(workspace, group):
         (exclude_nodes_list, state_summary)
     """
     # Call: inspire job list to get running jobs and their node placement
-    cmd = ["inspire", "--json", "job", "list", "-n", "100"]
+    cmd = ["inspire", "--json", "job", "list", "-n", "100", "--workspace", workspace]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
 
     if result.returncode != 0:
