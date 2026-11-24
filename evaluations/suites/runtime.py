@@ -13,10 +13,14 @@ from configs.config import RunConfig
 from data.codec import DevicePreparer
 from data.packing import token_contract
 from data.vision import NativeImageProcessor
+import distributed.accel as accel
 import distributed.megatron as parallel
 from evaluations.sampling import caption, generate, generate_batch_dit, generate_dit
 from models.backbone_qwen35 import cast_for_training
 from models.modeling_umm import JointModel
+
+ACCEL = accel.accel_type()
+DEV = accel.device_module()
 
 
 def read_weights(path):
@@ -72,7 +76,7 @@ class EvaluationModel:
         if not dist.is_initialized():
             parallel.initialize(1, self.cfg, initialize_weights=False)
         torch.manual_seed(42)
-        torch.cuda.manual_seed_all(42)
+        DEV.manual_seed_all(42)
         with no_init_weights():
             self.model = cast_for_training(JointModel(self.cfg))
         if dist.get_rank() == 0:
@@ -82,7 +86,7 @@ class EvaluationModel:
                 del state
             else:
                 install_checkpoint(self.model, self.path, self.meta)
-        self.model = self.model.to("cuda").eval()
+        self.model = self.model.to(ACCEL).eval()
         for value in self.model.state_dict().values():
             if isinstance(value, torch.Tensor):
                 dist.broadcast(value, src=0)
@@ -109,7 +113,7 @@ class EvaluationModel:
         if self.prep is None:
             self.prep = DevicePreparer(
                 self.cfg,
-                device=f"cuda:{torch.cuda.current_device()}",
+                device=f"{ACCEL}:{DEV.current_device()}",
                 vae_dtype=getattr(torch, self.sampling.get("vae_dtype", "float32")),
                 encoder="wan",
             )
@@ -159,9 +163,9 @@ class EvaluationModel:
             try:
                 conditions = [generate_dit(self.model, c, self.tokenizer, self.tokens, self.processor) for c in cases]
                 generate_batch_dit(self.model, conditions, cases, self._preparer().vae, directory)
-            except torch.cuda.OutOfMemoryError:
+            except DEV.OutOfMemoryError:
                 conditions = None
-                torch.cuda.empty_cache()
+                DEV.empty_cache()
                 for spec in group:
                     self.produce(*spec)
                 continue
