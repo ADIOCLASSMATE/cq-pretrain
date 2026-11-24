@@ -137,9 +137,21 @@ EXECUTION_FIELDS = frozenset(
 )
 
 
+# Where the pinned weights are stored, as opposed to which weights they are.
+# training_state identifies every one of them by content and is still compared
+# exactly: qwen35_assets and vision_assets carry the model id, the revision and
+# a SHA-256 per file, and wan_assets carries a digest of the generator and VAE
+# tensors. None of those contains a path. So a byte-identical copy under a
+# different root is the same model, and refusing to resume from it only forces
+# a run to be repeated -- which is what happened when these weights moved out
+# of a project-scoped mount onto one that every project can read.
+ASSET_LOCATION_FIELDS = frozenset({"text_assets", "vision_assets", "wan_assets", "wan_vae_assets"})
+
+
 def resume_config(config):
     """The part of a run configuration an exact resume must reproduce."""
-    return {k: v for k, v in config.items() if k not in EXECUTION_FIELDS}
+    excluded = EXECUTION_FIELDS | ASSET_LOCATION_FIELDS
+    return {k: v for k, v in config.items() if k not in excluded}
 
 
 def check_resume_contract(manifest, current, training_state):

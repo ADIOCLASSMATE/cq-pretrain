@@ -98,6 +98,29 @@ class CheckpointRestartTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "configuration"):
             check_resume_contract(manifest, dict(config, visual_instruction_dropout_probability=0.1), state)
 
+    def test_the_same_weights_under_a_new_root_still_resume(self):
+        """Moving pinned weights must not cost a run; swapping them still must."""
+        from utils.checkpoint import check_resume_contract
+
+        identity = dict(model_id="Qwen/Qwen3.5-2B-Base", revision="b1485b2", files={"model.pt": "abc"})
+        state = dict(qwen35_assets=identity, vision_assets=identity, wan_assets=dict(generator="d1", vae="d2"))
+        config = {name: f"/project/models/{name}" for name in ("text_assets", "vision_assets", "wan_assets")}
+        config["wan_vae_assets"] = "/project/models/vae"
+        manifest = dict(config=config, training_state=state)
+
+        moved = {name: value.replace("/project/", "/global_user/") for name, value in config.items()}
+        check_resume_contract(manifest, moved, state)
+
+        # The identity lives in training_state, which is still compared exactly:
+        # different bytes at the same or any other path remain a different run.
+        for changed in (
+            dict(state, qwen35_assets=dict(identity, revision="0000000")),
+            dict(state, qwen35_assets=dict(identity, files={"model.pt": "tampered"})),
+            dict(state, wan_assets=dict(generator="other", vae="d2")),
+        ):
+            with self.subTest(changed=sorted(changed)), self.assertRaisesRegex(ValueError, "checkpoint"):
+                check_resume_contract(manifest, moved, changed)
+
     def test_old_formats_are_rejected_before_loading_weights(self):
         import utils.checkpoint as checkpoint_io
 
