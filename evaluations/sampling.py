@@ -138,6 +138,58 @@ def encode_spans(tokenizer, pieces):
     return [np.asarray(tokenizer.encode(piece, add_special_tokens=False).ids, dtype=np.int32) for piece in pieces]
 
 
+def anchor_case_paths(case, root):
+    """Resolve a case's relative asset paths against the suite file's directory.
+
+    A suite names its images relatively, so a bare Path() resolved them against
+    the working directory and the suite only loaded when the process happened to
+    be started from the right place. Anchoring them to the suite itself makes it
+    self-contained, which is what lets a frozen source snapshot carry one.
+    Absolute paths are left alone.
+    """
+    root = Path(root)
+
+    def fix(value):
+        return str(root / value) if value and not Path(value).is_absolute() else value
+
+    case = dict(case)
+    if case.get("image"):
+        case["image"] = fix(case["image"])
+    if case.get("video_path"):
+        case["video_path"] = fix(case["video_path"])
+    if isinstance(case.get("images"), (list, tuple)):
+        case["images"] = [
+            dict(item, path=fix(item["path"])) if isinstance(item, dict) and item.get("path") else item
+            for item in case["images"]
+        ]
+    if isinstance(case.get("video"), dict):
+        video = dict(case["video"])
+        for key in ("path", "frames_path"):
+            if video.get(key):
+                video[key] = fix(video[key])
+        case["video"] = video
+    return case
+
+
+def suite_assets(suite_path):
+    """Every local file a suite needs, so a caller can check before sampling."""
+    suite = json.loads(Path(suite_path).read_text())
+    paths = []
+    for case in (anchor_case_paths(c, Path(suite_path).parent) for c in suite["cases"]):
+        for value in (case.get("image"), case.get("video_path")):
+            if value:
+                paths.append(Path(value))
+        for item in case.get("images") or ():
+            if isinstance(item, dict) and item.get("path"):
+                paths.append(Path(item["path"]))
+        video = case.get("video")
+        if isinstance(video, dict):
+            for key in ("path", "frames_path"):
+                if video.get(key):
+                    paths.append(Path(video[key]))
+    return paths
+
+
 def context_image(path, checksum, processor):
     source = Path(path)
     if checksum is not None:
@@ -762,6 +814,7 @@ def run_suite(model, suite_path, output, preparer, weight_sources=None):
     if preparer is None or not hasattr(preparer.vae, "vae"):
         raise ValueError("Frozen generation VAE preparer required")
     suite = json.loads(Path(suite_path).read_text())
+    suite["cases"] = [anchor_case_paths(case, Path(suite_path).parent) for case in suite["cases"]]
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     was_training = model.training

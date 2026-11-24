@@ -22,6 +22,7 @@ class Persistence:
         self.last_saved_step = -1
         self.snapshot_events = []
         self.validation_events = []
+        self._warned_validation_assets = False
         self.validation_clock = run.output / "validation_clock.json"
         self.last_validation = time.time()
         if run.rank == 0 and self.validation_clock.exists():
@@ -113,6 +114,34 @@ class Persistence:
             due = due or flag[0]
         return due
 
+    def missing_validation_assets(self):
+        """Names of suite files that are absent, or None when the suite is usable.
+
+        Every rank reads the same filesystem and so reaches the same answer,
+        which is why this can gate a collective: either all of them validate or
+        none do. It runs before any collective for the same reason.
+
+        Validation is a regression canary. It used to abort the update instead,
+        and the platform restarted the job and replayed from the last
+        checkpoint -- losing every step since it, once per validation interval,
+        silently. A canary must never be able to stop training.
+        """
+        from evaluations.sampling import suite_assets
+
+        try:
+            missing = [str(p) for p in suite_assets(self.args.validation_suite) if not p.is_file()]
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            missing = [f"unreadable suite: {error}"]
+        if not missing:
+            return None
+        if self.run.rank == 0 and not self._warned_validation_assets:
+            print(
+                json.dumps(dict(validation_skipped=dict(suite=str(self.args.validation_suite), missing=missing[:8]))),
+                flush=True,
+            )
+        self._warned_validation_assets = True
+        return missing
+
     def validate(self, step, preparer):
         if not self.args.validation_suite:
             return
@@ -122,6 +151,8 @@ class Persistence:
         done = [rank == 0 and (report / "results.json").exists()]
         dist.broadcast_object_list(done, src=0)
         if done[0]:
+            return
+        if self.missing_validation_assets() is not None:
             return
         from evaluations.sampling import run_suite
 
