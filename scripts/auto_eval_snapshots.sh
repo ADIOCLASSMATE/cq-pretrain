@@ -35,9 +35,9 @@ mkdir -p "$RUN"
 touch "$SUBMITTED_FILE"
 
 running_evals() {
-    # Count running/queuing eval jobs (run on Ascend directly, no SSH)
+    # Count only RUNNING/QUEUING eval jobs (skip CANCELLED/FAILED/SUCCEEDED)
     ~/.local/bin/inspire job list -n 100 --workspace 昇腾卡公共空间 2>/dev/null | \
-        grep -c "cq-eval-" || echo 0
+        grep "cq-eval-" | grep -E "RUNNING|QUEUING" | wc -l || echo 0
 }
 
 log() {
