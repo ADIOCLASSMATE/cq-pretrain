@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""Intelligent resource allocation controller for Ascend/L40S clusters.
+"""Intelligent resource allocation controller for agents.
 
-This is the high-level resource management interface for agents. It handles:
-- Scenario detection (training vs eval vs batch)
-- Priority auto-selection (HIGH/LOW switching for training)
-- Competitive node submission (exclude occupied nodes)
-- Fault tolerance and recovery logic
-- Lessons learned from past infrastructure incidents
+Agents provide explicit job_type and required parameters; controller handles:
+  - Priority auto-decision (based on job_type + cluster state)
+  - Competitive node submission (discover + exclude occupied)
+  - Fault tolerance and infrastructure lessons
 
-Agents only need to provide:
-  - job_type: "training" | "eval" | "batch"
-  - required_cards: int
-  - command: str
-  - Any job-specific overrides (priority, project, etc.)
-
-The controller decides everything else based on real-time cluster state.
+Agent responsibility: provide clear job_type (training/eval/batch)
+Controller responsibility: everything else (discover, exclude, switch HIGH/LOW, fault recovery)
 """
 
 from __future__ import annotations
