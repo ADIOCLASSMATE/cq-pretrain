@@ -26,31 +26,35 @@ def utc_now():
 
 
 def get_cluster_config(cluster_name="ascend"):
-    """Get cluster-specific configuration."""
+    """Get cluster-specific configuration.
+
+    NOTE: Customize workspace, group, image, project to your environment.
+    These defaults are examples; always verify against 'inspire resources availability'.
+    """
     configs = {
         "ascend": {
-            "workspace": "昇腾卡公共空间",
-            "group": "910B资源",
-            "quota": "16,180,1800",
-            "image": "docker-t.sii.shaipower.online/inspire-studio/dev-wjx-ascend:v-1.4",
+            "workspace": "YOUR_WORKSPACE",  # e.g. 昇腾卡公共空间
+            "group": "YOUR_COMPUTE_GROUP",  # e.g. 910B资源
+            "quota": "QUOTA_SPEC",  # e.g. 16,180,1800
+            "image": "YOUR_IMAGE_URI",  # e.g. docker-t.sii.shaipower.online/studio/dev-wjx:v-1.4
             "gpus_per_node": 16,
             "nodes_per_card_hour": 1,
             "points_per_node_hour": 5.6,
-            "high_priority": 4,  # reads back as priority level 4/HIGH
-            "low_priority": 3,   # reads back as priority level 3/LOW
-            "fixed_exclusions": ["infra-gpu-npu-248.host.shzhisuan.com"],
+            "high_priority": 4,
+            "low_priority": 3,
+            "fixed_exclusions": [],  # Add problematic node hostnames here
         },
         "l40s": {
-            "workspace": "可上网GPU资源",
-            "group": "L40s-cuda13.2",
-            "quota": "8,210,800",
-            "image": "docker.sii.shaipower.online/base/ngc-pytorch:25.02-cuda12.8.0-py3",
+            "workspace": "YOUR_WORKSPACE",
+            "group": "YOUR_COMPUTE_GROUP",
+            "quota": "QUOTA_SPEC",
+            "image": "YOUR_IMAGE_URI",
             "gpus_per_node": 8,
             "nodes_per_card_hour": 2,
             "points_per_node_hour": 2.64,
             "high_priority": 4,
             "low_priority": 3,
-            "fixed_exclusions": ["qb-prod-y40s-gpu167"],
+            "fixed_exclusions": [],
         },
     }
     return configs.get(cluster_name, configs["ascend"])
@@ -174,7 +178,7 @@ def submit_job(
 
     config = get_cluster_config(cluster_name)
     workspace = workspace or config["workspace"]
-    project = project or "公共科研项目"
+    project = project or "DEFAULT_PROJECT"  # customize to your project
 
     # Calculate nodes needed
     gpus_per_node = config["gpus_per_node"]
